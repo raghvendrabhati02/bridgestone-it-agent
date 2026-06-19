@@ -1,0 +1,4 @@
+Software Installation Guide 
+Step 1: Verify software approval 
+Step 2: Download approved installer 
+Step 3: Install software 

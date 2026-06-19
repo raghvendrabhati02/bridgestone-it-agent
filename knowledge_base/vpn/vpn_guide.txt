@@ -1,0 +1,5 @@
+VPN Troubleshooting Guide 
+Step 1: Check internet connection 
+Step 2: Restart VPN client 
+Step 3: Verify credentials 
+Step 4: Contact Network Team 

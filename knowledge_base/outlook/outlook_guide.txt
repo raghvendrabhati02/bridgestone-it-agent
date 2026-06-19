@@ -1,0 +1,4 @@
+Outlook Troubleshooting Guide 
+Step 1: Restart Outlook 
+Step 2: Check internet connection 
+Step 3: Reconfigure account if required 
