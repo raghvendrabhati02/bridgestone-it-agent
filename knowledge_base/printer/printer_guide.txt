@@ -1,0 +1,7 @@
+Printer Troubleshooting Guide
+
+Step 1: Verify printer is powered on.
+Step 2: Check USB or network connection.
+Step 3: Restart printer.
+Step 4: Verify printer drivers are installed.
+Step 5: Contact Desktop Support Team.

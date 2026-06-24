@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 5s       # Short scrape interval for rapid dashboard updates
+  evaluation_interval: 5s
+
+# Load alerting rules files
+rule_files:
+  - "alerts.yml"
+
+scrape_configs:
+  # Scraping job for the FastAPI backend container
+  - job_name: "backend-metrics"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["backend:8000"]

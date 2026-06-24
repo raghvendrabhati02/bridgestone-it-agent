@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: 'Bridgestone IT Agent'
+    orgId: 1
+    folder: 'Bridgestone IT Agent Dashboards'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
