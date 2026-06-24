@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  postgres:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/postgres.Dockerfile
+    container_name: bridgestone-postgres-dev
+    restart: always
+    environment:
+      POSTGRES_DB: bridgestone_it_agent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+    networks:
+      - bridgestone-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bridgestone_it_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/redis.Dockerfile
+    container_name: bridgestone-redis-dev
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_dev:/data
+    networks:
+      - bridgestone-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/backend.Dockerfile
+    container_name: bridgestone-backend-dev
+    restart: always
+    env_file:
+      - ../env/dev.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../backend:/app
+    networks:
+      - bridgestone-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: ../infrastructure/docker/frontend.Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=http://localhost:8000
+    container_name: bridgestone-frontend-dev
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../../frontend:/app
+      # Avoid overwriting node_modules inside container with local host's node_modules
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - bridgestone-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data_dev:
+  redis_data_dev:
+
+networks:
+  bridgestone-network:
+    name: bridgestone-network
+    driver: bridge

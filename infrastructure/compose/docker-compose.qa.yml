@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  postgres:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/postgres.Dockerfile
+    container_name: bridgestone-postgres-qa
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bridgestone_it_agent
+      POSTGRES_USER: qa_user
+      POSTGRES_PASSWORD: qa_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_qa:/var/lib/postgresql/data
+    networks:
+      - bridgestone-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qa_user -d bridgestone_it_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/redis.Dockerfile
+    container_name: bridgestone-redis-qa
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_qa:/data
+    networks:
+      - bridgestone-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: ../infrastructure/docker/backend.Dockerfile
+    container_name: bridgestone-backend-qa
+    restart: unless-stopped
+    env_file:
+      - ../env/qa.env
+    ports:
+      - "8000:8000"
+    networks:
+      - bridgestone-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: ../infrastructure/docker/frontend.Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=http://localhost:8000
+    container_name: bridgestone-frontend-qa
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    networks:
+      - bridgestone-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data_qa:
+  redis_data_qa:
+
+networks:
+  bridgestone-network:
+    name: bridgestone-network
+    driver: bridge

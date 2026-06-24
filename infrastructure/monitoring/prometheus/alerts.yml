@@ -1,0 +1,62 @@
+groups:
+  - name: bridgestone-alerts
+    rules:
+      # 1. Alert if backend container is unreachable
+      - alert: BackendDown
+        expr: up{job="backend-metrics"} == 0
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "FastAPI Backend is unreachable"
+          description: "The backend container is reported as down. AI troubleshooting agent is offline."
+
+      # 2. Alert if SQL Database goes offline
+      - alert: DatabaseDown
+        expr: db_failures_total > 5
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL Database connections failing"
+          description: "Database connection checks or queries are actively failing. Data writes are disabled."
+
+      # 3. Alert if Redis Cache goes offline
+      - alert: RedisDown
+        expr: redis_availability == 0
+        for: 10s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis Cache is unreachable"
+          description: "Redis caching service is reported as down. System performance may degrade."
+
+      # 4. Alert if Gemini LLM failure rate is high
+      - alert: GeminiHighFailRate
+        expr: (increase(llm_failures_total[5m]) / increase(llm_requests_total[5m])) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gemini API error rate is high"
+          description: "Over 10% of LLM calls are failing. Check API key configurations and API availability."
+
+      # 5. Alert if there are excessive SLA breaches
+      - alert: SlaBreachThreshold
+        expr: increase(business_sla_breaches_total[5m]) > 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SLA breach rate threshold exceeded"
+          description: "IT Support tickets are breaching assigned SLA hours. Team resource constraints detected."
+
+      # 6. Alert if there is a security credential brute force attack
+      - alert: AuthenticationFailureSpike
+        expr: increase(security_failed_logins_total[5m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Spike in failed authentication requests"
+          description: "Spike of over 5 failed logins within 5 minutes. Potential brute-force attack on /auth/login."
