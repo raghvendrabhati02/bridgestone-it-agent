@@ -41,10 +41,23 @@ class AgentState(TypedDict):
     notifications: List[Dict[str, Any]]
     sla: Dict[str, Any]
     username: str
+    user_role: str
     active_issue: str
     active_ticket: str
     active_request: str
     conversation_goal: str
     last_action: str
     route: str
+    intent: Optional[str]
+    # ── Multi-Step Troubleshooting ─────────────────────────────────────────────
+    diagnostic_interview: Optional[Dict[str, Any]]
+    tool_chain: List[Dict[str, Any]]
+    hypothesis_tracker: List[Dict[str, Any]]
+    engineer_summary: Optional[str]
+    troubleshooting_iterations: int
+    troubleshooting_complete: bool
+    next_tool: Optional[str]
+
+
+
 

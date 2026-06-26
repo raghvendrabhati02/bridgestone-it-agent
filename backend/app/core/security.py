@@ -118,6 +118,12 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if not user.is_active:
         SECURITY_UNAUTHORIZED_TOTAL.inc()
         raise HTTPException(status_code=400, detail="User account is inactive")
+
+    # Populate logging context variables
+    from app.core.logging_context import user_ctx, role_ctx
+    user_ctx.set(user.username)
+    role_ctx.set(user.role)
+
     return user
 
 class RoleChecker:

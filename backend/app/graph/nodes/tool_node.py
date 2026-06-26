@@ -9,7 +9,7 @@ def tool_node(state: AgentState) -> dict:
     logger.info("--- Tool Node ---")
     start_time = time.time()
     try:
-        category = state.get("category", "GENERAL")
+        category = state.get("next_tool") or state.get("category", "GENERAL")
         user_msg = state.get("user_message", "")
         tool_result = execute_tools_for_category(category, user_msg)
         logger.info("Tool Node completed. Result: %s", tool_result)

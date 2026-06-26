@@ -13,11 +13,13 @@ class TraceRepository:
         input_data: dict = None,
         output_data: dict = None
     ) -> AgentTrace:
+        from app.core.logging_context import correlation_id_ctx
         trace = AgentTrace(
             session_id=session_id,
             agent_name=agent_name,
             input_data=input_data,
             output_data=output_data,
+            correlation_id=correlation_id_ctx.get() or None,
             created_at=datetime.utcnow()
         )
         self.db.add(trace)

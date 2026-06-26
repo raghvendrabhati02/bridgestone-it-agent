@@ -9,4 +9,5 @@ class ApprovalHistory(Base):
     session_id = Column(String(100), index=True, nullable=False)
     recommended_action = Column(String(100), nullable=False)
     approval_status = Column(String(50), nullable=False)
+    correlation_id = Column(String(100), index=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

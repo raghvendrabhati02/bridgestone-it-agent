@@ -15,4 +15,5 @@ class AuditLog(Base):
     action_result = Column(JSON, nullable=True)
     ticket_id = Column(String(100), nullable=True)
     servicenow_id = Column(String(100), nullable=True)
+    correlation_id = Column(String(100), index=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -21,6 +21,9 @@ from app.graph.nodes import (
     action_node,
     router_node,
     conversation_node,
+    service_request_node,
+    diagnostic_interview_node,
+    multi_step_node,
 )
 
 logger = logging.getLogger("it-agent-backend")
@@ -74,6 +77,27 @@ def route_after_approval(state: AgentState) -> str:
     return END
 
 
+def route_after_diagnostic_interview(state: AgentState) -> str:
+    """Conditional routing after the diagnostic interview node."""
+    if state.get("decision_response"):
+        logger.info("Graph Router: Diagnostic interview asked questions. Short-circuiting to END.")
+        return END
+    logger.info("Graph Router: Proceeding from Diagnostic interview to Planner.")
+    return "planner"
+
+
+def route_after_multi_step(state: AgentState) -> str:
+    """Conditional routing after the multi_step node."""
+    complete = state.get("troubleshooting_complete", False)
+    next_tool = state.get("next_tool")
+    if not complete and next_tool:
+        logger.info("Graph Router: More tools needed (%s). Routing back to 'tool'.", next_tool)
+        return "tool"
+    logger.info("Graph Router: Troubleshooting complete. Routing to 'root_cause'.")
+    return "root_cause"
+
+
+
 # ── Build graph ────────────────────────────────────────────────────────────────
 
 workflow = StateGraph(AgentState)
@@ -86,6 +110,8 @@ workflow.add_node("intent",           intent_node)
 workflow.add_node("planner",          planner_node)
 workflow.add_node("knowledge",        knowledge_node)
 workflow.add_node("tool",             tool_node)
+workflow.add_node("diagnostic_interview", diagnostic_interview_node)
+workflow.add_node("multi_step",           multi_step_node)
 workflow.add_node("root_cause",       root_cause_node)
 workflow.add_node("reflection",       reflection_node)
 workflow.add_node("decision",         decision_node)
@@ -98,6 +124,7 @@ workflow.add_node("sla",              sla_node)
 workflow.add_node("action",           action_node)
 workflow.add_node("context_router",   context_router_node)
 workflow.add_node("ticket_status",    ticket_status_node)
+workflow.add_node("service_request",  service_request_node)
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 workflow.set_entry_point("router")
@@ -113,27 +140,50 @@ workflow.add_conditional_edges(
 # Memory → Context Router
 workflow.add_edge("memory", "context_router")
 
-# Context Router: ticket_status or full troubleshoot pipeline
+# Context Router: ticket_lifecycle | ticket_status | service_request | full troubleshoot pipeline
 workflow.add_conditional_edges(
     "context_router",
     lambda state: state.get("route", "intent"),
     {
-        "ticket_status": "ticket_status",
-        "intent":        "intent",
+        "ticket_lifecycle": "ticket_lifecycle",
+        "ticket_status":    "ticket_status",
+        "service_request":  "service_request",
+        "intent":           "intent",
     },
 )
 
 # Conversation path ends immediately
 workflow.add_edge("conversation", END)
 
-# Full troubleshoot pipeline: Intent → Planner → Knowledge → Tool → RootCause → Reflection → Decision
-workflow.add_edge("intent",      "planner")
+# Full troubleshoot pipeline: Intent → Diagnostic Interview → Planner → Knowledge → Tool → MultiStep → Loop/RootCause → Reflection → Decision
+workflow.add_edge("intent", "diagnostic_interview")
+
+workflow.add_conditional_edges(
+    "diagnostic_interview",
+    route_after_diagnostic_interview,
+    {
+        "planner": "planner",
+        END: END,
+    },
+)
+
 workflow.add_edge("planner",     "knowledge")
 workflow.add_edge("knowledge",   "tool")
-workflow.add_edge("tool",        "root_cause")
+workflow.add_edge("tool",        "multi_step")
+
+workflow.add_conditional_edges(
+    "multi_step",
+    route_after_multi_step,
+    {
+        "tool": "tool",
+        "root_cause": "root_cause",
+    },
+)
+
 workflow.add_edge("root_cause",  "reflection")
 workflow.add_edge("reflection",  "decision")
 workflow.add_edge("ticket_status", END)
+workflow.add_edge("service_request", END)
 
 # Decision conditional routing
 workflow.add_conditional_edges(
@@ -156,13 +206,36 @@ workflow.add_conditional_edges(
     },
 )
 
-# ── Ticket path: ticket → ticket_lifecycle → assignment → notification → sla → END ──
+# ── Ticket creation path: ticket → ticket_lifecycle → assignment → notification → sla → END ──
 workflow.add_edge("ticket",           "ticket_lifecycle")  # lifecycle inserted here
-workflow.add_edge("ticket_lifecycle", "assignment")
-workflow.add_edge("assignment",       "notification")
-workflow.add_edge("action",           "notification")
-workflow.add_edge("notification",     "sla")
-workflow.add_edge("sla",              END)
+
+# ticket_lifecycle has TWO callers:
+#   a) ticket creation  → continues to assignment → notification → sla → END
+#   b) standalone lifecycle command (from context_router) → goes to notification → END
+# We use a conditional edge to distinguish these two cases.
+def route_after_lifecycle(state: AgentState) -> str:
+    """If a ticket was just created (ticket dict has ticket_id), go to assignment.
+    If it is a standalone lifecycle command, skip assignment and go straight to notification."""
+    ticket = state.get("ticket") or {}
+    if ticket.get("ticket_id"):
+        logger.info("Graph Router: ticket_lifecycle → assignment (ticket creation path).")
+        return "assignment"
+    logger.info("Graph Router: ticket_lifecycle → notification (standalone lifecycle path).")
+    return "notification"
+
+workflow.add_conditional_edges(
+    "ticket_lifecycle",
+    route_after_lifecycle,
+    {
+        "assignment":   "assignment",
+        "notification": "notification",
+    },
+)
+
+workflow.add_edge("assignment",   "notification")
+workflow.add_edge("action",       "notification")
+workflow.add_edge("notification", "sla")
+workflow.add_edge("sla",          END)
 
 # ── Compile ───────────────────────────────────────────────────────────────────
 app_graph = workflow.compile()

@@ -10,8 +10,52 @@ def decision_node(state: AgentState) -> dict:
     start_time = time.time()
     try:
         # 0. Check pre-evaluated approval state
+        # ── SECURITY: RBAC guard on the approval fast-path ────────────────────
+        # This fast-path fires when conversation_service has already set
+        # approval_status="APPROVED" (user said "yes" while AWAITING_APPROVAL).
+        # Without the RBAC check below, a stale approval_status="APPROVED" in
+        # the session — left behind after an ACCESS_DENIED — lets an EMPLOYEE
+        # skip the approval gate entirely and reach EXECUTE_ACTION directly.
+        # The fix: always verify the user has permission to approve before
+        # honouring the APPROVED status.
         approval_status = state.get("approval_status", "PENDING").upper().strip()
         if approval_status == "APPROVED":
+            user_role = (state.get("user_role") or "EMPLOYEE").upper().strip()
+            recommended_action = state.get("recommended_action", "")
+
+            from app.services import rbac_service
+            if not rbac_service.has_permission(user_role, "approve_privileged_action"):
+                # EMPLOYEE trying to exploit stale APPROVED status — deny and clear
+                logger.warning(
+                    "Decision Node: SECURITY — EMPLOYEE '%s' attempted to use stale "
+                    "approval_status=APPROVED for action '%s'. Denying.",
+                    state.get("username", "unknown"),
+                    recommended_action,
+                )
+                try:
+                    from app.services.rbac_audit_service import log_rbac_event
+                    log_rbac_event(
+                        user=state.get("username", "unknown"),
+                        role=user_role,
+                        action="ACCESS_DENIED",
+                        ticket_id=state.get("active_ticket") or None,
+                        old_state=None,
+                        new_state=None,
+                        details={
+                            "reason": "PRIVILEGE_ESCALATION_ATTEMPT",
+                            "stale_approval_status": "APPROVED",
+                            "recommended_action": recommended_action,
+                            "session_id": state.get("session_id"),
+                        },
+                    )
+                except Exception as e:
+                    logger.error("Decision Node: RBAC audit failed: %s", e)
+
+                return rbac_service.build_access_denied_response(
+                    role=user_role,
+                    action="approve_privileged_action",
+                )
+
             logger.info("Decision Node: User APPROVED recommended action. Routing to execute action.")
             try:
                 from app.services.audit_service import log_agent_trace
@@ -20,7 +64,7 @@ def decision_node(state: AgentState) -> dict:
                     agent_name="Approval Agent",
                     output={
                         "approval_status": "APPROVED",
-                        "recommended_action": state.get("recommended_action")
+                        "recommended_action": recommended_action
                     }
                 )
             except Exception as e:

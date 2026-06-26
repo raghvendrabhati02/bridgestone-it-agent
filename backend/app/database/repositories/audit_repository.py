@@ -18,6 +18,7 @@ class AuditRepository:
         ticket_id: str = None,
         servicenow_id: str = None
     ) -> AuditLog:
+        from app.core.logging_context import correlation_id_ctx
         log = AuditLog(
             session_id=session_id,
             user_message=user_message,
@@ -28,6 +29,7 @@ class AuditRepository:
             action_result=action_result,
             ticket_id=ticket_id,
             servicenow_id=servicenow_id,
+            correlation_id=correlation_id_ctx.get() or None,
             created_at=datetime.utcnow()
         )
         self.db.add(log)

@@ -30,6 +30,14 @@ class ConversationState:
         self.active_request = ""
         self.conversation_goal = ""
         self.last_action = ""
+        self.diagnostic_interview = None
+        self.tool_chain = []
+        self.hypothesis_tracker = []
+        self.engineer_summary = None
+        self.troubleshooting_iterations = 0
+        self.troubleshooting_complete = False
+        self.next_tool = None
+
 
     @property
     def status(self) -> str:
@@ -321,7 +329,7 @@ def process_message(session_id: str, message: str) -> dict:
         
     return response_payload
 
-def handle_chat_turn(session_id: str | None, message: str, username: str = None) -> dict:
+def handle_chat_turn(session_id: str | None, message: str, username: str = None, user_role: str = None) -> dict:
     """
     Core conversation loop integrating intent detection, conversation history memory,
     grounded knowledge context retrieval, response generation, and structured Decision Agent analysis.
@@ -391,7 +399,19 @@ def handle_chat_turn(session_id: str | None, message: str, username: str = None)
 
     # Invoke the LangGraph workflow
     from app.graph.graph import app_graph
-    
+
+    # ── Security: only forward live approval context when the session is
+    # genuinely AWAITING_APPROVAL.  If the previous turn ended with
+    # ACCESS_DENIED, state.status is "ACTIVE" (not "AWAITING_APPROVAL"),
+    # so we reset both fields to neutral defaults.  This prevents a stale
+    # recommended_action / approval_status from being injected into the
+    # graph and allowing the LLM to re-trigger a privileged action on
+    # behalf of an unauthorized user.
+    _session_awaiting = getattr(state, "status", "ACTIVE") == "AWAITING_APPROVAL"
+    _fwd_approval_status     = getattr(state, "approval_status", "PENDING") if _session_awaiting else "PENDING"
+    _fwd_recommended_action  = getattr(state, "recommended_action", "")    if _session_awaiting else ""
+    _fwd_approval_required   = getattr(state, "approval_required", False)   if _session_awaiting else False
+
     initial_state = {
         "session_id": state.session_id,
         "user_message": message,
@@ -416,11 +436,19 @@ def handle_chat_turn(session_id: str | None, message: str, username: str = None)
         "assigned_team": "",
         "notifications": [],
         "sla": {},
-        "approval_required": getattr(state, "approval_required", False),
-        "approval_status": getattr(state, "approval_status", "PENDING"),
-        "recommended_action": getattr(state, "recommended_action", ""),
+        "approval_required":  _fwd_approval_required,
+        "approval_status":    _fwd_approval_status,
+        "recommended_action": _fwd_recommended_action,
         "action_result": getattr(state, "action_result", None),
         "username": username,
+        "user_role": user_role or "EMPLOYEE",
+        "diagnostic_interview": getattr(state, "diagnostic_interview", None),
+        "tool_chain": getattr(state, "tool_chain", []),
+        "hypothesis_tracker": getattr(state, "hypothesis_tracker", []),
+        "engineer_summary": getattr(state, "engineer_summary", None),
+        "troubleshooting_iterations": getattr(state, "troubleshooting_iterations", 0),
+        "troubleshooting_complete": getattr(state, "troubleshooting_complete", False),
+        "next_tool": getattr(state, "next_tool", None),
     }
 
 
@@ -485,13 +513,37 @@ def handle_chat_turn(session_id: str | None, message: str, username: str = None)
     # Update category if modified during graph execution
     state.category = final_state.get("category", state.category)
     
-    # Persist graph approval states to session memory
-    state.approval_required = final_state.get("approval_required", False)
-    state.approval_status = final_state.get("approval_status", "PENDING")
-    state.recommended_action = final_state.get("recommended_action", "")
+    # Persist graph approval states to session memory.
+    # ── Security: when the graph returned ACCESS_DENIED, wipe all approval
+    # context from the session object so it cannot be replayed on the next
+    # turn.  For every other outcome we copy faithfully from final_state.
+    _final_action = final_state.get("decision", "")
+    if _final_action == "ACCESS_DENIED":
+        logger.warning(
+            "ConversationService: ACCESS_DENIED — clearing approval context "
+            "for session '%s' (user='%s', role='%s').",
+            state.session_id,
+            username,
+            user_role,
+        )
+        state.approval_status    = "ACCESS_DENIED"  # sentinel — not PENDING
+        state.recommended_action = ""               # wipe stale action name
+        state.approval_required  = False
+    else:
+        state.approval_required  = final_state.get("approval_required", False)
+        state.approval_status    = final_state.get("approval_status", "PENDING")
+        state.recommended_action = final_state.get("recommended_action", "")
     state.action_result = final_state.get("action_result")
-    state.tool_result = final_state.get("tool_result", {})
+    state.tool_result   = final_state.get("tool_result", {})
+    state.diagnostic_interview = final_state.get("diagnostic_interview")
+    state.tool_chain = final_state.get("tool_chain", [])
+    state.hypothesis_tracker = final_state.get("hypothesis_tracker", [])
+    state.engineer_summary = final_state.get("engineer_summary")
+    state.troubleshooting_iterations = final_state.get("troubleshooting_iterations", 0)
+    state.troubleshooting_complete = final_state.get("troubleshooting_complete", False)
+    state.next_tool = final_state.get("next_tool")
     # Store reflection for subsequent turns (available for follow-up reasoning)
+
     if not hasattr(state, "last_reflection"):
         state.last_reflection = None
     state.last_reflection = final_state.get("reflection") or state.last_reflection

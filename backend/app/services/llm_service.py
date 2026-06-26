@@ -2,6 +2,7 @@ import os
 import logging
 import google.generativeai as genai
 from dotenv import load_dotenv
+from app.core.retry_helper import with_retry
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -19,6 +20,7 @@ else:
     # Configure the Google Generative AI SDK
     genai.configure(api_key=api_key)
 
+@with_retry(retries=3, backoff_factor=2.0)
 def generate_response(user_message: str, knowledge_context: str | None = None) -> str | dict:
     """
     Generates a response from the Gemini model based on the user's message/prompt.
@@ -85,6 +87,10 @@ def generate_response(user_message: str, knowledge_context: str | None = None) -
         duration = time.time() - start_time
         try:
             LLM_LATENCY_SECONDS.observe(duration)
+            from app.core.metrics import AI_LATENCIES
+            AI_LATENCIES.append(duration)
+            if len(AI_LATENCIES) > 100:
+                AI_LATENCIES.pop(0)
         except Exception:
             pass
 
@@ -132,6 +138,10 @@ def generate_response(user_message: str, knowledge_context: str | None = None) -
         
         try:
             LLM_LATENCY_SECONDS.observe(duration)
+            from app.core.metrics import AI_LATENCIES
+            AI_LATENCIES.append(duration)
+            if len(AI_LATENCIES) > 100:
+                AI_LATENCIES.pop(0)
             if is_rate_limit:
                 LLM_RATE_LIMIT_ERRORS_TOTAL.inc()
                 LLM_FAILURES_TOTAL.labels(error_type="rate_limit").inc()

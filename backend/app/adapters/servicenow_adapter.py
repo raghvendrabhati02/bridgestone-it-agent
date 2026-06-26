@@ -4,6 +4,8 @@ from app.adapters.base_adapter import BaseAdapter
 
 logger = logging.getLogger("it-agent-backend")
 
+from app.core.retry_helper import with_retry
+
 class ServiceNowAdapter(BaseAdapter):
     def __init__(self):
         use_mock = os.getenv("USE_MOCK_SERVICENOW", "true").lower() == "true"
@@ -37,6 +39,7 @@ class ServiceNowAdapter(BaseAdapter):
         logger.info("ServiceNowAdapter: Mock health check OK")
         return True
 
+    @with_retry(retries=3, backoff_factor=2.0)
     def execute(self, action: str, **kwargs) -> any:
         logger.info("ServiceNowAdapter: Executing action '%s'", action)
         if action == "create_incident":

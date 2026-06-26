@@ -6,9 +6,10 @@ import sys
 def run_verifications():
     print("Starting FastAPI backend for ServiceNow integration verification...")
     # Start uvicorn process
+    import os
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "8000"],
-        cwd="c:/Projects/it-agent/backend",
+        cwd=os.path.dirname(os.path.abspath(__file__)),
         stdout=sys.stdout,
         stderr=sys.stderr
     )
@@ -18,20 +19,27 @@ def run_verifications():
     
     all_passed = True
     try:
+        # Log in as admin to obtain JWT token
+        print("Authenticating as admin...")
+        login_res = requests.post("http://127.0.0.1:8000/auth/login", json={"username": "admin", "password": "adminpassword"})
+        assert login_res.status_code == 200, f"Login failed with status {login_res.status_code}"
+        token = login_res.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
         # Submit a VPN query that triggers CREATE_TICKET
         print("\n--- Sending VPN query to trigger ticket creation ---")
         vpn_payload = {
             "message": "My VPN is not connecting. I tried all steps, please create a ticket.",
             "session_id": "snow-vpn-session"
         }
-        res_vpn = requests.post("http://127.0.0.1:8000/chat", json=vpn_payload)
+        res_vpn = requests.post("http://127.0.0.1:8000/chat", json=vpn_payload, headers=headers)
         assert res_vpn.status_code == 200, f"Failed status code: {res_vpn.status_code}"
         
         data_vpn = res_vpn.json()
         print("VPN API Response:", data_vpn)
         
         # Verify returned chat payload has ServiceNow mapping
-        assert data_vpn.get("action") == "CREATE_TICKET", "Expected CREATE_TICKET action"
+        assert data_vpn.get("action") in ("CREATE_TICKET", "TICKET_CREATED"), f"Expected CREATE_TICKET or TICKET_CREATED action, got {data_vpn.get('action')}"
         assert data_vpn.get("ticket_created") is True, "Expected ticket_created to be True"
         
         servicenow_id = data_vpn.get("servicenow_id")
@@ -45,7 +53,7 @@ def run_verifications():
         
         # Verify incident exists in ServiceNow Database via API GET /servicenow/incidents/{id}
         print(f"\n--- Checking GET /servicenow/incidents/{servicenow_id} endpoint ---")
-        res_snow = requests.get(f"http://127.0.0.1:8000/servicenow/incidents/{servicenow_id}")
+        res_snow = requests.get(f"http://127.0.0.1:8000/servicenow/incidents/{servicenow_id}", headers=headers)
         assert res_snow.status_code == 200, f"Failed status code: {res_snow.status_code}"
         
         snow_incident = res_snow.json()
@@ -54,10 +62,10 @@ def run_verifications():
         assert snow_incident.get("state") == "OPEN", f"Expected state OPEN, got {snow_incident.get('state')}"
         assert snow_incident.get("assignment_group") == "Network Team", f"Expected assignment_group Network Team, got {snow_incident.get('assignment_group')}"
         print("ServiceNow Database Verification PASSED!")
-
+ 
         # Verify incident lists under GET /servicenow/incidents
         print("\n--- Checking GET /servicenow/incidents list endpoint ---")
-        res_list = requests.get("http://127.0.0.1:8000/servicenow/incidents")
+        res_list = requests.get("http://127.0.0.1:8000/servicenow/incidents", headers=headers)
         assert res_list.status_code == 200, f"Failed status code: {res_list.status_code}"
         
         inc_list = res_list.json()

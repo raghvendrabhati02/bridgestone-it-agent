@@ -55,6 +55,8 @@ class TicketRepository:
         message: str,
         status: str = "SENT"
     ) -> Notification:
+        from app.core.logging_context import correlation_id_ctx
+        corr_id = correlation_id_ctx.get() or None
         notif = self.db.query(Notification).filter(Notification.notification_id == notification_id).first()
         if not notif:
             notif = Notification(notification_id=notification_id)
@@ -64,6 +66,8 @@ class TicketRepository:
         notif.recipient = recipient
         notif.message = message
         notif.status = status
+        if corr_id:
+            notif.correlation_id = corr_id
         notif.created_at = datetime.utcnow()
         
         self.db.commit()

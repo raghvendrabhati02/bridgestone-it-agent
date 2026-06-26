@@ -11,4 +11,5 @@ class Notification(Base):
     recipient = Column(String(100), nullable=False)
     message = Column(Text, nullable=False)
     status = Column(String(50), default="SENT")
+    correlation_id = Column(String(100), index=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

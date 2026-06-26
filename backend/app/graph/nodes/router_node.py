@@ -45,10 +45,10 @@ def router_node(state: AgentState) -> dict:
         conversational_intents = {"GREETING", "IDENTITY", "SMALL_TALK", "CAPABILITY", "THANKS", "GOODBYE"}
         if intent in conversational_intents:
             logger.info("Router Node: Detected conversational intent. Routing to conversation node.")
-            out = {"decision": "CHAT", "category": "GENERAL"}
+            out = {"decision": "CHAT", "category": "GENERAL", "intent": intent}
         else:
-            logger.info("Router Node: Troubleshooting intent. Routing to context_router → standard flow.")
-            out = {"decision": "TROUBLESHOOT"}
+            logger.info("Router Node: Troubleshooting/Service intent. Routing to context_router → standard flow.")
+            out = {"decision": "TROUBLESHOOT", "intent": intent}
 
         logger.info("Router Node: outgoing — decision='%s'", out.get("decision"))
         return out

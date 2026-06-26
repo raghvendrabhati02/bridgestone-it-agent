@@ -192,10 +192,10 @@ def auto_transition_from_intent(
 
     mapping = [
         (["assign"], "ASSIGNED"),
-        (["start work", "in progress", "working on", "in_progress"], "IN_PROGRESS"),
+        (["start work", "start working", "in progress", "working on", "in_progress"], "IN_PROGRESS"),
         (["waiting for user", "wait for user", "awaiting user", "waiting_for_user"], "WAITING_FOR_USER"),
-        (["resolve", "fixed", "solution", "done", "completed"], "RESOLVED"),
-        (["close", "closed", "complete"], "CLOSED"),
+        (["resolved", "resolve", "fixed", "solution", "done", "completed"], "RESOLVED"),
+        (["close ticket", "close", "closed"], "CLOSED"),
     ]
 
     for keywords, target_state in mapping:
