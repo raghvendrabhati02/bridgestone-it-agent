@@ -40,7 +40,7 @@ class ConversationAgent:
                     intent = result.get("intent", "").strip().upper()
                     category = result.get("category", "").strip().upper()
                     
-                    valid_intents = {"GREETING", "IDENTITY", "SMALL_TALK", "CAPABILITY", "THANKS", "GOODBYE", "IT_ISSUE", "TICKET_REQUEST", "APPROVAL_RESPONSE", "FOLLOW_UP"}
+                    valid_intents = {"GREETING", "IDENTITY", "SMALL_TALK", "CAPABILITY", "THANKS", "GOODBYE", "IT_ISSUE", "TICKET_REQUEST", "APPROVAL_RESPONSE", "FOLLOW_UP", "SERVICE_REQUEST"}
                     valid_categories = {"VPN", "PASSWORD_RESET", "OUTLOOK", "SOFTWARE_INSTALLATION", "PRINTER", "SAP", "NETWORK", "GENERAL"}
                     
                     if intent in valid_intents and category in valid_categories:
@@ -71,6 +71,7 @@ class ConversationAgent:
             "- IT_ISSUE: User is describing a new technical issue or seeking troubleshooting help (e.g. 'VPN not connecting', 'Outlook is slow').\n"
             "- TICKET_REQUEST: User is explicitly requesting to create a support ticket, raise a ticket, or escalate to a human.\n"
             "- APPROVAL_RESPONSE: User is answering yes/no/approve/reject to a recommendation or authorization request (e.g. 'yes proceed', 'no cancel').\n"
+            "- SERVICE_REQUEST: User is explicitly requesting to order, request, provision, or install a catalog item (e.g. 'request SAP access', 'need Visio installed', 'order a new laptop').\n"
             "- FOLLOW_UP: User is responding to a previous diagnostic question or following up on the active troubleshooting flow (e.g. 'still not working', 'it didn't help', 'it is resolved now', 'done').\n\n"
             "=== Categories ===\n"
             "VPN, PASSWORD_RESET, OUTLOOK, SOFTWARE_INSTALLATION, PRINTER, SAP, NETWORK, GENERAL\n\n"
@@ -93,7 +94,7 @@ class ConversationAgent:
         prompt += (
             "Return ONLY a valid JSON object matching this schema:\n"
             "{\n"
-            '  "intent": "GREETING" | "IDENTITY" | "SMALL_TALK" | "CAPABILITY" | "THANKS" | "GOODBYE" | "IT_ISSUE" | "TICKET_REQUEST" | "APPROVAL_RESPONSE" | "FOLLOW_UP",\n'
+            '  "intent": "GREETING" | "IDENTITY" | "SMALL_TALK" | "CAPABILITY" | "THANKS" | "GOODBYE" | "IT_ISSUE" | "TICKET_REQUEST" | "APPROVAL_RESPONSE" | "FOLLOW_UP" | "SERVICE_REQUEST",\n'
             '  "category": "VPN" | "PASSWORD_RESET" | "OUTLOOK" | "SOFTWARE_INSTALLATION" | "PRINTER" | "SAP" | "NETWORK" | "GENERAL",\n'
             '  "explanation": "short rationale"\n'
             "}"
@@ -153,7 +154,19 @@ class ConversationAgent:
         if any(kw in text for kw in follow_up_keywords) and current_category != "GENERAL":
             return {"intent": "FOLLOW_UP", "category": current_category, "explanation": "Rule-based follow-up match."}
 
-        # 10. Category Switch / IT Issues detection
+        # 10. Service Request check
+        service_keywords = [
+            "request access", "need access", "request sap", "request shared folder", "request vpn",
+            "request printer", "install visio", "install software", "software install", "need software",
+            "order monitor", "request laptop", "need laptop", "order laptop", "laptop request",
+            "order phone", "onboard", "onboarding", "new employee", "unlock account", "unlock my account",
+            "unlock ad", "account unlock", "distribution list", "email distribution", "request database",
+            "aws sandbox", "cloud sandbox", "access badge", "facilities access", "ergonomic"
+        ]
+        if any(kw in text for kw in service_keywords):
+            return {"intent": "SERVICE_REQUEST", "category": "GENERAL", "explanation": "Rule-based service request match."}
+
+        # 11. Category Switch / IT Issues detection
         detected_category = "GENERAL"
         if any(kw in text for kw in ["vpn not working", "remote access", "vpn", "anyconnect"]):
             detected_category = "VPN"

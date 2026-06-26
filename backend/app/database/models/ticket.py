@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
 from datetime import datetime
 from app.database.base import Base
 
@@ -17,4 +17,8 @@ class Ticket(Base):
     servicenow_id = Column(String(100), nullable=True)
     created_by = Column(String(100), nullable=True)  # Username of the creator
     created_at = Column(DateTime, default=datetime.utcnow)
+    # ── SLA Escalation Engine fields ──────────────────────────────────────────
+    sla_state = Column(String(50), nullable=True, default="HEALTHY")  # SLA state enum string
+    sla_breached = Column(Boolean, nullable=True, default=False)      # True once SLA is breached
+    sla_breached_at = Column(DateTime, nullable=True)                 # UTC timestamp of first breach
 

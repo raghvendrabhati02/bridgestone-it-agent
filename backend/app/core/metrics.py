@@ -1,5 +1,11 @@
 from prometheus_client import Counter, Gauge, Histogram
 
+# In-memory tracking lists for /system-status API metrics
+REQUEST_TIMESTAMPS = []
+ERROR_TIMESTAMPS = []
+API_LATENCIES = []
+AI_LATENCIES = []
+
 # ==============================================================================
 # 1. HTTP REQUEST METRICS
 # ==============================================================================

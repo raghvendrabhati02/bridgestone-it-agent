@@ -14,12 +14,14 @@ class ActionRepository:
         approved_by_user: bool,
         servicenow_id: str = None
     ) -> ActionHistory:
+        from app.core.logging_context import correlation_id_ctx
         action = ActionHistory(
             request_id=request_id,
             action_type=action_type,
             status=status,
             approved_by_user=approved_by_user,
             servicenow_id=servicenow_id,
+            correlation_id=correlation_id_ctx.get() or None,
             created_at=datetime.utcnow()
         )
         self.db.add(action)

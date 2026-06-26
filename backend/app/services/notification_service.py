@@ -2,6 +2,7 @@ import datetime
 import logging
 from app.database.session import get_db
 from app.database.repositories.ticket_repository import TicketRepository
+from app.core.retry_helper import with_retry
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -32,6 +33,7 @@ def init_notification_counter():
 # Run initialization once at import time
 init_notification_counter()
 
+@with_retry(retries=3, backoff_factor=2.0)
 def create_notification(ticket_id: str, recipient: str, message: str) -> dict:
     """
     Notification Agent: Creates a notification record associated with a ticket,

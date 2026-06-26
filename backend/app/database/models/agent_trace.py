@@ -10,4 +10,5 @@ class AgentTrace(Base):
     agent_name = Column(String(100), nullable=False)
     input_data = Column(JSON, nullable=True)
     output_data = Column(JSON, nullable=True)
+    correlation_id = Column(String(100), index=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

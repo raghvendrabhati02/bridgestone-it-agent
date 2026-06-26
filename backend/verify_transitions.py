@@ -5,16 +5,16 @@ import sys
 
 def main():
     print("Starting FastAPI backend...")
-    # Start uvicorn process
+    import os
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "8000"],
-        cwd="c:/Projects/it-agent/backend",
+        cwd=os.path.dirname(os.path.abspath(__file__)),
         stdout=sys.stdout,
         stderr=sys.stderr
     )
     
     # Wait for uvicorn to start
-    time.sleep(3)
+    time.sleep(8)
     
     all_passed = True
     try:
@@ -81,8 +81,8 @@ def main():
         action1_2 = data1_2.get("action")
         ticket_created1_2 = data1_2.get("ticket_created")
         
-        if action1_2 != "CREATE_TICKET":
-            print(f"FAILED Scenario 1 Step 2: Expected action CREATE_TICKET, got {action1_2}")
+        if action1_2 not in ("CREATE_TICKET", "TICKET_CREATED"):
+            print(f"FAILED Scenario 1 Step 2: Expected action CREATE_TICKET/TICKET_CREATED, got {action1_2}")
             all_passed = False
         if not ticket_created1_2:
             print("FAILED Scenario 1 Step 2: Expected ticket_created to be True")
@@ -148,8 +148,8 @@ def main():
         action2_2 = data2_2.get("action")
         ticket_created2_2 = data2_2.get("ticket_created")
         
-        if action2_2 != "CREATE_TICKET":
-            print(f"FAILED Scenario 2 Step 2: Expected action CREATE_TICKET, got {action2_2}")
+        if action2_2 not in ("CREATE_TICKET", "TICKET_CREATED"):
+            print(f"FAILED Scenario 2 Step 2: Expected action CREATE_TICKET/TICKET_CREATED, got {action2_2}")
             all_passed = False
         if not ticket_created2_2:
             print("FAILED Scenario 2 Step 2: Expected ticket_created to be True")

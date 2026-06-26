@@ -12,3 +12,8 @@ from .router_node import router_node
 from .conversation_node import conversation_node
 from .approval_node import approval_node
 from .ticket_lifecycle_node import ticket_lifecycle_node
+from .service_request_node import service_request_node
+from .diagnostic_interview_node import diagnostic_interview_node
+from .multi_step_node import multi_step_node
+
+

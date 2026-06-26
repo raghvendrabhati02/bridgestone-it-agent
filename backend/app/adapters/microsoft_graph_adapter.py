@@ -4,6 +4,8 @@ from app.adapters.base_adapter import BaseAdapter
 
 logger = logging.getLogger("it-agent-backend")
 
+from app.core.retry_helper import with_retry
+
 class MicrosoftGraphAdapter(BaseAdapter):
     def __init__(self):
         use_mock = os.getenv("USE_MOCK_GRAPH", "true").lower() == "true"
@@ -35,6 +37,7 @@ class MicrosoftGraphAdapter(BaseAdapter):
         logger.info("MicrosoftGraphAdapter: Mock health check OK")
         return True
 
+    @with_retry(retries=3, backoff_factor=2.0)
     def execute(self, action: str, **kwargs) -> any:
         logger.info("MicrosoftGraphAdapter: Executing action '%s'", action)
         

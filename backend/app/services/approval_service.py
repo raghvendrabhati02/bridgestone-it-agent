@@ -31,6 +31,14 @@ PRIVILEGED_KEYWORDS = [
     "modify_permissions",
     "clear_cache",
     "reboot",
+    # VPN actions
+    "vpn",
+    "vpn_access",
+    "vpn_reset",
+    "vpn_access_restoration",
+    # Software installation
+    "software_installation",
+    "install",
 ]
 
 # Volatile in-memory fallback (session_id -> approval dict)

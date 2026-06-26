@@ -11,4 +11,5 @@ class ActionHistory(Base):
     status = Column(String(50), nullable=False)
     servicenow_id = Column(String(100), nullable=True)
     approved_by_user = Column(Boolean, default=False)
+    correlation_id = Column(String(100), index=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

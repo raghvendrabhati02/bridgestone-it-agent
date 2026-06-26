@@ -133,7 +133,27 @@ def create_ticket(category: str, issue_description: str, created_by: str = None)
         recipient="Employee",
         message=f"Your ticket {ticket_id} has been created and assigned."
     )
-    
+
+    # ── RBAC Audit — ticket creation ──────────────────────────────────────────
+    try:
+        from app.services.rbac_audit_service import log_rbac_event
+        log_rbac_event(
+            user=created_by or "unknown",
+            role="EMPLOYEE",   # ticket creation is always by the requesting user
+            action="create_ticket",
+            ticket_id=ticket_id,
+            old_state=None,
+            new_state="OPEN",
+            details={
+                "category": category,
+                "assigned_team": assigned_team,
+                "priority": priority,
+                "sla_hours": sla_hours,
+            },
+        )
+    except Exception as e:
+        logger.warning("Ticket Service: RBAC audit emit failed for %s: %s", ticket_id, e)
+
     return ticket
 
 def get_all_tickets() -> list[dict]:
@@ -156,10 +176,17 @@ def get_all_tickets() -> list[dict]:
                     "status": t.status,
                     "servicenow_id": t.servicenow_id,
                     "created_by": t.created_by,
-                    "created_at": t.created_at.isoformat() + "Z"
+                    "created_at": t.created_at.isoformat() + "Z",
+                    # ── SLA Escalation Engine fields ───────────────────────
+                    "sla_state": t.sla_state or "HEALTHY",
+                    "sla_breached": t.sla_breached or False,
+                    "sla_breached_at": (
+                        t.sla_breached_at.isoformat() + "Z" if t.sla_breached_at else None
+                    ),
                 }
                 for t in db_tickets
             ]
+
 
     except Exception as e:
         logger.error("Ticket Service: Failed to get tickets from DB: %s", e)

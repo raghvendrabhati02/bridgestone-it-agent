@@ -157,7 +157,8 @@ def log_approval(session_id: str, recommended_action: str, approval_status: str)
         status_map = {
             "PENDING": "requested",
             "APPROVED": "approved",
-            "REJECTED": "rejected"
+            "REJECTED": "rejected",
+            "ACCESS_DENIED": "denied"
         }
         mapped_status = status_map.get(approval_status.upper().strip(), "requested")
         BUSINESS_APPROVALS_TOTAL.labels(status=mapped_status).inc()
@@ -222,14 +223,17 @@ def log_agent_trace(session_id: str, agent_name: str, output: dict) -> dict:
                 "session_id": trace.session_id,
                 "agent_name": trace.agent_name,
                 "output": trace.output_data,
+                "correlation_id": trace.correlation_id,
                 "timestamp": trace.created_at.isoformat() + "Z"
             }
     except Exception as e:
         logger.error("Audit Service: Failed to save agent trace: %s", e)
+        from app.core.logging_context import correlation_id_ctx
         return {
             "session_id": session_id,
             "agent_name": agent_name,
             "output": output,
+            "correlation_id": correlation_id_ctx.get() or "",
             "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
         }
 
@@ -243,6 +247,7 @@ def get_all_agent_traces() -> list:
                     "session_id": trace.session_id,
                     "agent_name": trace.agent_name,
                     "output": trace.output_data,
+                    "correlation_id": trace.correlation_id,
                     "timestamp": trace.created_at.isoformat() + "Z"
                 }
                 for trace in traces
