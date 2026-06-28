@@ -101,20 +101,23 @@ def generate_gemini_turn(state: ConversationState, user_message: str) -> str:
     context = load_knowledge_context(state.category)
     
     prompt = (
-        "You are the Bridgestone IT support agent. Help the user troubleshoot their issue.\n"
-        f"Issue Category: {state.category}\n\n"
+        "You are an experienced Bridgestone IT Service Desk Colleague. Help the user troubleshoot their IT issue.\n"
+        f"Category: {state.category}\n\n"
+        "=== Guidelines ===\n"
+        "1. Empathy: Warmly acknowledge their technical difficulty first if it's the beginning of the conversation.\n"
+        "2. Explain what check is being performed: Let the user know what diagnostics you are initiating under the hood.\n"
+        "3. Conversation Memory: Pay attention to the history. Do NOT ask for details (like Wi-Fi, application, or symptoms) that they already provided. Reference their previous answers naturally.\n"
+        "4. Multiple-choice options: Where helpful (e.g. error codes, platform types), present clear A/B/C/D choices to make responding simple.\n"
+        "5. Direct & concise: Keep your response between 2 and 4 sentences. Write naturally and warmly.\n\n"
     )
         
     prompt += "Conversation History:\n"
     for msg in state.conversation_history:
-        sender = "Employee" if msg["sender"] == "user" else "IT Agent"
+        sender = "User" if msg["sender"] == "user" else "Agent"
         prompt += f"{sender}: {msg['text']}\n"
         
-    prompt += f"Employee's latest response: {user_message}\n"
-    prompt += "Instructions:\n"
-    prompt += "- Be a friendly, professional IT support engineer.\n"
-    prompt += "- Keep your response under 3 sentences.\n"
-    prompt += "- Ask ONE clear troubleshooting or diagnostic question to guide the user next.\n"
+    prompt += f"User's latest response: {user_message}\n\n"
+    prompt += "Response:"
     
     res = generate_response(prompt, knowledge_context=context)
     if isinstance(res, dict) and "debug_error" in res:
@@ -370,6 +373,23 @@ def handle_chat_turn(session_id: str | None, message: str, username: str = None,
                 state = ConversationState(session_id, detected_category, message)
                 state.conversation_history = []
                 conversations[session_id] = state
+
+    # Trigger transition out of waiting state when customer responds
+    if state and state.active_ticket:
+        try:
+            from app.database.session import get_db
+            from app.database.models.ticket import Ticket
+            from app.services.ticket_lifecycle_service import transition as transition_lifecycle
+            with get_db() as db:
+                ticket = db.query(Ticket).filter(Ticket.ticket_id == state.active_ticket).first()
+                if ticket:
+                    ticket.last_customer_response_at = datetime.utcnow()
+                    db.commit()
+                    if ticket.status in ("WAITING_FOR_CUSTOMER", "WAITING_FOR_USER"):
+                        logger.info("Conversation Service: Responding user input on waiting ticket. Transitioning ticket %s to IN_PROGRESS", ticket.ticket_id)
+                        transition_lifecycle(ticket.ticket_id, "IN_PROGRESS", note="Customer responded; automatically transitioned to IN_PROGRESS.", session_id=session_id)
+        except Exception as e:
+            logger.error("Conversation Service: Failed to auto-transition ticket to IN_PROGRESS: %s", e)
 
     # Check if session status is AWAITING_APPROVAL, and user approved/rejected
     if state and state.status == "AWAITING_APPROVAL":
@@ -677,6 +697,21 @@ def handle_chat_turn(session_id: str | None, message: str, username: str = None,
                 if isinstance(bot_text, dict) and "debug_error" in bot_text:
                     return bot_text
             
+    # Auto-toggle WAITING_FOR_CUSTOMER if response is a question and ticket is in IN_PROGRESS/ASSIGNED/OPEN
+    if state and state.active_ticket:
+        try:
+            from app.database.session import get_db
+            from app.database.models.ticket import Ticket
+            from app.services.ticket_lifecycle_service import transition as transition_lifecycle
+            with get_db() as db:
+                ticket = db.query(Ticket).filter(Ticket.ticket_id == state.active_ticket).first()
+                if ticket and ticket.status in ("IN_PROGRESS", "ASSIGNED", "OPEN"):
+                    if "?" in bot_text or action == "ASK_MORE_INFO":
+                        logger.info("Conversation Service: AI asked a question. Auto-transitioning ticket %s to WAITING_FOR_CUSTOMER", ticket.ticket_id)
+                        transition_lifecycle(ticket.ticket_id, "WAITING_FOR_CUSTOMER", note="AI asked a troubleshooting question; waiting for customer response.", session_id=session_id)
+        except Exception as e:
+            logger.error("Conversation Service: Failed to auto-transition ticket to WAITING_FOR_CUSTOMER: %s", e)
+
     # Append user query and agent reply to database history
     state.conversation_history.append({"sender": "user", "text": message})
     state.conversation_history.append({"sender": "agent", "text": bot_text})

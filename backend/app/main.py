@@ -595,14 +595,117 @@ def chat(request: ChatRequest, current_user: User = Depends(get_current_user)):
 
 
 @app.get("/tickets")
-def list_tickets(current_user: User = Depends(get_current_user)):
-    logger.info("FastAPI Endpoint GET '/tickets': Fetching tickets for user %s", current_user.username)
-    all_tickets = get_all_tickets()
-    if current_user.role in ("ADMIN", "MANAGER"):
-        return all_tickets
-    else:
-        # Filter tickets created by this employee
-        return [t for t in all_tickets if t.get("created_by") == current_user.username]
+def list_tickets(
+    status: str | None = None,
+    priority: str | None = None,
+    category: str | None = None,
+    assigned_team: str | None = None,
+    assigned_engineer: str | None = None,
+    created_by: str | None = None,
+    sla_state: str | None = None,
+    sla_breached: bool | None = None,
+    search: str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    logger.info("FastAPI Endpoint GET '/tickets': Fetching tickets with filters for user %s", current_user.username)
+    from app.database.models.ticket import Ticket
+    import datetime
+
+    query = db.query(Ticket)
+
+    # RBAC constraint: EMPLOYEE can only see their own tickets
+    if current_user.role not in ("ADMIN", "MANAGER"):
+        query = query.filter(Ticket.created_by == current_user.username)
+
+    # Apply filters
+    if status:
+        query = query.filter(Ticket.status == status.upper().strip())
+    if priority:
+        query = query.filter(Ticket.priority == priority.upper().strip())
+    if category:
+        query = query.filter(Ticket.category == category.upper().strip())
+    if assigned_team:
+        query = query.filter(Ticket.assigned_team == assigned_team.strip())
+    if assigned_engineer:
+        query = query.filter(Ticket.assigned_engineer == assigned_engineer.strip())
+    if created_by:
+        query = query.filter(Ticket.created_by == created_by.strip())
+    if sla_state:
+        query = query.filter(Ticket.sla_state == sla_state.upper().strip())
+    if sla_breached is not None:
+        query = query.filter(Ticket.sla_breached == sla_breached)
+
+    if search:
+        query = query.filter(
+            Ticket.ticket_id.like(f"%{search}%") |
+            Ticket.description.like(f"%{search}%") |
+            Ticket.issue_description.like(f"%{search}%")
+        )
+
+    if created_after:
+        try:
+            dt_after = datetime.datetime.fromisoformat(created_after.replace("Z", ""))
+            query = query.filter(Ticket.created_at >= dt_after)
+        except Exception:
+            pass
+    if created_before:
+        try:
+            dt_before = datetime.datetime.fromisoformat(created_before.replace("Z", ""))
+            query = query.filter(Ticket.created_at <= dt_before)
+        except Exception:
+            pass
+            
+    if updated_after:
+        try:
+            dt_up_after = datetime.datetime.fromisoformat(updated_after.replace("Z", ""))
+            query = query.filter(
+                (Ticket.created_at >= dt_up_after) |
+                (Ticket.resolved_at >= dt_up_after) |
+                (Ticket.closed_at >= dt_up_after)
+            )
+        except Exception:
+            pass
+    if updated_before:
+        try:
+            dt_up_before = datetime.datetime.fromisoformat(updated_before.replace("Z", ""))
+            query = query.filter(
+                (Ticket.created_at <= dt_up_before) |
+                (Ticket.resolved_at <= dt_up_before) |
+                (Ticket.closed_at <= dt_up_before)
+            )
+        except Exception:
+            pass
+
+    tickets_list = query.order_by(Ticket.created_at.desc()).all()
+
+    # Map to dictionary output
+    results = []
+    for t in tickets_list:
+        results.append({
+            "ticket_id": t.ticket_id,
+            "category": t.category,
+            "description": t.description,
+            "issue_description": t.issue_description,
+            "assigned_team": t.assigned_team,
+            "assigned_engineer": t.assigned_engineer,
+            "priority": t.priority,
+            "sla_hours": t.sla_hours,
+            "status": t.status,
+            "servicenow_id": t.servicenow_id,
+            "created_by": t.created_by,
+            "created_at": t.created_at.isoformat() + "Z",
+            "resolved_at": t.resolved_at.isoformat() + "Z" if t.resolved_at else None,
+            "closed_at": t.closed_at.isoformat() + "Z" if t.closed_at else None,
+            "sla_state": t.sla_state or "HEALTHY",
+            "sla_breached": t.sla_breached or False,
+            "sla_breached_at": t.sla_breached_at.isoformat() + "Z" if t.sla_breached_at else None,
+        })
+    return results
 
 @app.post("/ticket")
 def make_ticket(request: TicketCreateRequest, current_user: User = Depends(get_current_user)):
@@ -615,17 +718,20 @@ class TicketActionRequest(BaseModel):
     team: str | None = None
     priority: str | None = None
     note: str | None = None
+    engineer: str | None = None
 
 
 @app.post("/tickets/{ticket_id}/action")
 def run_ticket_action(
     ticket_id: str,
     request: TicketActionRequest,
-    current_user: User = Depends(RoleChecker(["ADMIN"])),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db_context)
 ):
     logger.info("FastAPI Endpoint POST '/tickets/%s/action': Action=%s, user=%s", ticket_id, request.action, current_user.username)
     from app.database.models.ticket import Ticket
+    from app.database.models.audit_log import AuditLog
+    from app.database.models.rbac_audit_log import RbacAuditLog
     from app.services.rbac_audit_service import log_rbac_event
     from app.services.notification_service import create_notification
     from app.services.sla_service import calculate_sla
@@ -641,29 +747,100 @@ def run_ticket_action(
 
     action = request.action.lower().strip()
     
+    # ── Role-based access control gates ──────────────────────────────────────
+    is_creator = (ticket.created_by == current_user.username)
+    
+    if action == "add_note":
+        if current_user.role not in ("ADMIN", "MANAGER"):
+            raise HTTPException(status_code=403, detail="Employees are not authorized to post or view internal work notes.")
+    elif action in ("approve", "reject"):
+        if current_user.role not in ("ADMIN", "MANAGER"):
+            raise HTTPException(status_code=403, detail="Only Managers and Admins can approve or reject actions.")
+    elif action in ("assign", "reassign", "transfer_team", "assign_team"):
+        if current_user.role not in ("ADMIN", "MANAGER"):
+            raise HTTPException(status_code=403, detail="Only Managers and Admins can assign or transfer tickets.")
+    elif action in ("start_work", "put_on_hold", "request_more_information", "change_priority", "resolve", "escalate"):
+        if current_user.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="Only Admin users can execute this ticket lifecycle action.")
+    elif action in ("close", "confirm_resolution"):
+        if current_user.role != "ADMIN" and not is_creator:
+            raise HTTPException(status_code=403, detail="Only Admins or the ticket requester can close or confirm resolution.")
+    elif action == "reopen":
+        if current_user.role != "ADMIN" and not is_creator:
+            raise HTTPException(status_code=403, detail="Only Admins or the ticket requester can reopen this ticket.")
+    else:
+        raise HTTPException(status_code=400, detail=f"Action '{request.action}' not recognized.")
+
+    # ── Action Logic ────────────────────────────────────────────────────────
+    
     if action == "add_note":
         if not request.note:
             raise HTTPException(status_code=400, detail="Note content is required for action 'add_note'.")
-        log_rbac_event(
-            user=current_user.username,
-            role=current_user.role,
-            action="add_internal_note",
+        from app.services.workflow_service import WorkflowService
+        WorkflowService.add_comment(
+            db=db,
             ticket_id=ticket_id,
-            details={"note": request.note}
+            author=current_user.username,
+            text=request.note,
+            is_internal=True,
+            role=current_user.role
         )
+        db.commit()
         return {"message": "Internal note added successfully."}
+
+    elif action in ("approve", "reject"):
+        # Find session_id from AuditLog or RbacAuditLog
+        audit_record = db.query(AuditLog).filter(AuditLog.ticket_id == ticket_id).first()
+        session_id = audit_record.session_id if audit_record else None
+        if not session_id:
+            rbac_record = db.query(RbacAuditLog).filter(RbacAuditLog.ticket_id == ticket_id).first()
+            if rbac_record and rbac_record.details:
+                try:
+                    import json
+                    details_dict = json.loads(rbac_record.details)
+                    session_id = details_dict.get("session_id")
+                except Exception:
+                    pass
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="No active session found to approve/reject.")
+            
+        status_str = "APPROVED" if action == "approve" else "REJECTED"
+        from app.services.approval_service import update_approval
+        update_approval(session_id, status_str)
+        
+        # Log to timeline
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="APPROVAL_DECIDED",
+            actor=current_user.username,
+            action=action,
+            description=f"Action approval {status_str.lower()} by {current_user.username}."
+        )
+        db.commit()
+        return {"message": f"Action approval {status_str.lower()} successfully."}
 
     # Otherwise we are updating fields
     new_status = old_status
     new_priority = old_priority
     new_team = old_team
 
-    if action in ("assign_team", "transfer_team"):
-        if not request.team:
-            raise HTTPException(status_code=400, detail="Team name is required for assignment actions.")
-        new_team = request.team
+    if action in ("assign", "reassign", "transfer_team", "assign_team"):
+        new_team = request.team or ticket.assigned_team or "Helpdesk"
+        new_engineer = request.engineer or ticket.assigned_engineer or "Emily Watson (Helpdesk L2)"
+        
+        from app.services.workflow_service import WorkflowService
+        WorkflowService.assign_ticket(
+            db=db,
+            ticket_id=ticket_id,
+            new_engineer=new_engineer,
+            assigned_by=current_user.username,
+            reason=request.note,
+            new_group=new_team
+        )
         new_status = "ASSIGNED"
-        ticket.assigned_team = new_team
         ticket.status = new_status
         db.commit()
         
@@ -686,7 +863,7 @@ def run_ticket_action(
             ticket_id=ticket_id,
             old_state=old_status,
             new_state=new_status,
-            details={"action": request.action, "assigned_team": new_team, "note": request.note or ""}
+            details={"action": request.action, "assigned_team": new_team, "assigned_engineer": new_engineer, "note": request.note or ""}
         )
 
     elif action == "change_priority":
@@ -699,6 +876,17 @@ def run_ticket_action(
         ticket.priority = new_priority
         ticket.sla_hours = new_sla_hours
         db.commit()
+
+        # Log timeline event
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="PRIORITY_CHANGED",
+            actor=current_user.username,
+            action="change priority",
+            description=f"Priority changed to {new_priority}."
+        )
 
         # Log Audit
         log_rbac_event(
@@ -715,6 +903,16 @@ def run_ticket_action(
         new_status = "IN_PROGRESS"
         ticket.status = new_status
         db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="WORK_STARTED",
+            actor=current_user.username,
+            action="start work",
+            description=f"Work started on ticket by {current_user.username}."
+        )
 
         create_notification(
             ticket_id=ticket_id,
@@ -736,6 +934,16 @@ def run_ticket_action(
         ticket.status = new_status
         db.commit()
 
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_ON_HOLD",
+            actor=current_user.username,
+            action="put on hold",
+            description=f"Ticket put on hold by {current_user.username}."
+        )
+
         create_notification(
             ticket_id=ticket_id,
             recipient=ticket.created_by or "Employee",
@@ -751,10 +959,20 @@ def run_ticket_action(
             details={"action": "put_on_hold", "note": request.note or ""}
         )
 
-    elif action == "request_more_information":
+    elif action in ("request_more_information", "request_information"):
         new_status = "WAITING_FOR_USER"
         ticket.status = new_status
         db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="INFORMATION_REQUESTED",
+            actor=current_user.username,
+            action="request information",
+            description=f"Additional information requested by {current_user.username}."
+        )
 
         create_notification(
             ticket_id=ticket_id,
@@ -779,6 +997,16 @@ def run_ticket_action(
         ticket.sla_hours = new_sla_hours
         db.commit()
 
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_ESCALATED",
+            actor=current_user.username,
+            action="escalate",
+            description=f"Ticket priority escalated to {new_priority}."
+        )
+
         create_notification(
             ticket_id=ticket_id,
             recipient="Manager",
@@ -802,7 +1030,18 @@ def run_ticket_action(
     elif action == "resolve":
         new_status = "RESOLVED"
         ticket.status = new_status
+        ticket.resolved_at = datetime.datetime.utcnow()
         db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_RESOLVED",
+            actor=current_user.username,
+            action="resolve",
+            description=f"Ticket resolved by {current_user.username}."
+        )
 
         create_notification(
             ticket_id=ticket_id,
@@ -819,10 +1058,21 @@ def run_ticket_action(
             details={"action": "resolve", "note": request.note or ""}
         )
 
-    elif action == "close":
+    elif action in ("close", "confirm_resolution"):
         new_status = "CLOSED"
         ticket.status = new_status
+        ticket.closed_at = datetime.datetime.utcnow()
         db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_CLOSED",
+            actor=current_user.username,
+            action="close",
+            description=f"Ticket closed by {current_user.username}."
+        )
 
         create_notification(
             ticket_id=ticket_id,
@@ -840,6 +1090,13 @@ def run_ticket_action(
         )
 
     elif action == "reopen":
+        from app.services.workflow_service import WorkflowService
+        WorkflowService.reopen_ticket(
+            db=db,
+            ticket_id=ticket_id,
+            reopened_by=current_user.username,
+            reason=request.note or "Ticket reopened via administration control."
+        )
         new_status = "ASSIGNED" if ticket.assigned_team else "OPEN"
         ticket.status = new_status
         db.commit()
@@ -860,9 +1117,6 @@ def run_ticket_action(
             details={"action": "reopen", "note": request.note or ""}
         )
 
-    else:
-        raise HTTPException(status_code=400, detail=f"Action '{request.action}' not recognized.")
-
     # Update in-memory ticket lifecycle store for synchronization
     try:
         import app.services.ticket_lifecycle_service as tls
@@ -873,7 +1127,7 @@ def run_ticket_action(
                 "from_state": old_status,
                 "to_state": new_status,
                 "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-                "note": request.note or f"Admin action: {action}"
+                "note": request.note or f"Action: {action}"
             })
     except Exception as e:
         logger.warning("Failed to sync ticket lifecycle in-memory store: %s", e)
@@ -886,6 +1140,64 @@ def run_ticket_action(
         "assigned_team": ticket.assigned_team,
         "sla_hours": ticket.sla_hours
     }
+
+
+class CommentCreateRequest(BaseModel):
+    text: str
+    is_internal: bool = False
+
+
+@app.post("/tickets/{ticket_id}/comments")
+def post_comment(
+    ticket_id: str,
+    request: CommentCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    try:
+        comment = WorkflowService.add_comment(
+            db=db,
+            ticket_id=ticket_id,
+            author=current_user.username,
+            text=request.text,
+            is_internal=request.is_internal,
+            role=current_user.role
+        )
+        db.commit()
+        return {
+            "id": comment.id,
+            "ticket_id": comment.ticket_id,
+            "author": comment.author,
+            "text": comment.text,
+            "is_internal": comment.is_internal,
+            "created_at": comment.created_at.isoformat() + "Z"
+        }
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/tickets/{ticket_id}/comments")
+def get_comments(
+    ticket_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    comments = WorkflowService.get_comments(db, ticket_id, current_user.role)
+    return [
+        {
+            "id": c.id,
+            "ticket_id": c.ticket_id,
+            "author": c.author,
+            "text": c.text,
+            "is_internal": c.is_internal,
+            "created_at": c.created_at.isoformat() + "Z"
+        }
+        for c in comments
+    ]
 
 
 @app.get("/tickets/{ticket_id}/details")
@@ -943,21 +1255,27 @@ def get_ticket_details(
             "department": "IT Service Desk Operations",
             "location": "Bangalore, India",
             "email": "employee@bridgestone.com",
-            "role": "EMPLOYEE"
+            "role": "EMPLOYEE",
+            "device": "BS-EMP-WS09",
+            "operating_system": "Windows 11 Enterprise"
         },
         "manager": {
             "name": "Sarah Jenkins",
             "department": "IT Service Desk Management",
             "location": "Tokyo, Japan",
             "email": "manager@bridgestone.com",
-            "role": "MANAGER"
+            "role": "MANAGER",
+            "device": "BS-MGR-LAP8",
+            "operating_system": "macOS Sonoma"
         },
         "admin": {
             "name": "Alex Rivera",
             "department": "IT Infrastructure & Security",
             "location": "Nashville, USA",
             "email": "admin@bridgestone.com",
-            "role": "ADMIN"
+            "role": "ADMIN",
+            "device": "BS-ADM-SRV3",
+            "operating_system": "Windows Server 2022"
         }
     }
     
@@ -969,7 +1287,9 @@ def get_ticket_details(
             "department": "Operations",
             "location": "Bridgestone HQ",
             "email": creator_user.email,
-            "role": creator_user.role
+            "role": creator_user.role,
+            "device": "BS-USER-LAP",
+            "operating_system": "Windows 11 Enterprise"
         }
     else:
         req_profile = {
@@ -977,7 +1297,9 @@ def get_ticket_details(
             "department": "Operations",
             "location": "Bridgestone HQ",
             "email": f"{creator_username}@bridgestone.com",
-            "role": "EMPLOYEE"
+            "role": "EMPLOYEE",
+            "device": "BS-USER-LAP",
+            "operating_system": "Windows 11 Enterprise"
         }
 
     # 4. Assignment Information
@@ -990,7 +1312,7 @@ def get_ticket_details(
         "Hardware": "Dave Grohl (Hardware Desk)",
         "General": "IT Generalist Queue Manager"
     }
-    assigned_engineer = engineers.get(assigned_team, "Emily Watson (Helpdesk L2)")
+    assigned_engineer = ticket.assigned_engineer or engineers.get(assigned_team, "Emily Watson (Helpdesk L2)")
     
     # 5. SLA info
     sla_info = compute_sla_status(ticket)
@@ -1071,8 +1393,39 @@ def get_ticket_details(
             "type": "notification"
         })
 
+    # E. Add ServiceNow Operational Workflow Timeline events
+    try:
+        from app.database.models.workflow_models import TicketTimeline
+        workflow_timeline = db.query(TicketTimeline).filter(TicketTimeline.ticket_id == ticket_id).all()
+        for evt in workflow_timeline:
+            timeline.append({
+                "timestamp": evt.created_at.isoformat() + "Z",
+                "title": evt.event_type.replace("_", " ").title(),
+                "description": evt.description,
+                "type": "workflow",
+                "user": evt.actor,
+                "role": "SYSTEM" if evt.actor == "system" else "SUPPORT",
+                "action": evt.action
+            })
+    except Exception as e:
+        logger.error("Failed to load workflow timeline events for ticket details: %s", e)
+
     # Sort timeline events chronologically
     timeline.sort(key=lambda x: x["timestamp"])
+
+    # Filter timeline events for employee privacy
+    filtered_timeline = []
+    for evt in timeline:
+        if current_user.role == "EMPLOYEE":
+            t_title = str(evt.get("title", "")).lower()
+            t_type = str(evt.get("type", "")).lower()
+            t_action = str(evt.get("action", "")).lower()
+            t_desc = str(evt.get("description", "")).lower()
+            
+            # Filter internal events
+            if "internal note" in t_title or "work note" in t_title or t_type == "note_added" or t_action == "add_internal_note" or "confidential" in t_desc:
+                continue
+        filtered_timeline.append(evt)
 
     # 7. Conversations
     chat_history = []
@@ -1092,6 +1445,7 @@ def get_ticket_details(
 
     # 8. AI Diagnosis
     ai_diagnosis = None
+    tool_chain = []
     if session_id:
         trace = db.query(AgentTrace).filter(AgentTrace.session_id == session_id).first()
         if trace and trace.output_data:
@@ -1104,59 +1458,61 @@ def get_ticket_details(
                     "tools_executed": out_data.get("tools") or [],
                     "confidence_score": out_data.get("confidence") or 85
                 }
+                tool_chain = out_data.get("tools", [])
     
-    if not ai_diagnosis:
-        fallback_diag = {
-            "VPN": {
-                "summary": "VPN connection gateway timeout (Error 809). AI attempted ping tests and routing validation.",
-                "root_cause": "Congested remote access gateway or stale firewall tunnel state.",
-                "troubleshooting_steps": "1. Verified gateway ping response.\n2. Polled Entra ID authentication status.\n3. Verified user session active state.",
-                "tools_executed": ["ping_vpn_gateway", "check_ad_session"],
-                "confidence_score": 92
-            },
-            "Password": {
-                "summary": "AD credentials lockout. AI triggered AD lockout query and unlocked user record.",
-                "root_cause": "Brute lock triggered by multiple failed password attempts on workstation.",
-                "troubleshooting_steps": "1. Inspected domain controller lockout state.\n2. Reset lockout flags in AD.\n3. Initiated security notification flow.",
-                "tools_executed": ["check_lockout_status", "unlock_ad_user"],
-                "confidence_score": 98
-            },
-            "Software": {
-                "summary": "Software licensing provision request for Microsoft Visio.",
-                "root_cause": "Visio deployment package lacks valid license allocation.",
-                "troubleshooting_steps": "1. Queried licensing server inventory.\n2. Dispatched approval request to Manager.",
-                "tools_executed": ["check_license_availability", "request_manager_approval"],
-                "confidence_score": 90
-            },
-            "Outlook": {
-                "summary": "Outlook crash on launch. AI analyzed local cache registry key.",
-                "root_cause": "Corrupted local OST file state or add-in incompatibility.",
-                "troubleshooting_steps": "1. Reset outlook safe-mode profiles.\n2. Dispatched OST repair request.",
-                "tools_executed": ["repair_outlook_profile"],
-                "confidence_score": 87
-            },
-            "SAP": {
-                "summary": "SAP ERP application throwing gateway time-outs on ordering systems.",
-                "root_cause": "Congested app server queue or offline database middleware connectivity.",
-                "troubleshooting_steps": "1. Polled application server status metrics.\n2. Tested DB listener ports.",
-                "tools_executed": ["ping_sap_server", "check_db_listener"],
-                "confidence_score": 94
-            },
-            "Network": {
-                "summary": "Warehouse network switch offline. Switch ports reporting link down.",
-                "root_cause": "Switch port hardware failure or fiber cable link disconnection.",
-                "troubleshooting_steps": "1. Polled SNMP interfaces.\n2. Verified upstream gateway route ping.",
-                "tools_executed": ["snmp_poll_switch", "ping_gateway"],
-                "confidence_score": 91
-            },
-            "Hardware": {
-                "summary": "Laptop hardware screen issue. Screen goes black on lid articulation.",
-                "root_cause": "Physical display hinge ribbon cable damaged.",
-                "troubleshooting_steps": "1. Recommended physical hardware desk drop-off.\n2. Initiated device replacement request in ServiceNow.",
-                "tools_executed": ["schedule_hardware_repair"],
-                "confidence_score": 96
-            }
+    fallback_diag = {
+        "VPN": {
+            "summary": "VPN connection gateway timeout (Error 809). AI attempted ping tests and routing validation.",
+            "root_cause": "Congested remote access gateway or stale firewall tunnel state.",
+            "troubleshooting_steps": "1. Verified gateway ping response.\n2. Polled Entra ID authentication status.\n3. Verified user session active state.",
+            "tools_executed": ["ping_vpn_gateway", "check_ad_session"],
+            "confidence_score": 92
+        },
+        "Password": {
+            "summary": "AD credentials lockout. AI triggered AD lockout query and unlocked user record.",
+            "root_cause": "Brute lock triggered by multiple failed password attempts on workstation.",
+            "troubleshooting_steps": "1. Inspected domain controller lockout state.\n2. Reset lockout flags in AD.\n3. Initiated security notification flow.",
+            "tools_executed": ["check_lockout_status", "unlock_ad_user"],
+            "confidence_score": 98
+        },
+        "Software": {
+            "summary": "Software licensing provision request for Microsoft Visio.",
+            "root_cause": "Visio deployment package lacks valid license allocation.",
+            "troubleshooting_steps": "1. Queried licensing server inventory.\n2. Dispatched approval request to Manager.",
+            "tools_executed": ["check_license_availability", "request_manager_approval"],
+            "confidence_score": 90
+        },
+        "Outlook": {
+            "summary": "Outlook crash on launch. AI analyzed local cache registry key.",
+            "root_cause": "Corrupted local OST file state or add-in incompatibility.",
+            "troubleshooting_steps": "1. Reset outlook safe-mode profiles.\n2. Dispatched OST repair request.",
+            "tools_executed": ["repair_outlook_profile"],
+            "confidence_score": 87
+        },
+        "SAP": {
+            "summary": "SAP ERP application throwing gateway time-outs on ordering systems.",
+            "root_cause": "Congested app server queue or offline database middleware connectivity.",
+            "troubleshooting_steps": "1. Polled application server status metrics.\n2. Tested DB listener ports.",
+            "tools_executed": ["ping_sap_server", "check_db_listener"],
+            "confidence_score": 94
+        },
+        "Network": {
+            "summary": "Warehouse network switch offline. Switch ports reporting link down.",
+            "root_cause": "Switch port hardware failure or fiber cable link disconnection.",
+            "troubleshooting_steps": "1. Polled SNMP interfaces.\n2. Verified upstream gateway route ping.",
+            "tools_executed": ["snmp_poll_switch", "ping_gateway"],
+            "confidence_score": 91
+        },
+        "Hardware": {
+            "summary": "Laptop hardware screen issue. Screen goes black on lid articulation.",
+            "root_cause": "Physical display hinge ribbon cable damaged.",
+            "troubleshooting_steps": "1. Recommended physical hardware desk drop-off.\n2. Initiated device replacement request in ServiceNow.",
+            "tools_executed": ["schedule_hardware_repair"],
+            "confidence_score": 96
         }
+    }
+
+    if not ai_diagnosis:
         ai_diagnosis = fallback_diag.get(ticket.category, {
             "summary": f"Incident logged in category {ticket.category}. AI initialized basic diagnostic trace.",
             "root_cause": "Undetermined software or hardware incident.",
@@ -1164,6 +1520,28 @@ def get_ticket_details(
             "tools_executed": ["create_ticket"],
             "confidence_score": 85
         })
+
+    # Resolve device/OS dynamically from trace outputs if available
+    device = None
+    operating_system = None
+    if session_id:
+        trace = db.query(AgentTrace).filter(AgentTrace.session_id == session_id).first()
+        if trace and trace.output_data:
+            out_data = trace.output_data
+            if isinstance(out_data, dict):
+                for tool in out_data.get("tools", []):
+                    if tool.get("tool_name") == "system_tools":
+                        td = tool.get("data", {})
+                        device = td.get("hostname")
+                        operating_system = td.get("system_info")
+
+    if not device:
+        device = req_profile.get("device", "BS-USER-LAP")
+    if not operating_system:
+        operating_system = req_profile.get("operating_system", "Windows 11 Enterprise")
+
+    req_profile["device"] = device
+    req_profile["operating_system"] = operating_system
 
     # 9. Related Objects Links
     related_approvals = []
@@ -1198,6 +1576,91 @@ def get_ticket_details(
             "created_at": ticket.created_at.isoformat() + "Z"
         })
 
+    # Retrieve and format comments separation
+    from app.services.workflow_service import WorkflowService
+    comments = WorkflowService.get_comments(db, ticket_id, current_user.role)
+    customer_comments = [
+        {
+            "id": c.id,
+            "author": c.author,
+            "text": c.text,
+            "created_at": c.created_at.isoformat() + "Z"
+        }
+        for c in comments if not c.is_internal
+    ]
+    internal_notes = [
+        {
+            "id": c.id,
+            "author": c.author,
+            "text": c.text,
+            "created_at": c.created_at.isoformat() + "Z"
+        }
+        for c in comments if c.is_internal
+    ]
+
+    # Generate Dynamic Engineer Summary (Markdown report)
+    from app.agents.engineer_summary_agent import EngineerSummaryAgent
+    summary_agent = EngineerSummaryAgent()
+    from app.agents.hypothesis_tracker_agent import HypothesisTrackerAgent
+    tracker = HypothesisTrackerAgent()
+    hypotheses = tracker._update_rule_based(ticket.category, tool_chain if tool_chain else [{"tool_name": "system_tools", "status": "SUCCESS"}])
+    engineer_summary = summary_agent.generate_summary(
+        category=ticket.category,
+        tool_chain=tool_chain if tool_chain else [{"tool_name": "system_tools", "status": "SUCCESS", "data": {"status": "SUCCESS"}}],
+        hypotheses=hypotheses,
+        user_message=ticket.description or ""
+    )
+
+    # ── CONVERSATION SUMMARY GENERATOR ──────────────────────────────────────────
+    questions_asked = []
+    for msg in chat_history:
+        if msg["sender"] == "agent":
+            text = msg["text"]
+            if "?" in text or "[A]" in text or "select" in text.lower() or "please choose" in text.lower():
+                lines = [line.strip() for line in text.split("\n") if line.strip()]
+                for line in lines:
+                    if line.endswith("?") or "[A]" in line or "select" in line.lower():
+                        questions_asked.append(line)
+                        break
+
+    if not questions_asked:
+        questions_asked = ["Verified customer identity and category classification."]
+
+    tools_run_names = []
+    tool_results_list = []
+    if tool_chain:
+        for t in tool_chain:
+            name = t.get("tool_name", "unknown_tool")
+            status = t.get("status", "SUCCESS")
+            tools_run_names.append(name)
+            tool_results_list.append(f"{name}: {status}")
+    else:
+        diag = fallback_diag.get(ticket.category, ai_diagnosis)
+        tools_run_names = diag.get("tools_executed", ["create_ticket"])
+        tool_results_list = [f"{t}: SUCCESS" for t in tools_run_names]
+
+    rec_next_step = "Review ticket diagnosis and assign L2 engineer."
+    if ticket.category == "VPN":
+        rec_next_step = "Reset user remote access gateway credentials."
+    elif ticket.category == "Password":
+        rec_next_step = "Verify user status in Active Directory and reset account lock flags."
+    elif ticket.category == "Software":
+        rec_next_step = "Verify licensing compliance and push Visio deployment package."
+    elif ticket.category == "Outlook":
+        rec_next_step = "Repair corrupted Outlook OST profile file cache."
+    elif ticket.category == "SAP":
+        rec_next_step = "Verify db listener port status and clear user PRD lock table."
+
+    conversation_summary = {
+        "issue": f"{ticket.category} Access Restorations",
+        "symptoms": ticket.issue_description or ticket.description or "User reported connectivity or system access difficulty.",
+        "questions_asked": questions_asked,
+        "tools_executed": tools_run_names,
+        "results": tool_results_list,
+        "current_status": ticket.status,
+        "recommended_next_step": rec_next_step
+    }
+
     return {
         "ticket": {
             "ticket_id": ticket.ticket_id,
@@ -1211,9 +1674,14 @@ def get_ticket_details(
             "servicenow_id": ticket.servicenow_id,
             "created_by": ticket.created_by,
             "created_at": ticket.created_at.isoformat() + "Z",
+            "updated_at": (ticket.resolved_at or ticket.closed_at or ticket.reopened_at or ticket.created_at).isoformat() + "Z",
             "sla_state": ticket.sla_state or "HEALTHY",
             "sla_breached": ticket.sla_breached or False,
-            "sla_breached_at": ticket.sla_breached_at.isoformat() + "Z" if ticket.sla_breached_at else None
+            "sla_breached_at": ticket.sla_breached_at.isoformat() + "Z" if ticket.sla_breached_at else None,
+            "assigned_engineer": ticket.assigned_engineer,
+            "reopen_count": ticket.reopen_count or 0,
+            "reopened_at": ticket.reopened_at.isoformat() + "Z" if ticket.reopened_at else None,
+            "reopened_by": ticket.reopened_by
         },
         "session_id": session_id,
         "requester": req_profile,
@@ -1224,9 +1692,21 @@ def get_ticket_details(
             "queue": f"{assigned_team} Tier-2 Queue"
         },
         "sla": sla_info,
-        "timeline": timeline,
+        "timeline": filtered_timeline,
         "conversation": chat_history,
-        "ai_diagnosis": ai_diagnosis,
+        "ai_diagnosis": {
+            "summary": ai_diagnosis["summary"] if isinstance(ai_diagnosis, dict) else "Initial diagnostics trace.",
+            "root_cause": ai_diagnosis["root_cause"] if isinstance(ai_diagnosis, dict) else "Undetermined root cause.",
+            "troubleshooting_steps": ai_diagnosis["troubleshooting_steps"] if isinstance(ai_diagnosis, dict) else "No steps run.",
+            "tools_executed": tools_run_names,
+            "confidence_score": ai_diagnosis["confidence_score"] if isinstance(ai_diagnosis, dict) else 85,
+            "engineer_summary": engineer_summary
+        },
+        "conversation_summary": conversation_summary,
+        "comments": customer_comments,
+        "internal_notes": internal_notes,
+        "approval_required": len(related_approvals) > 0,
+        "approval_status": related_approvals[0]["status"] if related_approvals else "PENDING",
         "related": {
             "approvals": related_approvals,
             "requests": related_requests
@@ -1761,4 +2241,326 @@ def disable_job(
         scheduler_instance.remove_job(job_name)
     sync_next_run_times()
     return {"message": f"Job '{job_name}' disabled successfully."}
+
+
+# ── ServiceNow Operational Workflow Endpoints ──────────────────────────────
+import json
+
+class CommentCreate(BaseModel):
+    text: str
+    is_internal: bool
+
+class CommentEdit(BaseModel):
+    text: str
+
+class AssignRequest(BaseModel):
+    assigned_engineer: str
+    assigned_group: str = None
+    reason: str = None
+
+class ReopenRequest(BaseModel):
+    reason: str
+
+class CsatRequest(BaseModel):
+    rating: int
+    feedback: str = None
+    response_time_rating: int = None
+    resolution_quality_rating: int = None
+    would_recommend: bool = True
+
+class ClusterFixRequest(BaseModel):
+    known_fix: str
+
+class DuplicateLinkRequest(BaseModel):
+    source_ticket_id: str
+    target_ticket_id: str
+
+
+@app.post("/tickets/{ticket_id}/comments")
+def add_ticket_comment(
+    ticket_id: str,
+    body: CommentCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    try:
+        comment = WorkflowService.add_comment(
+            db=db,
+            ticket_id=ticket_id,
+            author=current_user.username,
+            text=body.text,
+            is_internal=body.is_internal,
+            role=current_user.role
+        )
+        db.commit()
+        return {
+            "id": comment.id,
+            "ticket_id": comment.ticket_id,
+            "author": comment.author,
+            "text": comment.text,
+            "is_internal": comment.is_internal,
+            "created_at": comment.created_at
+        }
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/tickets/{ticket_id}/comments")
+def get_ticket_comments(
+    ticket_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    comments = WorkflowService.get_comments(db=db, ticket_id=ticket_id, role=current_user.role)
+    return [
+        {
+            "id": c.id,
+            "ticket_id": c.ticket_id,
+            "author": c.author,
+            "text": c.text,
+            "is_internal": c.is_internal,
+            "created_at": c.created_at,
+            "edited_history": json.loads(c.edited_history) if c.edited_history else []
+        }
+        for c in comments
+    ]
+
+@app.put("/comments/{comment_id}")
+def edit_ticket_comment(
+    comment_id: int,
+    body: CommentEdit,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    try:
+        comment = WorkflowService.edit_comment(
+            db=db,
+            comment_id=comment_id,
+            author=current_user.username,
+            new_text=body.text,
+            role=current_user.role
+        )
+        db.commit()
+        return {"message": "Comment updated successfully."}
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tickets/{ticket_id}/assign")
+def assign_ticket(
+    ticket_id: str,
+    body: AssignRequest,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER", "SUPPORT", "ENGINEER"])),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    try:
+        ticket = WorkflowService.assign_ticket(
+            db=db,
+            ticket_id=ticket_id,
+            new_engineer=body.assigned_engineer,
+            assigned_by=current_user.username,
+            reason=body.reason,
+            new_group=body.assigned_group
+        )
+        db.commit()
+        return {"message": f"Ticket {ticket_id} successfully assigned to {body.assigned_engineer}."}
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/tickets/{ticket_id}/assignment-history")
+def get_ticket_assignment_history(
+    ticket_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.database.models.workflow_models import AssignmentHistory
+    history = db.query(AssignmentHistory).filter(AssignmentHistory.ticket_id == ticket_id).order_by(AssignmentHistory.assigned_time.desc()).all()
+    return [
+        {
+            "id": h.id,
+            "assigned_group": h.assigned_group,
+            "assigned_engineer": h.assigned_engineer,
+            "assigned_by": h.assigned_by,
+            "assigned_time": h.assigned_time,
+            "reason": h.reason,
+            "previous_engineer": h.previous_engineer,
+            "new_engineer": h.new_engineer
+        }
+        for h in history
+    ]
+
+@app.get("/tickets/{ticket_id}/timeline")
+def get_ticket_timeline(
+    ticket_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.timeline_service import TimelineService
+    timeline = TimelineService.get_timeline(db=db, ticket_id=ticket_id)
+    return [
+        {
+            "id": t.id,
+            "event_type": t.event_type,
+            "actor": t.actor,
+            "action": t.action,
+            "description": t.description,
+            "created_at": t.created_at,
+            "correlation_id": t.correlation_id
+        }
+        for t in timeline
+    ]
+
+@app.post("/tickets/{ticket_id}/reopen")
+def reopen_ticket(
+    ticket_id: str,
+    body: ReopenRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    try:
+        WorkflowService.reopen_ticket(
+            db=db,
+            ticket_id=ticket_id,
+            reopened_by=current_user.username,
+            reason=body.reason
+        )
+        db.commit()
+        return {"message": f"Ticket {ticket_id} reopened successfully."}
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tickets/{ticket_id}/csat")
+def submit_ticket_csat(
+    ticket_id: str,
+    body: CsatRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    try:
+        WorkflowService.submit_csat(
+            db=db,
+            ticket_id=ticket_id,
+            rating=body.rating,
+            feedback=body.feedback,
+            response_time_rating=body.response_time_rating,
+            resolution_quality_rating=body.resolution_quality_rating,
+            would_recommend=body.would_recommend
+        )
+        db.commit()
+        return {"message": "CSAT survey submitted successfully."}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/dashboard/executive-metrics")
+def get_executive_metrics(
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"])),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    return WorkflowService.get_executive_metrics(db=db)
+
+@app.get("/admin/dashboard/clusters")
+def get_incident_clusters(
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"])),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.cluster_service import ClusterService
+    return ClusterService.get_clusters_dashboard(db=db)
+
+@app.put("/admin/dashboard/clusters/{cluster_id}/fix")
+def update_cluster_fix(
+    cluster_id: int,
+    body: ClusterFixRequest,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"])),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.cluster_service import ClusterService
+    success = ClusterService.update_known_fix(db=db, cluster_id=cluster_id, known_fix=body.known_fix)
+    if not success:
+        raise HTTPException(status_code=404, detail="Cluster not found.")
+    return {"message": "Cluster known fix updated successfully."}
+
+@app.get("/admin/dashboard/knowledge-drafts")
+def get_knowledge_drafts(
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"])),
+    db: Session = Depends(get_db_context)
+):
+    from app.database.models.workflow_models import KnowledgeDraft
+    drafts = db.query(KnowledgeDraft).order_by(KnowledgeDraft.created_at.desc()).all()
+    return [
+        {
+            "id": d.id,
+            "title": d.title,
+            "problem": d.problem,
+            "environment": d.environment,
+            "symptoms": d.symptoms,
+            "root_cause": d.root_cause,
+            "resolution": d.resolution,
+            "workaround": d.workaround,
+            "tags": d.tags,
+            "category": d.category,
+            "affected_systems": d.affected_systems,
+            "confidence": d.confidence,
+            "status": d.status,
+            "source_ticket_id": d.source_ticket_id,
+            "created_at": d.created_at
+        }
+        for d in drafts
+    ]
+
+@app.get("/tickets/check-duplicate")
+def check_duplicate_tickets(
+    description: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    return WorkflowService.check_duplicate(db=db, description=description)
+
+@app.post("/tickets/confirm-duplicate")
+def confirm_duplicate_ticket(
+    body: DuplicateLinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    try:
+        WorkflowService.confirm_duplicate(db=db, source_id=body.source_ticket_id, target_id=body.target_ticket_id)
+        db.commit()
+        return {"message": "Duplicate relationship confirmed and tickets linked."}
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tickets/dismiss-duplicate")
+def dismiss_duplicate_ticket(
+    body: DuplicateLinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.workflow_service import WorkflowService
+    try:
+        WorkflowService.dismiss_duplicate(db=db, source_id=body.source_ticket_id, target_id=body.target_ticket_id)
+        db.commit()
+        return {"message": "Duplicate relationship warning dismissed."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 

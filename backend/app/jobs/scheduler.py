@@ -9,6 +9,7 @@ from app.database.models.scheduled_job import ScheduledJob, JobExecutionHistory
 from app.jobs.sla_monitor_job import run_sla_monitor_job
 from app.jobs.notification_job import run_notification_job
 from app.jobs.cleanup_job import run_cleanup_job
+from app.jobs.auto_close_job import run_auto_close_job
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -20,6 +21,7 @@ JOB_FUNCTIONS = {
     "sla_monitor_job": run_sla_monitor_job,
     "notification_job": run_notification_job,
     "cleanup_job": run_cleanup_job,
+    "auto_close_job": run_auto_close_job,
 }
 
 # Default configurations for startup registration seeding
@@ -44,6 +46,13 @@ DEFAULT_JOBS = [
         "interval_seconds": None,
         "cron_expression": "0 0 * * *",  # runs at midnight every day
         "is_enabled": True
+    },
+    {
+        "job_name": "auto_close_job",
+        "job_type": "interval",
+        "interval_seconds": 60,  # runs every minute
+        "cron_expression": None,
+        "is_enabled": True
     }
 ]
 
@@ -67,6 +76,27 @@ def run_database_migrations():
                 if 'sla_breached_at' not in columns:
                     logger.info("Migration: Adding column 'sla_breached_at' to table 'tickets'")
                     conn.execute(text("ALTER TABLE tickets ADD COLUMN sla_breached_at TIMESTAMP"))
+
+                # ServiceNow Operational Workflow columns
+                workflow_cols = {
+                    'assigned_engineer': 'VARCHAR(100)',
+                    'waiting_since': 'TIMESTAMP',
+                    'waiting_duration_sec': 'INTEGER DEFAULT 0',
+                    'reminders_sent': 'INTEGER DEFAULT 0',
+                    'last_customer_response_at': 'TIMESTAMP',
+                    'resolved_at': 'TIMESTAMP',
+                    'closed_at': 'TIMESTAMP',
+                    'reopen_count': 'INTEGER DEFAULT 0',
+                    'reopened_by': 'VARCHAR(100)',
+                    'reopened_at': 'TIMESTAMP',
+                    'reopen_reason': 'TEXT',
+                    'previous_resolution': 'TEXT',
+                    'cluster_id': 'INTEGER'
+                }
+                for col_name, col_type in workflow_cols.items():
+                    if col_name not in columns:
+                        logger.info("Migration: Adding column '%s' to table 'tickets'", col_name)
+                        conn.execute(text(f"ALTER TABLE tickets ADD COLUMN {col_name} {col_type}"))
                     
         # 2. Observability correlation ID migrations
         observability_tables = {
