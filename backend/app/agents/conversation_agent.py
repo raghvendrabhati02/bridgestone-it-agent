@@ -41,7 +41,7 @@ class ConversationAgent:
                     category = result.get("category", "").strip().upper()
                     
                     valid_intents = {"GREETING", "IDENTITY", "SMALL_TALK", "CAPABILITY", "THANKS", "GOODBYE", "IT_ISSUE", "TICKET_REQUEST", "APPROVAL_RESPONSE", "FOLLOW_UP", "SERVICE_REQUEST"}
-                    valid_categories = {"VPN", "PASSWORD_RESET", "OUTLOOK", "SOFTWARE_INSTALLATION", "PRINTER", "SAP", "NETWORK", "GENERAL"}
+                    valid_categories = {"VPN", "PASSWORD_RESET", "OUTLOOK", "SOFTWARE_INSTALLATION", "PRINTER", "SAP", "NETWORK", "HARDWARE", "GENERAL"}
                     
                     if intent in valid_intents and category in valid_categories:
                         logger.info("ConversationAgent: Gemini classified successfully: Intent=%s, Category=%s", intent, category)
@@ -95,7 +95,7 @@ class ConversationAgent:
             "Return ONLY a valid JSON object matching this schema:\n"
             "{\n"
             '  "intent": "GREETING" | "IDENTITY" | "SMALL_TALK" | "CAPABILITY" | "THANKS" | "GOODBYE" | "IT_ISSUE" | "TICKET_REQUEST" | "APPROVAL_RESPONSE" | "FOLLOW_UP" | "SERVICE_REQUEST",\n'
-            '  "category": "VPN" | "PASSWORD_RESET" | "OUTLOOK" | "SOFTWARE_INSTALLATION" | "PRINTER" | "SAP" | "NETWORK" | "GENERAL",\n'
+            '  "category": "VPN" | "PASSWORD_RESET" | "OUTLOOK" | "SOFTWARE_INSTALLATION" | "PRINTER" | "SAP" | "NETWORK" | "HARDWARE" | "GENERAL",\n'
             '  "explanation": "short rationale"\n'
             "}"
         )
@@ -182,7 +182,9 @@ class ConversationAgent:
             detected_category = "SAP"
         elif "password" in text:
             detected_category = "PASSWORD_RESET"
-
+        elif any(kw in text for kw in ["screen", "monitor", "keyboard", "mouse", "laptop", "hardware", "broken screen", "hinge"]):
+            detected_category = "HARDWARE"
+ 
         if detected_category != "GENERAL":
             return {"intent": "IT_ISSUE", "category": detected_category, "explanation": f"Rule-based IT Issue match: {detected_category}"}
             
@@ -200,12 +202,12 @@ class ConversationAgent:
         
         # Rule-based fallback response mapping
         fallback_responses = {
-            "GREETING": "Hello! I am your Bridgestone IT support assistant. How can I help you today?",
-            "IDENTITY": "I am your conversational Bridgestone IT Support Agent, designed to assist with account resets, VPN access, and troubleshooting.",
-            "CAPABILITY": "I can troubleshoot VPN connection issues, diagnose network performance, reset passwords, check Outlook mailboxes, verify catalog software privileges, or escalate issues to specific support groups.",
-            "SMALL_TALK": "I am doing well, thank you for asking! I'm ready to help you with any IT support questions or issues.",
-            "THANKS": "You're very welcome! Let me know if there's anything else I can help you with.",
-            "GOODBYE": "Goodbye! Have a great day, and feel free to reach out if you need IT help in the future."
+            "GREETING": "Hi there! Welcome to Bridgestone IT support. I hope you're having a good day. How can I help you today?",
+            "IDENTITY": "I'm your dedicated Bridgestone IT Support Agent. You can think of me as your digital desk colleague here to help with accounts, hardware issues, VPN, software, and general IT troubleshooting.",
+            "CAPABILITY": "I can help with quite a few things! For instance, I can troubleshoot VPN connectivity, reset passwords, check Outlook sync, coordinate software catalog installations, or escalate hardware/general issues directly to our Service Desk teams.",
+            "SMALL_TALK": "I'm doing great, thank you for checking! Ready to dive in and get any IT issues sorted out for you.",
+            "THANKS": "Of course, any time! Don't hesitate to reach out if anything else pops up.",
+            "GOODBYE": "Take care! Have a wonderful day ahead, and we're here whenever you need IT support again."
         }
         
         fallback_text = fallback_responses.get(intent, "Hello! How can I assist you with your IT needs today?")

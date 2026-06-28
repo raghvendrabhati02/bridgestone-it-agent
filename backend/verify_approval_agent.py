@@ -120,6 +120,8 @@ try:
         "decision":            "EXECUTE_ACTION",
         "approval_required":   False,
         "approval_status":     "PENDING",
+        "user_role":           "ADMIN",
+        "username":            "admin",
     }
     result = approval_node(state)
     check("node returns dict",                         isinstance(result, dict))
@@ -139,6 +141,8 @@ try:
         "decision":           "EXECUTE_ACTION",
         "approval_required":  True,
         "approval_status":    "APPROVED",
+        "user_role":           "ADMIN",
+        "username":            "admin",
     }
     result = approval_node(state)
     check("decision is EXECUTE_ACTION", result.get("decision") == "EXECUTE_ACTION")
@@ -155,6 +159,8 @@ try:
         "decision":           "EXECUTE_ACTION",
         "approval_required":  True,
         "approval_status":    "REJECTED",
+        "user_role":           "ADMIN",
+        "username":            "admin",
     }
     result = approval_node(state)
     check("decision is REJECTED",           result.get("decision") == "REJECTED")
@@ -171,6 +177,8 @@ try:
         "decision":           "EXECUTE_ACTION",
         "approval_required":  False,
         "approval_status":    "PENDING",
+        "user_role":           "ADMIN",
+        "username":            "admin",
     }
     result = approval_node(state)
     check("approval_required is False",   result.get("approval_required") is False)

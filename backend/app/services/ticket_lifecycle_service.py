@@ -30,12 +30,14 @@ logger = logging.getLogger("it-agent-backend")
 # ── Valid state machine ───────────────────────────────────────────────────────
 VALID_TRANSITIONS: Dict[str, List[str]] = {
     "OPEN":              ["ASSIGNED"],
-    "ASSIGNED":          ["IN_PROGRESS"],
-    "IN_PROGRESS":       ["WAITING_FOR_USER", "RESOLVED"],
+    "ASSIGNED":          ["IN_PROGRESS", "WAITING_FOR_CUSTOMER", "WAITING_FOR_USER"],
+    "IN_PROGRESS":       ["WAITING_FOR_USER", "WAITING_FOR_CUSTOMER", "RESOLVED"],
     "WAITING_FOR_USER":  ["IN_PROGRESS", "RESOLVED"],
-    "RESOLVED":          ["CLOSED"],
-    "CLOSED":            [],
+    "WAITING_FOR_CUSTOMER": ["IN_PROGRESS", "RESOLVED"],
+    "RESOLVED":          ["CLOSED", "IN_PROGRESS"],
+    "CLOSED":            ["IN_PROGRESS"],
 }
+
 
 ALL_STATES = list(VALID_TRANSITIONS.keys())
 
@@ -45,6 +47,7 @@ TRANSITION_MESSAGES: Dict[str, str] = {
     "ASSIGNED":         "Ticket {ticket_id} has been assigned to the support team and is queued for review.",
     "IN_PROGRESS":      "Ticket {ticket_id} is now being actively worked on by the assigned team.",
     "WAITING_FOR_USER": "Ticket {ticket_id} is waiting for your response. Please reply to continue.",
+    "WAITING_FOR_CUSTOMER": "Ticket {ticket_id} is waiting for your response. Please reply to continue.",
     "RESOLVED":         "Ticket {ticket_id} has been resolved. Please confirm if the issue is fixed.",
     "CLOSED":           "Ticket {ticket_id} is now closed. Thank you for using IT Support.",
 }
@@ -234,22 +237,48 @@ def _notify(ticket_id: str, state: str, message: str = "") -> None:
 
 
 def _update_db_status(ticket_id: str, new_state: str) -> None:
-    """Attempt to update the DB ticket.status column. Non-fatal."""
+    """Attempt to update the DB ticket.status column and calculate metrics. Non-fatal."""
     try:
         from app.database.session import get_db
-        from app.database.repositories.ticket_repository import TicketRepository
+        from app.database.models.ticket import Ticket
+        from app.services.timeline_service import TimelineService
         with get_db() as db:
-            repo = TicketRepository(db)
-            all_t = repo.get_all_tickets()
-            for t in all_t:
-                if t.ticket_id == ticket_id:
-                    t.status = new_state
-                    db.commit()
-                    logger.info(
-                        "Lifecycle Service: DB status updated for ticket=%s to %s",
-                        ticket_id, new_state,
-                    )
-                    break
+            ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+            if ticket:
+                prev_state = ticket.status
+                ticket.status = new_state
+                
+                # Handle metrics for waiting states
+                now = datetime.datetime.utcnow()
+                if new_state in ("WAITING_FOR_CUSTOMER", "WAITING_FOR_USER"):
+                    ticket.waiting_since = now
+                elif prev_state in ("WAITING_FOR_CUSTOMER", "WAITING_FOR_USER"):
+                    if ticket.waiting_since:
+                        elapsed = (now - ticket.waiting_since).total_seconds()
+                        ticket.waiting_duration_sec = (ticket.waiting_duration_sec or 0) + int(elapsed)
+                    ticket.waiting_since = None
+
+                # Handle resolution/closure timestamps
+                if new_state == "RESOLVED":
+                    ticket.resolved_at = now
+                elif new_state == "CLOSED":
+                    ticket.closed_at = now
+                
+                # Log status change to timeline
+                TimelineService.log_event(
+                    db=db,
+                    ticket_id=ticket_id,
+                    event_type="STATUS_CHANGED",
+                    actor=None,  # auto-resolved from user_ctx
+                    action="status change",
+                    description=f"Status changed from {prev_state} to {new_state}.",
+                    correlation_id=None
+                )
+                db.commit()
+                logger.info(
+                    "Lifecycle Service: DB status and metrics updated for ticket=%s to %s",
+                    ticket_id, new_state,
+                )
     except Exception as e:
         logger.warning(
             "Lifecycle Service: DB status update failed for ticket=%s: %s",

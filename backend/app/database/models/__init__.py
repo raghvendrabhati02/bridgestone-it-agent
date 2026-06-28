@@ -15,6 +15,12 @@ from app.database.models.sla_escalation_history import SlaEscalationHistory  # S
 from app.database.models.sla_audit_event import SlaAuditEvent                # SLA Engine dedup
 from app.database.models.service_catalog import ServiceCatalogItem
 from app.database.models.service_request import ServiceRequest
-
-
-
+from app.database.models.workflow_models import (
+    TicketComment,
+    AssignmentHistory,
+    TicketTimeline,
+    DuplicateRelationship,
+    IncidentCluster,
+    CSATSurvey,
+    KnowledgeDraft
+)

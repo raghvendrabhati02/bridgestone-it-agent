@@ -18,9 +18,17 @@ def diagnostic_interview_node(state: AgentState) -> dict:
     user_message = state.get("user_message", "")
     interview_state = state.get("diagnostic_interview")
 
-    # If category is GENERAL, conversation, or greeting/ticket status/etc, bypass interview
-    if category in ("GENERAL", "CHAT", "TICKET_STATUS", "SERVICE_REQUEST") or state.get("route") in ("ticket_lifecycle", "ticket_status", "service_request"):
-        logger.info("Diagnostic Interview: Bypassing interview for category: %s", category)
+    # If category is GENERAL, conversation, greeting, ticket request, or ticket status, bypass interview
+    msg_lower = user_message.lower()
+    ticket_keywords = [
+        "create ticket", "create a ticket", "create support ticket", "create a support ticket",
+        "raise ticket", "raise a ticket", "open incident", "open an incident", "escalate", "support ticket",
+        "open a ticket", "open support ticket", "open a support ticket"
+    ]
+    is_ticket_req = any(kw in msg_lower for kw in ticket_keywords)
+
+    if category in ("GENERAL", "CHAT", "TICKET_STATUS", "SERVICE_REQUEST") or state.get("route") in ("ticket_lifecycle", "ticket_status", "service_request") or is_ticket_req:
+        logger.info("Diagnostic Interview: Bypassing interview for category: %s (explicit ticket request=%s)", category, is_ticket_req)
         return {}
 
     # Check if we already did or skipped the interview
@@ -54,13 +62,63 @@ def diagnostic_interview_node(state: AgentState) -> dict:
         }
 
     # Context is insufficient: generate and ask questions
+    acknowledgments = {
+        "VPN": "I understand how frustrating VPN connection issues can be, especially when you need to access remote resources. Let's get that checked out! I'll run a diagnostic on our gateway and inspect your account access configuration. While I do that, could you help me with a few details?",
+        "OUTLOOK": "Outlook sync or launch issues can really slow down your day, so let's resolve this. I will verify your Exchange connectivity and check your mailbox status on our mail servers. In the meantime, could you clarify a couple of points for me?",
+        "NETWORK": "I'm sorry to hear you're experiencing connectivity trouble; a slow or dropping network is always a hassle. I'll run some diagnostics to evaluate your local network latency and packet loss. To help me narrow it down, could you answer these questions?",
+        "SOFTWARE_INSTALLATION": "Getting software installed should be a quick process. I will check our approved catalog listing and verify your local administrative privileges for this installation. While I run that check, could you share a bit more information?",
+        "SAP": "SAP errors can definitely block your workflow. I will perform a quick check on the SAP Basis server status and database connectivity. To help troubleshoot, could you let me know what error you're seeing?",
+        "PASSWORD_RESET": "I can certainly help you get back into your account. I'll inspect Active Directory to check for any lockouts or credential expiration. To make sure I take the right action, could you let me know a few details?",
+        "PRINTER": "Printer issues are always a pain. I will query the print spooler status and verify if the printer queue is online. While I run that check, could you tell me what's happening with the print jobs?",
+        "HARDWARE": "I'm sorry you're dealing with hardware trouble. Hardware issues can be tricky, so let's look into this. I'll verify if there are any known hardware advisories or replacement options available. Could you describe the situation a bit more?",
+    }
+    
+    question_blocks = {
+        "VPN": (
+            "1. Are you seeing a specific error or symptom?\n"
+            "   [A] Connection Timeout (Error 809 / 868)\n"
+            "   [B] Authentication Denied / locked account\n"
+            "   [C] Cisco AnyConnect client fails to open\n"
+            "   [D] Other / Not sure\n"
+            "2. Are you connected via Wi-Fi or a wired ethernet cable?"
+        ),
+        "OUTLOOK": (
+            "1. Is Outlook failing to open entirely, or is it open but refusing to send/receive emails?\n"
+            "2. Are you accessing email on the Outlook desktop app, the web version (OWA), or mobile?"
+        ),
+        "NETWORK": (
+            "1. Are you able to access any external websites (like google.com), or is all internet access down?\n"
+            "2. Are you experiencing high packet loss or extremely slow browsing speeds?"
+        ),
+        "SOFTWARE_INSTALLATION": (
+            "1. What is the exact name and version of the software you are trying to install?\n"
+            "2. Did you see a specific error code, such as a 'Permission Denied' or 'Administrator Required' message?"
+        ),
+        "SAP": (
+            "1. Which SAP module or transaction code (T-code) are you trying to access?\n"
+            "2. What is the exact error code or message displayed on your screen?"
+        ),
+        "PASSWORD_RESET": (
+            "1. Is this for your primary Windows domain/laptop login, or a specific application like SAP?\n"
+            "2. Are you currently locked out of your account, or is your password about to expire?"
+        ),
+        "PRINTER": (
+            "1. Is the printer showing as 'Offline' in Windows, or are print jobs silently stuck in the queue?\n"
+            "2. What is the printer model or office location name?"
+        ),
+        "HARDWARE": (
+            "1. Could you describe the problem? Is there visible physical damage, or is a component (display, keyboard, power) failing?\n"
+            "2. Are you working from a corporate office, or remote/home?"
+        ),
+    }
+
+    category_key = category.upper().strip()
+    ack = acknowledgments.get(category_key, f"I'm sorry you're running into issues with your {category_key.lower().replace('_', ' ')}. Let's look into this and check the relevant systems. While I check that, could you provide a bit more detail?")
+    q_block = question_blocks.get(category_key, "1. What exact symptoms or error messages are you seeing on your screen?\n2. When did this issue first start happening?")
+    
+    question_text = f"{ack}\n\n{q_block}"
     questions = get_category_questions(category)
     logger.info("Diagnostic Interview: Context insufficient. Asking questions: %s", questions)
-    
-    question_text = (
-        f"To help you troubleshoot your {category.title()} issue, could you please provide a bit more detail?\n\n"
-        + "\n".join(f"- {q}" for q in questions)
-    )
 
     return {
         "diagnostic_interview": {
@@ -105,15 +163,24 @@ JSON:
 
     # Rule-based fallback checks
     msg_lower = message.lower()
-    if category == "VPN":
+    cat_key = category.upper().strip()
+    if cat_key == "VPN":
         # Check if they specified details
-        return any(kw in msg_lower for kw in ("timeout", "auth", "credential", "lock", "wifi", "ethernet", "password", "reset"))
-    elif category == "OUTLOOK":
+        return any(kw in msg_lower for kw in ("timeout", "auth", "credential", "lock", "wifi", "ethernet", "password", "reset", "disabled"))
+    elif cat_key == "OUTLOOK":
         return any(kw in msg_lower for kw in ("open", "sync", "desktop", "web", "mobile", "cache", "server", "credentials"))
-    elif category == "NETWORK":
+    elif cat_key == "NETWORK":
         return any(kw in msg_lower for kw in ("google", "internet", "packet", "loss", "slow", "ping", "website"))
-    elif category == "SOFTWARE_INSTALLATION":
+    elif cat_key == "SOFTWARE_INSTALLATION":
         return any(kw in msg_lower for kw in ("chrome", "firefox", "outlook", "sap", "vpn", "zoom", "teams", "error", "admin"))
+    elif cat_key == "HARDWARE":
+        return any(kw in msg_lower for kw in ("screen", "monitor", "display", "keyboard", "mouse", "hinge", "laptop", "power", "charger", "broken", "battery", "damage"))
+    elif cat_key == "PASSWORD_RESET":
+        return any(kw in msg_lower for kw in ("unlock", "domain", "active directory", "ad", "locked out", "expired", "change", "reset", "forgot"))
+    elif cat_key == "SAP":
+        return any(kw in msg_lower for kw in ("fico", "basis", "t-code", "tcode", "login", "role", "access", "production"))
+    elif cat_key == "PRINTER":
+        return any(kw in msg_lower for kw in ("spooler", "queue", "offline", "jam", "toner", "paper", "print job"))
     
     return False
 

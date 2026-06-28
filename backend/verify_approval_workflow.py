@@ -116,4 +116,20 @@ def run_tests():
     print("\nAll tests completed successfully! Approval workflow verified.")
 
 if __name__ == "__main__":
-    run_tests()
+    import subprocess
+    import time
+    print("Starting FastAPI backend for verify_approval_workflow...")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "8000"],
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+    time.sleep(8)
+    try:
+        run_tests()
+    finally:
+        print("Stopping FastAPI backend...")
+        proc.terminate()
+        proc.wait()
+

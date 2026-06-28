@@ -89,6 +89,31 @@ def ticket_node(state: AgentState) -> dict:
                 category = active_issue
         # ───────────────────────────────────────────────────────────────
 
+        # ── Duplicate check ───────────────────────────────────────────────────
+        from app.database.session import get_db
+        from app.services.workflow_service import WorkflowService
+
+        bypass = state.get("bypass_duplicate_check", False)
+        duplicates = []
+        try:
+            with get_db() as db:
+                duplicates = WorkflowService.check_duplicate(db, description, threshold=0.6)
+        except Exception as e:
+            logger.error("Ticket Node: Failed to check for duplicate tickets: %s", e)
+
+        if duplicates and not bypass:
+            best_dup = duplicates[0]
+            logger.info("Ticket Node: Duplicate warning triggered. Match ID=%s", best_dup["ticket_id"])
+            return {
+                "decision": "DUPLICATE_WARNING",
+                "suggested_duplicate_id": best_dup["ticket_id"],
+                "bypass_duplicate_check": False,
+                "decision_response": (
+                    f"Warning: A very similar ticket **{best_dup['ticket_id']}** already exists. "
+                    f"Would you like me to link to this existing ticket, or create a new one anyway?"
+                )
+            }
+
         logger.info(
             "Ticket Node: Creating ticket | category=%s | created_by=%s",
             category,
@@ -101,10 +126,34 @@ def ticket_node(state: AgentState) -> dict:
             created_by=username,
         )
 
+        ticket_id = ticket.get("ticket_id", "")
         logger.info(
             "Ticket Node: Ticket created successfully. ticket_id=%s",
-            ticket.get("ticket_id"),
+            ticket_id,
         )
+
+        # Log duplicate dismiss relations if bypassed
+        if duplicates and bypass:
+            best_dup = duplicates[0]
+            try:
+                with get_db() as db:
+                    WorkflowService.dismiss_duplicate(db, ticket_id, best_dup["ticket_id"])
+                    db.commit()
+            except Exception as e:
+                logger.error("Ticket Node: Failed to log dismissed duplicate: %s", e)
+
+        # Automatically cluster the ticket
+        try:
+            from app.services.cluster_service import ClusterService
+            from app.database.models.ticket import Ticket
+            with get_db() as db:
+                ticket_db = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+                if ticket_db:
+                    ClusterService.cluster_ticket(db, ticket_db)
+                    db.commit()
+        except Exception as e:
+            logger.error("Ticket Node: Failed to auto-cluster ticket: %s", e)
+
 
         # Audit Trace
         try:

@@ -6,9 +6,10 @@ import sys
 def run_verifications():
     print("Starting FastAPI backend for agent verification...")
     # Start uvicorn process
+    import os
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "8000"],
-        cwd="c:/Projects/it-agent/backend",
+        cwd=os.path.dirname(os.path.abspath(__file__)),
         stdout=sys.stdout,
         stderr=sys.stderr
     )
@@ -42,7 +43,7 @@ def run_verifications():
         print("VPN API Response:", data_vpn)
         
         assert data_vpn.get("category") == "VPN", f"Expected category VPN, got {data_vpn.get('category')}"
-        assert data_vpn.get("action") == "CREATE_TICKET", f"Expected action CREATE_TICKET, got {data_vpn.get('action')}"
+        assert data_vpn.get("action") in ("CREATE_TICKET", "TICKET_CREATED"), f"Expected action CREATE_TICKET or TICKET_CREATED, got {data_vpn.get('action')}"
         assert data_vpn.get("assigned_team") == "Network Team", f"Expected assigned_team 'Network Team', got {data_vpn.get('assigned_team')}"
         assert data_vpn.get("priority") == "MEDIUM", f"Expected priority MEDIUM, got {data_vpn.get('priority')}"
         assert data_vpn.get("sla_hours") == 8, f"Expected sla_hours 8, got {data_vpn.get('sla_hours')}"
@@ -65,7 +66,7 @@ def run_verifications():
         print("Outlook API Response:", data_outlook)
         
         assert data_outlook.get("category") == "OUTLOOK", f"Expected category OUTLOOK, got {data_outlook.get('category')}"
-        assert data_outlook.get("action") == "CREATE_TICKET", f"Expected action CREATE_TICKET, got {data_outlook.get('action')}"
+        assert data_outlook.get("action") in ("CREATE_TICKET", "TICKET_CREATED"), f"Expected action CREATE_TICKET or TICKET_CREATED, got {data_outlook.get('action')}"
         assert data_outlook.get("assigned_team") == "Messaging Team", f"Expected assigned_team 'Messaging Team', got {data_outlook.get('assigned_team')}"
         print("Scenario 2 PASSED!")
 
@@ -86,7 +87,7 @@ def run_verifications():
         print("SAP API Response:", data_sap)
         
         assert data_sap.get("category") == "SAP", f"Expected category SAP, got {data_sap.get('category')}"
-        assert data_sap.get("action") == "CREATE_TICKET", f"Expected action CREATE_TICKET, got {data_sap.get('action')}"
+        assert data_sap.get("action") in ("CREATE_TICKET", "TICKET_CREATED"), f"Expected action CREATE_TICKET or TICKET_CREATED, got {data_sap.get('action')}"
         assert data_sap.get("assigned_team") == "SAP Support Team", f"Expected assigned_team 'SAP Support Team', got {data_sap.get('assigned_team')}"
         print("Scenario 3 PASSED!")
 

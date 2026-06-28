@@ -120,17 +120,17 @@ class ResponseAgent:
         inv_q_text = "\n".join(f"  {i+1}. {q}" for i, q in enumerate(investigation_questions)) if investigation_questions else ""
 
         prompt = (
-            "You are Bridgestone's Conversational IT Support Agent.\n"
-            "Speak naturally, professionally, and warmly — like a knowledgeable colleague, not a chatbot template.\n\n"
+            "You are an experienced Bridgestone IT Service Desk Engineer.\n"
+            "Speak naturally, professionally, and warmly — like a knowledgeable digital colleague, not a chatbot template.\n\n"
 
             "=== Response Style Rules ===\n"
-            "1. NEVER say 'I see you are having an issue with X.' or 'Troubleshooting was unsuccessful.'\n"
-            "2. NEVER dump raw diagnostic keys (e.g. vpn_gateway=ONLINE). Convert them to human language.\n"
-            "3. Write 2-4 sentences maximum. Be conversational and direct.\n"
-            "4. Use the Observations and Hypotheses to explain WHAT was found and WHY it likely happened.\n"
-            "5. If a hypothesis exists, acknowledge it naturally: 'Since the issue started after your password changed...'\n"
-            "6. If approval_needed is true, explain the recommended action and ask for confirmation warmly.\n"
-            "7. If escalation_needed is true, explain you are escalating and why.\n"
+            "1. Empathy first: Acknowledge the user's issue and pain point warmly before discussing diagnostics or next steps.\n"
+            "2. Keep it conversational: NEVER say robotic phrases like 'I see you are having an issue with X.', 'Troubleshooting was unsuccessful', or dump raw diagnostic keys.\n"
+            "3. Reference history: Scan the conversation history. If the user already answered a question (e.g., they are on home Wi-Fi or getting Error 809), acknowledge and refer to it naturally (e.g., 'Since you mentioned you are on home Wi-Fi...'). Do NOT ask it again.\n"
+            "4. Explain the check: Tell the user what system or tool you are currently checking (e.g., 'I'm querying Active Directory to check for any lockouts...').\n"
+            "5. Present options: When asking for details like error codes, offer clear multiple-choice options to make it easy for the user.\n"
+            "6. Summarize first: Always provide a clear, user-friendly summary of observations and hypotheses before recommending a fix, asking for approval, or initiating a support ticket.\n"
+            "7. Write 2-4 sentences maximum. Be direct, helpful, and colleague-like.\n"
             f"8. Planned next action: {plan_action}\n\n"
 
             "=== Structured Reflection Intelligence ===\n"
@@ -274,124 +274,236 @@ class ResponseAgent:
         escalation_needed = reasoning.get("escalation_needed", False)
         recommended_action = reasoning.get("recommended_action", "")
 
+        # Scan user message and history for parameters to avoid repeating questions
+        msg_lower = user_message.lower()
+        hist_text = " ".join(m.get("text", "").lower() for m in history)
+        all_text = msg_lower + " " + hist_text
+
+        # VPN parsing
+        vpn_error = None
+        if any(kw in all_text for kw in ["809", "868", "timeout", "time out"]):
+            vpn_error = "Connection Timeout (Error 809 / 868)"
+        elif any(kw in all_text for kw in ["auth", "credential", "denied", "lock", "disabled"]):
+            vpn_error = "Authentication Denied"
+        elif any(kw in all_text for kw in ["client", "anyconnect", "launch", "open"]):
+            vpn_error = "Client Launch Failure"
+
+        vpn_conn = None
+        if any(kw in all_text for kw in ["wifi", "wi-fi", "wireless", "hotspot", "home"]):
+            vpn_conn = "home Wi-Fi"
+        elif any(kw in all_text for kw in ["ethernet", "wired", "cable", "lan", "office"]):
+            vpn_conn = "wired ethernet"
+
+        # Outlook parsing
+        outlook_mode = None
+        if any(kw in all_text for kw in ["desktop", "app", "pc", "mac"]):
+            outlook_mode = "desktop app"
+        elif any(kw in all_text for kw in ["web", "browser", "owa", "webmail"]):
+            outlook_mode = "web app (OWA)"
+        elif any(kw in all_text for kw in ["phone", "mobile", "ios", "android"]):
+            outlook_mode = "mobile app"
+
+        outlook_symptom = None
+        if any(kw in all_text for kw in ["sync", "send", "receive", "mail", "refresh"]):
+            outlook_symptom = "refusing to sync or send/receive emails"
+        elif any(kw in all_text for kw in ["open", "launch", "start", "crash", "freeze"]):
+            outlook_symptom = "failing to open or launch completely"
+
+        # Network parsing
+        net_scope = None
+        if any(kw in all_text for kw in ["down", "all sites", "offline", "disconnect", "everything"]):
+            net_scope = "completely offline"
+        elif any(kw in all_text for kw in ["google", "website", "only one", "specific"]):
+            net_scope = "limited to a specific site"
+
+        net_symptom = None
+        if any(kw in all_text for kw in ["slow", "lag", "ping", "latency"]):
+            net_symptom = "slow connectivity and lag"
+        elif any(kw in all_text for kw in ["packet", "loss", "drop"]):
+            net_symptom = "intermittent packet loss"
+
+        # Software parsing
+        sw_name = None
+        for word in ["chrome", "firefox", "zoom", "teams", "sap", "visio", "office"]:
+            if word in all_text:
+                sw_name = word.title()
+                break
+        
+        sw_error = None
+        if any(kw in all_text for kw in ["admin", "privilege", "permission", "password", "rights"]):
+            sw_error = "local administrative rights warning"
+
         # 1. Approval request — use reflection hypothesis to explain WHY
         if plan_action == "REQUEST_APPROVAL" or approval_needed:
             hyp_reason = ""
             if hypotheses:
                 hyp_reason = f" Based on the diagnostics, {hypotheses[0].lower().rstrip('.')}."
             if recommended_action == "VPN_ACCESS_RESTORATION":
-                obs_summary = ""
-                if observations:
-                    # Find the observation about disabled access
-                    for obs in observations:
-                        if "disabled" in obs.lower() or "locked" in obs.lower():
-                            obs_summary = f" I found that {obs.lower()}"
-                            break
+                obs_summary = "I've checked the VPN connection and gateway. The gateway is online, but your account access permissions are set to disabled."
                 return (
-                    f"I checked the VPN infrastructure and your connection settings.{obs_summary}"
-                    f"{hyp_reason} I can submit an access restoration request to re-enable your account. "
+                    f"{obs_summary}{hyp_reason} I can submit an access restoration request to re-enable your account. "
                     f"Would you like me to proceed?"
                 )
             if recommended_action == "SOFTWARE_INSTALLATION":
+                target_software = sw_name or "requested software"
+                obs_summary = f"I've verified the software catalog and your local device privileges for {target_software}. It is approved, but your account lacks administrative installation permissions."
                 return (
-                    f"I've verified the software details.{hyp_reason} "
-                    f"I can submit an installation request on your behalf through the IT portal. "
+                    f"{obs_summary}{hyp_reason} I can submit an installation request on your behalf through the IT portal. "
                     f"Shall I go ahead?"
                 )
             if recommended_action == "OUTLOOK_RECONFIGURATION":
+                obs_summary = "I've completed the Outlook diagnostics. The Exchange server is online, but your local mail profile appears out of sync."
                 return (
-                    f"I've completed the Outlook diagnostics.{hyp_reason} "
-                    f"I recommend reconfiguring your mail profile to restore connectivity. "
+                    f"{obs_summary}{hyp_reason} I recommend reconfiguring your local Outlook mail profile to restore proper sync. "
                     f"Would you like me to initiate this?"
                 )
+            if recommended_action == "NETWORK_RESET":
+                obs_summary = "I've analyzed your network interface. The connection shows latency or packet loss."
+                return (
+                    f"{obs_summary}{hyp_reason} I recommend resetting your local network adapter configuration to clear the routing cache. "
+                    f"Shall I run the network reset?"
+                )
+            obs_desc = f" {observations[0].lower()}" if observations else ""
             return (
-                f"Based on the diagnostic results, I recommend proceeding with {recommended_action or 'a corrective action'}. "
+                f"I've checked the system diagnostics and found that{obs_desc}.{hyp_reason} "
+                f"I recommend proceeding with {recommended_action.replace('_', ' ').lower() if recommended_action else 'a corrective action'}. "
                 f"Shall I initiate the request?"
             )
 
         # 2. Escalation — explain what was found before escalating
         if plan_action == "CREATE_TICKET" or escalation_needed:
-            obs_summary = f" {observations[0]}" if observations else ""
+            obs_summary = f" Diagnostics check showed: {observations[0].lower().rstrip('.')}." if observations else ""
+            hyp_summary = f" This is likely caused by {hypotheses[0].lower().rstrip('.')}." if hypotheses else ""
             return (
-                f"The diagnostic check revealed an issue that requires IT team intervention.{obs_summary} "
-                f"I'll escalate this by creating a support ticket, and the appropriate team will follow up with you shortly."
+                f"I've run through the initial troubleshooting steps, but it looks like we need support from our L2 IT engineering team to resolve this.{obs_summary}{hyp_summary} "
+                f"I'm going to create a ServiceNow support ticket and assign it to the correct group so they can follow up with you directly."
             )
 
         # 3. Execute Action (post-approval)
         if plan_action == "EXECUTE_ACTION":
             return (
-                "Your request has been submitted successfully. "
-                "The IT team will process it and you should receive an update shortly."
+                "Understood. I have successfully submitted the request on your behalf. "
+                "The ServiceNow workflow is now running, and you'll receive updates as the team processes it."
             )
 
         # 4. Cancel Workflow
         if plan_action == "CANCEL_WORKFLOW":
-            return "Understood — I've cancelled the request. Let me know if you'd like to explore a different solution or if you need help with anything else."
+            return "No problem — I've cancelled the request. Let me know if you'd like to try a different approach or if you need help with anything else."
 
         # 5. Resolve Issue
         if plan_action == "RESOLVE_ISSUE":
-            return "That's great to hear! I'm glad we were able to resolve the issue. Feel free to reach out if anything else comes up."
+            return "That's fantastic to hear! I'm glad we were able to resolve the issue. Have a great rest of your day, and feel free to reach out if any other IT needs come up."
 
         # 6. Diagnostic findings + follow-up (the most important case)
         if observations or findings:
-            # Build natural response from observations
-            obs_text = ""
+            explanation = ""
             if observations:
-                # Use first 2 observations naturally
+                explanation = f"I ran the diagnostic checks and found that "
                 if len(observations) >= 2:
-                    obs_text = f"{observations[0]} {observations[1]}"
+                    explanation += f"{observations[0].lower().rstrip('.')} and {observations[1].lower()}"
                 else:
-                    obs_text = observations[0]
+                    explanation += f"{observations[0].lower()}"
+            else:
+                explanation = findings
 
-            # Add hypothesis-driven explanation
-            hyp_text = ""
+            hyp_explanation = ""
             if hypotheses:
-                hyp_text = f" Since {hypotheses[0].lower().rstrip('.')}, "
+                hyp_explanation = f" Since {hypotheses[0].lower().rstrip('.')},"
 
-            # Add investigation question
             inv_questions = self._build_investigation_questions(hypotheses, category, plan_action)
             question_text = ""
             if inv_questions:
                 question_text = f" {inv_questions[0]}"
             elif findings:
-                question_text = " Would you like me to escalate this, or shall we try a different troubleshooting step?"
+                question_text = " Would you like me to submit an escalation ticket, or shall we try another troubleshooting step?"
 
-            return f"I ran a diagnostic check and found the following: {obs_text}.{hyp_text}{question_text}".strip()
+            return f"{explanation}.{hyp_explanation}{question_text}".strip()
 
         # 7. No diagnostic data — ask targeted category-specific questions
-        category_prompts = {
-            "VPN": (
-                "Let me run a VPN diagnostic for you. "
-                "While I check the gateway and your access permissions, could you tell me — "
-                "are you seeing a specific error message when connecting?"
-            ),
-            "OUTLOOK": (
-                "I'll check your mailbox and Exchange server status. "
-                "In the meantime — is Outlook failing to open entirely, or is it open but not syncing?"
-            ),
-            "SOFTWARE_INSTALLATION": (
-                "I'll verify this software against our approved catalog and check your device permissions. "
-                "Which software are you trying to install?"
-            ),
-            "NETWORK": (
-                "I'll run a connectivity diagnostic. "
-                "Are other applications also failing, or is this specific to one app or website?"
-            ),
-            "SAP": (
-                "Let me check the SAP system status for you. "
-                "What error message or code are you seeing when logging in?"
-            ),
-            "PRINTER": (
-                "I'll check the printer status. "
-                "Is the printer showing as offline in Windows, or does the print job silently disappear?"
-            ),
-            "PASSWORD_RESET": (
-                "I can help with that. "
-                "Are you locked out of your Windows account, or is this for a specific application?"
-            ),
-        }
-        return category_prompts.get(
-            category,
-            "Could you share a bit more about what you're experiencing? "
-            "I'd like to run the right diagnostic checks for you.",
+        cat_key = category.upper().strip()
+
+        if cat_key == "VPN":
+            ack = "I'm sorry you're running into VPN connection issues. Let's get that resolved."
+            checking = "I'm going to run a quick check on the corporate VPN gateway status and check your user account permissions."
+            
+            if vpn_error and vpn_conn:
+                return f"{ack} Since you mentioned you are seeing a {vpn_error} while connected via {vpn_conn}, {checking} Let's verify the gateway access."
+            elif vpn_error:
+                return f"{ack} Since you are getting a {vpn_error}, {checking} While I verify the gateway access, are you connected via Wi-Fi or wired ethernet?"
+            elif vpn_conn:
+                return f"{ack} Since you are connected to {vpn_conn}, {checking} While I do that, are you getting a specific error message, like a Connection Timeout (Error 809 / 868) or Authentication Denied?"
+            else:
+                return (
+                    f"{ack} {checking} In the meantime, could you tell me: are you seeing a specific error or symptom?\n"
+                    "  [A] Connection Timeout (Error 809 / 868)\n"
+                    "  [B] Authentication Denied / locked account\n"
+                    "  [C] Cisco AnyConnect client fails to open\n"
+                    "  [D] Other / Not sure"
+                )
+
+        elif cat_key == "OUTLOOK":
+            ack = "I understand Outlook is giving you trouble. Let's get your email sync working."
+            checking = "I will query your mailbox sync status and check our Exchange server connectivity."
+            
+            if outlook_symptom and outlook_mode:
+                return f"{ack} Since you are experiencing Outlook {outlook_symptom} on your {outlook_mode}, {checking} Let's inspect the server logs."
+            elif outlook_symptom:
+                return f"{ack} Since Outlook is {outlook_symptom}, {checking} Are you using the desktop app, web version (OWA), or mobile app?"
+            elif outlook_mode:
+                return f"{ack} Since you are accessing email via the {outlook_mode}, {checking} Is Outlook failing to open entirely, or is it open but refusing to send/receive?"
+            else:
+                return (
+                    f"{ack} {checking} While I inspect the connection, is Outlook failing to open entirely, or is it open but refusing to send/receive emails?"
+                )
+
+        elif cat_key == "SOFTWARE_INSTALLATION":
+            target = sw_name or "the application"
+            ack = f"Getting {target} installed should be quick and easy."
+            checking = f"I'm going to search our approved software catalog and check if you have local admin permissions."
+            
+            if sw_error == "admin":
+                return f"{ack} Since you are seeing an administrator privilege warning, {checking} Let me check if your machine has self-service privileges enabled."
+            elif sw_name:
+                return f"{ack} {checking} Let's verify if the installation is allowed on your device."
+            else:
+                return f"I can help with software installations. {checking} What is the exact name of the software you want to install?"
+
+        elif cat_key == "NETWORK":
+            ack = "I'm sorry your network connection is running slow or dropping; that is always a hassle."
+            checking = "I will check your network interface status and test for packet loss."
+            
+            if net_symptom and net_scope == "down":
+                return f"{ack} Since your entire connection is {net_scope} with {net_symptom}, {checking} Let's check the gateway response."
+            elif net_symptom:
+                return f"{ack} Since you are experiencing {net_symptom}, {checking} Are you able to access any external websites (like google.com) normally?"
+            elif net_scope:
+                return f"{ack} Since your connection is {net_scope}, {checking} Let's verify if we detect network packet loss."
+            else:
+                return f"{ack} {checking} In the meantime, are other websites loading normally (like google.com), or is all internet access down?"
+
+        elif cat_key == "PASSWORD_RESET":
+            ack = "I can definitely help reset your password or unlock your account."
+            checking = "I am querying our Active Directory domain controllers to inspect your account lockout status."
+            return f"{ack} {checking} Is this password reset for your primary Windows laptop login, or for a specific application like SAP?"
+
+        elif cat_key == "SAP":
+            ack = "I understand SAP is throwing errors. Let's look into it."
+            checking = "I'm checking the SAP Basis server health and database connectivity."
+            return f"{ack} {checking} Could you let me know: what is the exact error code or transaction code (T-code) you are attempting to run?"
+
+        elif cat_key == "PRINTER":
+            ack = "I'm sorry you're dealing with printer issues."
+            checking = "I will query the print spooler service and check the active printer queue status."
+            return f"{ack} {checking} Is the printer showing as 'Offline' in your settings, or are your print jobs getting stuck in the queue?"
+
+        elif cat_key == "HARDWARE":
+            ack = "I'm sorry you're experiencing hardware trouble with your device."
+            checking = "I'll query our device asset inventory database to check your device type and warranty."
+            return f"{ack} {checking} Could you let me know: is there physical damage, or is a component like the display screen or keyboard failing?"
+
+        # Default GENERAL
+        return (
+            "I understand you're experiencing an IT issue. Let's get that diagnosed and fixed. "
+            "I'm going to run a general system health check on your workstation. "
+            "Could you share a bit more detail about what error messages or symptoms you are seeing?"
         )

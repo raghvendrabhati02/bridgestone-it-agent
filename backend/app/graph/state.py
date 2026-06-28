@@ -57,6 +57,9 @@ class AgentState(TypedDict):
     troubleshooting_iterations: int
     troubleshooting_complete: bool
     next_tool: Optional[str]
+    bypass_duplicate_check: Optional[bool]
+    suggested_duplicate_id: Optional[str]
+
 
 
 
