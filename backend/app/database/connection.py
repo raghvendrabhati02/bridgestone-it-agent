@@ -18,9 +18,15 @@ is_sqlite = False
 
 try:
     logger.info("Initializing database engine for: %s", DATABASE_URL)
-    # If URL is postgresql, test the connection
     if DATABASE_URL.startswith("postgresql"):
-        engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+        engine = create_engine(
+            DATABASE_URL,
+            pool_size=20,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_recycle=1800,
+            pool_pre_ping=True
+        )
         with engine.connect() as conn:
             pass
         logger.info("PostgreSQL database connection established successfully.")
@@ -35,12 +41,24 @@ except Exception as e:
     logger.warning("Falling back to local SQLite database: %s", sqlite_url)
     DATABASE_URL = sqlite_url
     is_sqlite = True
+    from sqlalchemy.pool import NullPool
     engine = create_engine(
         sqlite_url,
-        connect_args={"check_same_thread": False}
+        connect_args={"check_same_thread": False, "timeout": 1.5},
+        poolclass=NullPool
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Enable WAL mode for SQLite
+from sqlalchemy import event
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    if is_sqlite:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 # ==============================================================================
 # Database Observability Hooks (SQLAlchemy event listeners)

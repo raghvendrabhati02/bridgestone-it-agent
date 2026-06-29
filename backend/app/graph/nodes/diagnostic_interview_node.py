@@ -27,8 +27,11 @@ def diagnostic_interview_node(state: AgentState) -> dict:
     ]
     is_ticket_req = any(kw in msg_lower for kw in ticket_keywords)
 
-    if category in ("GENERAL", "CHAT", "TICKET_STATUS", "SERVICE_REQUEST") or state.get("route") in ("ticket_lifecycle", "ticket_status", "service_request") or is_ticket_req:
-        logger.info("Diagnostic Interview: Bypassing interview for category: %s (explicit ticket request=%s)", category, is_ticket_req)
+    is_approval = (state.get("status") == "AWAITING_APPROVAL" or 
+                   (state.get("approval_status") or "PENDING").upper().strip() in ("APPROVED", "REJECTED"))
+
+    if category in ("GENERAL", "CHAT", "TICKET_STATUS", "SERVICE_REQUEST") or state.get("route") in ("ticket_lifecycle", "ticket_status", "service_request") or is_ticket_req or is_approval:
+        logger.info("Diagnostic Interview: Bypassing interview for category: %s (explicit ticket request=%s, approval=%s)", category, is_ticket_req, is_approval)
         return {}
 
     # Check if we already did or skipped the interview

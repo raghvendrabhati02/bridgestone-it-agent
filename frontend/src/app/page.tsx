@@ -1,29 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo, memo }
-
-function slaBadgeClass(state?: string): string {
-  const s = state?.toUpperCase() ?? "";
-  if (s === "WARNING_75")      return "badge badge-sla-w75";
-  if (s === "WARNING_90")      return "badge badge-sla-w90";
-  if (s === "BREACHED")        return "badge badge-sla-breached";
-  if (s === "ESCALATED_LEVEL_1") return "badge badge-sla-esc1";
-  if (s === "ESCALATED_LEVEL_2") return "badge badge-sla-esc2";
-  if (s === "ESCALATED_LEVEL_3") return "badge badge-sla-esc3";
-  return "badge badge-sla-healthy";
-}
-
-function slaStateLabel(state?: string): string {
-  const s = state?.toUpperCase() ?? "";
-  if (s === "WARNING_75")      return "Warn 75%";
-  if (s === "WARNING_90")      return "Warn 90%";
-  if (s === "BREACHED")        return "Breached";
-  if (s === "ESCALATED_LEVEL_1") return "Escalated L1";
-  if (s === "ESCALATED_LEVEL_2") return "Escalated L2";
-  if (s === "ESCALATED_LEVEL_3") return "Escalated L3";
-  return "Healthy";
-}
- from "react";
+import { useState, useRef, useEffect, useMemo, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity,
@@ -58,7 +35,6 @@ import {
   Calendar,
   Layers,
   Cpu,
-  Database,
   Database,
   ChevronDown,
   Filter
@@ -106,6 +82,7 @@ interface Ticket {
   sla_state?: string;
   sla_breached?: boolean;
   sla_breached_at?: string | null;
+  assigned_engineer?: string | null;
 }
 
 interface ChatResponse {
@@ -143,52 +120,6 @@ interface Notification {
 // ─────────────────────────────────────────────────────────────────────────────
 // UTILITY HELPERS & STYLES (Color system compliance)
 // ─────────────────────────────────────────────────────────────────────────────
-
-const SLOT_PROMPTS_FRONTEND: Record<string, string> = {
-  software_name: "Which software application do you need installed (e.g., Microsoft Visio, Adobe Acrobat)?",
-  justification: "Brief business justification or reason for this request",
-  connection_profile: "Which VPN connection profile do you require (e.g., APAC-Gateway, US-Gateway)?",
-  mfa_method: "Preferred Multi-Factor Authentication (MFA) method (e.g., Microsoft Authenticator, SMS)?",
-  folder_path: "Network path or folder name of the shared folder you need access to",
-  access_type: "Do you require 'Read-Only' or 'Read-Write' permissions?",
-  sap_system: "Which SAP system do you need access to (e.g., Production PRD, Sandbox, Development)?",
-  requested_role: "What specific role or transaction group do you require in SAP?",
-  username_to_unlock: "What is the domain username of the account you wish to unlock?",
-  list_name: "Email address, alias, or display name of the distribution list",
-  action: "Do you want to 'Create New' or 'Modify Existing' for this distribution list?",
-  printer_name: "Name or device ID of the printer you want to connect to",
-  location: "Where is the printer or workstation located (building, floor)?",
-  laptop_model: "Which corporate laptop model would you like to request (e.g., Lenovo ThinkPad, Apple MacBook Pro 16)?",
-  monitor_size: "What size monitor do you need (e.g., single 34-inch ultrawide, dual 24-inch flat panels)?",
-  device_model: "Which mobile device model are you requesting (e.g., Apple iPhone 15 Pro, Samsung Galaxy S24)?",
-  new_hire_name: "What is the full name of the new employee?",
-  start_date: "What is the employee's start date (YYYY-MM-DD)?",
-  department: "Which department or team will the new employee be joining?",
-  db_type: "What database type are you requesting access to (e.g., Oracle, PostgreSQL, MS SQL Server)?",
-  access_level: "What database permission level do you require (e.g., Read-Only, Read-Write)?",
-  cloud_provider: "Which cloud service provider sandbox do you need (AWS, Azure, GCP)?",
-  badge_type: "What type of physical access badge do you need (e.g., Employee, Contractor)?",
-  location_access: "Which building facilities or security zones do you need badge access to?",
-  accessory_type: "Which ergonomic accessory are you requesting (e.g., ergonomic mouse, keyboard, chair riser)?"
-};
-
-const CATALOG_REQUIRED_SLOTS: Record<string, string[]> = {
-  SRV001: ["software_name", "justification"],
-  SRV002: ["connection_profile", "mfa_method", "justification"],
-  SRV003: ["folder_path", "access_type", "justification"],
-  SRV004: ["sap_system", "requested_role", "justification"],
-  SRV005: ["username_to_unlock", "justification"],
-  SRV006: ["list_name", "action", "justification"],
-  SRV007: ["printer_name", "location", "justification"],
-  SRV008: ["laptop_model", "justification"],
-  SRV009: ["monitor_size", "justification"],
-  SRV010: ["device_model", "justification"],
-  SRV011: ["new_hire_name", "start_date", "department", "justification"],
-  SRV012: ["db_type", "access_level", "justification"],
-  SRV013: ["cloud_provider", "justification"],
-  SRV014: ["badge_type", "location_access", "justification"],
-  SRV015: ["accessory_type", "justification"]
-};
 
 const SLOT_PROMPTS_FRONTEND: Record<string, string> = {
   software_name: "Which software application do you need installed (e.g., Microsoft Visio, Adobe Acrobat)?",
@@ -281,32 +212,6 @@ function statusBadgeClass(status: string): string {
   if (s === "APPROVED")      return "badge badge-approved";
   if (s === "REJECTED")      return "badge badge-rejected";
   if (s === "PENDING")       return "badge badge-pending";
-}
-
-/** Returns the CSS class string for an SLA state badge */
-function slaBadgeClass(slaState?: string): string {
-  const s = slaState?.toUpperCase() ?? "";
-  if (s === "HEALTHY")           return "badge badge-sla-healthy";
-  if (s === "WARNING_75")        return "badge badge-sla-w75";
-  if (s === "WARNING_90")        return "badge badge-sla-w90";
-  if (s === "BREACHED")          return "badge badge-sla-breached";
-  if (s === "ESCALATED_LEVEL_1") return "badge badge-sla-esc1";
-  if (s === "ESCALATED_LEVEL_2") return "badge badge-sla-esc2";
-  if (s === "ESCALATED_LEVEL_3") return "badge badge-sla-esc3";
-  return "badge badge-sla-healthy";
-}
-
-/** Short label for an SLA state */
-function slaStateLabel(slaState?: string): string {
-  if (!slaState) return "SLA OK";
-  if (slaState === "HEALTHY")           return "SLA ✓";
-  if (slaState === "WARNING_75")        return "SLA 75%";
-  if (slaState === "WARNING_90")        return "SLA 90%";
-  if (slaState === "BREACHED")          return "BREACHED";
-  if (slaState === "ESCALATED_LEVEL_1") return "ESC L1";
-  if (slaState === "ESCALATED_LEVEL_2") return "ESC L2";
-  if (slaState === "ESCALATED_LEVEL_3") return "ESC L3";
-  return slaState;
   if (s === "ACCESS_DENIED" || s === "DENIED") return "badge badge-denied";
   if (s === "HEALTHY" || s === "RUNNING") return "badge badge-healthy";
   if (s === "DEGRADED")      return "badge badge-degraded";
@@ -498,45 +403,7 @@ export default function Home() {
   const [confirmAction, setConfirmAction] = useState<{ action: string; title: string; desc: string } | null>(null);
   const [isExecutingAction, setIsExecutingAction] = useState(false);
 
-  // ── Enterprise Slide-over details drawer state ──────────────────────────────
-  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
-  const [selectedTicketDetails, setSelectedTicketDetails] = useState<any>(null);
-  const [isDrawerLoading, setIsDrawerLoading] = useState(false);
-  const [drawerError, setDrawerError] = useState("");
-  const [activeDrawerTab, setActiveDrawerTab] = useState<"info" | "timeline" | "diagnosis" | "related" | "chat">("info");
-  const [internalNoteText, setInternalNoteText] = useState("");
-  const [isSubmittingNote, setIsSubmittingNote] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<{ action: string; title: string; desc: string } | null>(null);
-  const [isExecutingAction, setIsExecutingAction] = useState(false);
-
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-
-  // ── ServiceNow operational workflow states ──────────────────────────────────
-  const [ticketComments, setTicketComments] = useState<any[]>([]);
-  const [commentViewMode, setCommentViewMode] = useState<"copilot" | "it_workflow">("copilot");
-  const [commentText, setCommentText] = useState("");
-  const [isCommentInternal, setIsCommentInternal] = useState(false);
-  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
-  const [reopenReasonText, setReopenReasonText] = useState("");
-  const [isReopening, setIsReopening] = useState(false);
-  const [assignGroup, setAssignGroup] = useState("");
-  const [assignEngineer, setAssignEngineer] = useState("");
-  const [assignReason, setAssignReason] = useState("");
-  const [isUpdatingAssignment, setIsUpdatingAssignment] = useState(false);
-  const [assignmentHistory, setAssignmentHistory] = useState<any[]>([]);
-  const [csatRating, setCsatRating] = useState(5);
-  const [csatFeedback, setCsatFeedback] = useState("");
-  const [csatResponseRating, setCsatResponseRating] = useState(5);
-  const [csatQualityRating, setCsatQualityRating] = useState(5);
-  const [csatRecommend, setCsatRecommend] = useState(true);
-  const [isSubmittingCSAT, setIsSubmittingCSAT] = useState(false);
-  const [csatSubmittedList, setCsatSubmittedList] = useState<Record<string, boolean>>({});
-  const [execMetrics, setExecMetrics] = useState<any>(null);
-  const [incidentClusters, setIncidentClusters] = useState<any[]>([]);
-  const [kbDrafts, setKbDrafts] = useState<any[]>([]);
-  const [editingClusterId, setEditingClusterId] = useState<number | null>(null);
-  const [editingClusterFix, setEditingClusterFix] = useState("");
-
 
   // ── Custom frontend enhancement states ──────────────────────────────────────
   const [serviceCatalog, setServiceCatalog] = useState<any[]>([]);
@@ -553,6 +420,18 @@ export default function Home() {
 
   const [ticketViewMode, setTicketViewMode] = useState<"cards" | "table">("cards");
   const [searchQuery, setSearchQuery]       = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterPriority, setFilterPriority] = useState("");
+  const [filterCategory, setFilterCategory] = useState("");
+  const [filterGroup, setFilterGroup] = useState("");
+  const [filterEngineer, setFilterEngineer] = useState("");
+  const [filterSla, setFilterSla] = useState("");
+  const [filterCreatedDate, setFilterCreatedDate] = useState("");
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [commentsSubTab, setCommentsSubTab] = useState<"comments" | "notes">("comments");
+  const [commentText, setCommentText] = useState("");
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [commentViewMode, setCommentViewMode] = useState<"copilot" | "it_workflow">("copilot");
   const [currentTime, setCurrentTime]       = useState("");
   const [secondsSinceLastPoll, setSecondsSinceLastPoll] = useState(0);
 
@@ -914,406 +793,93 @@ export default function Home() {
     fetchAnalyticsRootCauses();
     fetchAnalyticsUsers();
     fetchAnalyticsServiceRequests();
-    fetchExecMetrics();
-    fetchIncidentClusters();
-    fetchKbDrafts();
-  };
-
-  const fetchExecMetrics = async () => {
-    try {
-      const r = await authFetch(`${API_BASE_URL}/admin/dashboard/executive-metrics`);
-      if (r.ok) setExecMetrics(await r.json());
-    } catch (e) {
-      console.error("Failed to fetch exec metrics:", e);
-    }
-  };
-
-  const fetchIncidentClusters = async () => {
-    try {
-      const r = await authFetch(`${API_BASE_URL}/admin/dashboard/clusters`);
-      if (r.ok) setIncidentClusters(await r.json());
-    } catch (e) {
-      console.error("Failed to fetch clusters:", e);
-    }
-  };
-
-  const fetchKbDrafts = async () => {
-    try {
-      const r = await authFetch(`${API_BASE_URL}/admin/dashboard/knowledge-drafts`);
-      if (r.ok) setKbDrafts(await r.json());
-    } catch (e) {
-      console.error("Failed to fetch knowledge drafts:", e);
-    }
-  };
-
-  const handleUpdateClusterFix = async (clusterId: number, fix: string) => {
-    try {
-      const r = await authFetch(`${API_BASE_URL}/admin/dashboard/clusters/${clusterId}/fix`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ known_fix: fix })
-      });
-      if (r.ok) {
-        setEditingClusterId(null);
-        await fetchIncidentClusters();
-      }
-    } catch (e) {
-      console.error("Failed to update cluster fix:", e);
-    }
-  };
-  const fetchSlaDashboard = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/sla/dashboard-metrics`); if (r.ok) setSlaDashboard(await r.json()); }
-    catch (e) { console.error("Failed to fetch SLA dashboard metrics:", e); }
-  };
-  const fetchSlaEscalations = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/sla/escalations`); if (r.ok) setSlaEscalations(await r.json()); }
-    catch (e) { console.error("Failed to fetch SLA escalations:", e); }
-  };
-
-  const fetchAnalyticsOverview = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/api/analytics/overview`); if (r.ok) setAnalyticsOverview(await r.json()); }
-    catch (e) { console.error("Failed to fetch analytics overview:", e); }
-  };
-  const fetchAnalyticsTickets = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/api/analytics/tickets`); if (r.ok) setAnalyticsTickets(await r.json()); }
-    catch (e) { console.error("Failed to fetch analytics tickets:", e); }
-  };
-  const fetchAnalyticsSla = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/api/analytics/sla`); if (r.ok) setAnalyticsSla(await r.json()); }
-    catch (e) { console.error("Failed to fetch analytics SLA:", e); }
-  };
-  const fetchAnalyticsTeams = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/api/analytics/teams`); if (r.ok) setAnalyticsTeams(await r.json()); }
-    catch (e) { console.error("Failed to fetch analytics teams:", e); }
-  };
-  const fetchAnalyticsCategories = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/api/analytics/categories`); if (r.ok) setAnalyticsCategories(await r.json()); }
-    catch (e) { console.error("Failed to fetch analytics categories:", e); }
-  };
-  const fetchAnalyticsSecurity = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/api/analytics/security`); if (r.ok) setAnalyticsSecurity(await r.json()); }
-    catch (e) { console.error("Failed to fetch analytics security:", e); }
-  };
-  const fetchAnalyticsRootCauses = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/api/analytics/root-causes`); if (r.ok) setAnalyticsRootCauses(await r.json()); }
-    catch (e) { console.error("Failed to fetch analytics root causes:", e); }
-  };
-  const fetchAnalyticsUsers = async () => {
-    try { const r = await authFetch(`${API_BASE_URL}/api/analytics/users`); if (r.ok) setAnalyticsUsers(await r.json()); }
-    catch (e) { console.error("Failed to fetch analytics users:", e); }
-  };
-
-  const fetchServiceCatalog = async () => {
-    try {
-      const r = await authFetch(`${API_BASE_URL}/service-catalog`);
-      if (r.ok) setServiceCatalog(await r.json());
-    } catch (e) {
-      console.error("Failed to fetch service catalog:", e);
-    }
-  };
-
-  const fetchServiceRequests = async () => {
-    try {
-      const r = await authFetch(`${API_BASE_URL}/service-requests`);
-      if (r.ok) setServiceRequests(await r.json());
-    } catch (e) {
-      console.error("Failed to fetch service requests:", e);
-    }
-  };
-
-  const fetchAnalyticsServiceRequests = async () => {
-    try {
-      const r = await authFetch(`${API_BASE_URL}/api/analytics/service-requests`);
-      if (r.ok) setAnalyticsServiceRequests(await r.json());
-    } catch (e) {
-      console.error("Failed to fetch analytics service requests:", e);
-    }
-  };
-
-  const handleServiceRequestAction = async (requestId: string, action: string, note?: string) => {
-    setIsExecutingAction(true);
-    try {
-      const res = await authFetch(`${API_BASE_URL}/service-requests/${requestId}/action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, note: note || null })
-      });
-      if (res.ok) {
-        const updatedDetails = await res.json();
-        setSelectedServiceRequest(updatedDetails);
-        setWorkNotesText("");
-        await fetchServiceRequests();
-        if (user && (user.role === "ADMIN" || user.role === "MANAGER")) {
-          fetchAnalyticsData();
-        }
-      } else {
-        const errorData = await res.json();
-        alert(errorData.detail || "Failed to execute service request action.");
-      }
-    } catch (e: any) {
-      alert(e.message || "An error occurred.");
-    } finally {
-      setIsExecutingAction(false);
-      setActionConfirmOpen(false);
-      setPendingConfirmAction(null);
-    }
-  };
-
-  const fetchAnalyticsData = async () => {
-    if (!user || (user.role !== "ADMIN" && user.role !== "MANAGER")) return;
-    fetchAnalyticsOverview();
-    fetchAnalyticsTickets();
-    fetchAnalyticsSla();
-    fetchAnalyticsTeams();
-    fetchAnalyticsCategories();
-    fetchAnalyticsSecurity();
-    fetchAnalyticsRootCauses();
-    fetchAnalyticsUsers();
-    fetchAnalyticsServiceRequests();
   };
 
   // ── Ticket details slide-over controls ──────────────────────────────────────
-  const fetchTicketComments = async (id: string) => {
+  const fetchTicketDetails = async (id: string) => {
+    setIsDrawerLoading(true);
+    setDrawerError("");
     try {
-      const res = await authFetch(`${API_BASE_URL}/tickets/${id}/comments`);
+      const res = await authFetch(`${API_BASE_URL}/tickets/${id}/details`);
       if (res.ok) {
-        setTicketComments(await res.json());
+        const data = await res.json();
+        setSelectedTicketDetails(data);
+      } else {
+        const errorData = await res.json();
+        setDrawerError(errorData.detail || "Failed to load ticket details.");
       }
-    } catch (e) {
-      console.error("Failed to fetch comments:", e);
+    } catch (err: any) {
+      setDrawerError(err.message || "Failed to fetch ticket details.");
+    } finally {
+      setIsDrawerLoading(false);
     }
   };
 
-  const fetchAssignmentHistory = async (id: string) => {
+  const handleTicketClick = (id: string) => {
+    setSelectedTicketId(id);
+    setActiveDrawerTab("info");
+    fetchTicketDetails(id);
+  };
+
+  const handleAdminAction = async (action: string, extraParams: { team?: string; priority?: string; note?: string; engineer?: string } = {}) => {
+    if (!selectedTicketId) return;
+    setIsExecutingAction(true);
     try {
-      const res = await authFetch(`${API_BASE_URL}/tickets/${id}/assignment-history`);
+      const res = await authFetch(`${API_BASE_URL}/tickets/${selectedTicketId}/action`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          action,
+          ...extraParams
+        })
+      });
       if (res.ok) {
-        setAssignmentHistory(await res.json());
+        await fetchTicketDetails(selectedTicketId);
+        await fetchTickets();
+        if (user && (user.role === "ADMIN" || user.role === "MANAGER")) {
+          fetchAnalyticsData();
+          fetchSlaDashboard();
+          fetchSlaEscalations();
+        }
+        setConfirmAction(null);
+      } else {
+        const errorData = await res.json();
+        alert(errorData.detail || "Failed to execute administrative action.");
       }
-    } catch (e) {
-      console.error("Failed to fetch assignment history:", e);
+    } catch (err: any) {
+      alert(err.message || "An error occurred while executing the administrative action.");
+    } finally {
+      setIsExecutingAction(false);
     }
   };
 
-  const handleAddComment = async () => {
-    if (!selectedTicketId || !commentText.trim()) return;
+  const handleAddComment = async (text: string, isInternal: boolean) => {
+    if (!selectedTicketId || !text.trim()) return;
     setIsSubmittingComment(true);
     try {
       const res = await authFetch(`${API_BASE_URL}/tickets/${selectedTicketId}/comments`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify({
-          text: commentText,
-          is_internal: isCommentInternal
+          text,
+          is_internal: isInternal
         })
       });
       if (res.ok) {
         setCommentText("");
-        await fetchTicketComments(selectedTicketId);
         await fetchTicketDetails(selectedTicketId);
+      } else {
+        const errorData = await res.json();
+        alert(errorData.detail || "Failed to post comment.");
       }
-    } catch (e) {
-      console.error("Failed to add comment:", e);
+    } catch (err: any) {
+      alert(err.message || "Failed to post comment.");
     } finally {
       setIsSubmittingComment(false);
-    }
-  };
-
-  const handleAssignTicket = async () => {
-    if (!selectedTicketId || !assignEngineer) return;
-    setIsUpdatingAssignment(true);
-    try {
-      const res = await authFetch(`${API_BASE_URL}/tickets/${selectedTicketId}/assign`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assigned_engineer: assignEngineer,
-          assigned_group: assignGroup || null,
-          reason: assignReason || null
-        })
-      });
-      if (res.ok) {
-        setAssignReason("");
-        await fetchTicketDetails(selectedTicketId);
-        await fetchAssignmentHistory(selectedTicketId);
-        await fetchTickets();
-      }
-    } catch (e) {
-      console.error("Failed to assign ticket:", e);
-    } finally {
-      setIsUpdatingAssignment(false);
-    }
-  };
-
-  const handleReopenTicket = async () => {
-    if (!selectedTicketId || !reopenReasonText.trim()) return;
-    setIsReopening(true);
-    try {
-      const res = await authFetch(`${API_BASE_URL}/tickets/${selectedTicketId}/reopen`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          reason: reopenReasonText
-        })
-      });
-      if (res.ok) {
-        setReopenReasonText("");
-        await fetchTicketDetails(selectedTicketId);
-        await fetchTickets();
-      }
-    } catch (e) {
-      console.error("Failed to reopen ticket:", e);
-    } finally {
-      setIsReopening(false);
-    }
-  };
-
-  const handleCSATSubmit = async () => {
-    if (!selectedTicketId) return;
-    setIsSubmittingCSAT(true);
-    try {
-      const res = await authFetch(`${API_BASE_URL}/tickets/${selectedTicketId}/csat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rating: csatRating,
-          feedback: csatFeedback || null,
-          response_time_rating: csatResponseRating,
-          resolution_quality_rating: csatQualityRating,
-          would_recommend: csatRecommend
-        })
-      });
-      if (res.ok) {
-        setCsatSubmittedList(prev => ({ ...prev, [selectedTicketId]: true }));
-        setCsatFeedback("");
-        await fetchTicketDetails(selectedTicketId);
-        await fetchTickets();
-      }
-    } catch (e) {
-      console.error("Failed to submit CSAT:", e);
-    } finally {
-      setIsSubmittingCSAT(false);
-    }
-  };
-
-  const fetchTicketDetails = async (id: string) => {
-    setIsDrawerLoading(true);
-    setDrawerError("");
-    try {
-      const res = await authFetch(`${API_BASE_URL}/tickets/${id}/details`);
-      if (res.ok) {
-        const data = await res.json();
-        setSelectedTicketDetails(data);
-      } else {
-        const errorData = await res.json();
-        setDrawerError(errorData.detail || "Failed to load ticket details.");
-      }
-    } catch (err: any) {
-      setDrawerError(err.message || "Failed to fetch ticket details.");
-    } finally {
-      setIsDrawerLoading(false);
-    }
-  };
-
-  const handleTicketClick = (id: string) => {
-    setSelectedTicketId(id);
-    setActiveDrawerTab("info");
-    fetchTicketDetails(id);
-    fetchTicketComments(id);
-    fetchAssignmentHistory(id);
-  };
-
-  const handleAdminAction = async (action: string, extraParams: { team?: string; priority?: string; note?: string } = {}) => {
-    if (!selectedTicketId) return;
-    setIsExecutingAction(true);
-    try {
-      const res = await authFetch(`${API_BASE_URL}/tickets/${selectedTicketId}/action`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          action,
-          ...extraParams
-        })
-      });
-      if (res.ok) {
-        await fetchTicketDetails(selectedTicketId);
-        await fetchTickets();
-        if (user && (user.role === "ADMIN" || user.role === "MANAGER")) {
-          fetchAnalyticsData();
-          fetchSlaDashboard();
-          fetchSlaEscalations();
-        }
-        setConfirmAction(null);
-      } else {
-        const errorData = await res.json();
-        alert(errorData.detail || "Failed to execute administrative action.");
-      }
-    } catch (err: any) {
-      alert(err.message || "An error occurred while executing the administrative action.");
-    } finally {
-      setIsExecutingAction(false);
-    }
-  };
-
-  // ── Ticket details slide-over controls ──────────────────────────────────────
-  const fetchTicketDetails = async (id: string) => {
-    setIsDrawerLoading(true);
-    setDrawerError("");
-    try {
-      const res = await authFetch(`${API_BASE_URL}/tickets/${id}/details`);
-      if (res.ok) {
-        const data = await res.json();
-        setSelectedTicketDetails(data);
-      } else {
-        const errorData = await res.json();
-        setDrawerError(errorData.detail || "Failed to load ticket details.");
-      }
-    } catch (err: any) {
-      setDrawerError(err.message || "Failed to fetch ticket details.");
-    } finally {
-      setIsDrawerLoading(false);
-    }
-  };
-
-  const handleTicketClick = (id: string) => {
-    setSelectedTicketId(id);
-    setActiveDrawerTab("info");
-    fetchTicketDetails(id);
-  };
-
-  const handleAdminAction = async (action: string, extraParams: { team?: string; priority?: string; note?: string } = {}) => {
-    if (!selectedTicketId) return;
-    setIsExecutingAction(true);
-    try {
-      const res = await authFetch(`${API_BASE_URL}/tickets/${selectedTicketId}/action`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          action,
-          ...extraParams
-        })
-      });
-      if (res.ok) {
-        await fetchTicketDetails(selectedTicketId);
-        await fetchTickets();
-        if (user && (user.role === "ADMIN" || user.role === "MANAGER")) {
-          fetchAnalyticsData();
-          fetchSlaDashboard();
-          fetchSlaEscalations();
-        }
-        setConfirmAction(null);
-      } else {
-        const errorData = await res.json();
-        alert(errorData.detail || "Failed to execute administrative action.");
-      }
-    } catch (err: any) {
-      alert(err.message || "An error occurred while executing the administrative action.");
-    } finally {
-      setIsExecutingAction(false);
     }
   };
 
@@ -1454,26 +1020,51 @@ export default function Home() {
 
   const filteredTickets = useMemo(() => {
     if (!tickets) return [];
-    if (!searchQuery.trim()) return tickets;
-    const query = searchQuery.toLowerCase();
-    return tickets.filter(t => 
-      t.ticket_id.toLowerCase().includes(query) ||
-      t.category.toLowerCase().includes(query) ||
-      t.assigned_team.toLowerCase().includes(query) ||
-      t.status.toLowerCase().includes(query) ||
-      (t.servicenow_id && t.servicenow_id.toLowerCase().includes(query))
-    );
-  }, [tickets, searchQuery]);
+    return tickets.filter(t => {
+      // 1. Search Query filter (checks ID, category, description, team, status, ServiceNow ID)
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        const matchesQuery = 
+          t.ticket_id.toLowerCase().includes(query) ||
+          t.category.toLowerCase().includes(query) ||
+          t.assigned_team.toLowerCase().includes(query) ||
+          t.status.toLowerCase().includes(query) ||
+          (t.issue_description && t.issue_description.toLowerCase().includes(query)) ||
+          (t.servicenow_id && t.servicenow_id.toLowerCase().includes(query));
+        if (!matchesQuery) return false;
+      }
 
-  const groupedCatalog = useMemo(() => {
-    const groups: Record<string, any[]> = {};
-    (serviceCatalog || []).forEach(item => {
-      const cat = item.category || "General";
-      if (!groups[cat]) groups[cat] = [];
-      groups[cat].push(item);
+      // 2. Status filter
+      if (filterStatus && t.status !== filterStatus) return false;
+
+      // 3. Priority filter
+      if (filterPriority && t.priority !== filterPriority) return false;
+
+      // 4. Category filter
+      if (filterCategory && t.category !== filterCategory) return false;
+
+      // 5. Assigned Team filter
+      if (filterGroup && t.assigned_team !== filterGroup) return false;
+
+      // 6. Assigned Engineer filter
+      if (filterEngineer && t.assigned_engineer !== filterEngineer) return false;
+
+      // 7. SLA Status filter (checks if healthy, warn, breached)
+      if (filterSla) {
+        const s = t.sla_state?.toUpperCase() || "";
+        if (filterSla === "BREACHED" && s !== "BREACHED") return false;
+        if (filterSla === "WARNING" && s !== "WARNING_75" && s !== "WARNING_90") return false;
+        if (filterSla === "HEALTHY" && s !== "HEALTHY" && s !== "") return false;
+      }
+
+      // 8. Created Date range filter
+      if (filterCreatedDate) {
+        if (!t.created_at || !t.created_at.startsWith(filterCreatedDate)) return false;
+      }
+
+      return true;
     });
-    return groups;
-  }, [serviceCatalog]);
+  }, [tickets, searchQuery, filterStatus, filterPriority, filterCategory, filterGroup, filterEngineer, filterSla, filterCreatedDate]);
 
   const groupedCatalog = useMemo(() => {
     const groups: Record<string, any[]> = {};
@@ -1732,7 +1323,7 @@ export default function Home() {
                           <span className="font-mono text-blue-400 text-xs font-bold">{msg.action}</span>
                         </div>
                         <div className="border-t border-slate-700/50 pt-2.5">
-                          <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Outcome Details</span>
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Resolution Summary</span>
                           <span className="text-sm text-slate-200">{msg.text}</span>
                         </div>
                       </div>
@@ -1876,299 +1467,6 @@ export default function Home() {
                 >
                   <ArrowUpRight className="h-4.5 w-4.5" />
                 </button>
-            )}
-
-            {/* ═══════════════════════════════════════════════════════════════ */}
-            {/* ANALYTICS TAB                                                  */}
-            {/* ═══════════════════════════════════════════════════════════════ */}
-            {activeRightTab === "analytics" && (user?.role === "ADMIN" || user?.role === "MANAGER") && (
-              <div className="p-4 space-y-5 animate-fade-in">
-                {/* ── Section 1: Executive Overview ─────────────────────── */}
-                <section>
-                  <SectionHeader title="Executive Overview" />
-                  {analyticsOverview ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      {[
-                        { label: "Total Tickets", value: analyticsOverview.total_tickets, color: "text-blue-400" },
-                        { label: "Open Tickets", value: analyticsOverview.open_tickets, color: "text-indigo-400" },
-                        { label: "SLA Compliance", value: `${analyticsOverview.compliance_pct}%`, color: analyticsOverview.compliance_pct >= 90 ? "text-emerald-400" : analyticsOverview.compliance_pct >= 70 ? "text-amber-400" : "text-rose-400" },
-                        { label: "Avg Resolution", value: `${analyticsOverview.avg_resolution_hours}h`, color: "text-violet-400" },
-                        { label: "Active Sessions", value: analyticsOverview.active_users, color: "text-sky-400" },
-                        { label: "Security Events", value: analyticsOverview.security_events, color: "text-rose-500" },
-                      ].map(({ label, value, color }) => (
-                        <div key={label} className="card p-3 flex flex-col gap-1">
-                          <span className="section-header">{label}</span>
-                          <span className={`text-2xl font-bold font-mono ${color}`}>{value ?? 0}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="card p-4">
-                      <p className="text-xs text-slate-600 italic py-3 text-center">Loading Executive Overview...</p>
-                    </div>
-                  )}
-                </section>
-
-                {/* ── Section 2: Ticket & Priority Distribution ─────────── */}
-                <section>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {/* Status breakdown */}
-                    <div className="card p-4">
-                      <SectionHeader title="Ticket Status Breakdown" />
-                      {analyticsTickets?.status_distribution ? (
-                        <div className="space-y-2">
-                          {Object.entries(analyticsTickets.status_distribution).map(([statusName, count]: [string, any]) => (
-                            <div key={statusName} className="flex justify-between items-center py-1 border-b border-slate-700/20 text-xs">
-                              <span className={statusBadgeClass(statusName)}>{statusName}</span>
-                              <span className="font-mono font-bold text-slate-300">{count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <EmptyState label="Loading status distribution..." />
-                      )}
-                    </div>
-
-                    {/* Priority breakdown */}
-                    <div className="card p-4">
-                      <SectionHeader title="Priority Share" />
-                      {analyticsTickets?.priority_distribution ? (
-                        <div className="space-y-2">
-                          {Object.entries(analyticsTickets.priority_distribution).map(([priorityName, count]: [string, any]) => (
-                            <div key={priorityName} className="flex justify-between items-center py-1 border-b border-slate-700/20 text-xs">
-                              <span className={`font-semibold capitalize ${priorityColor(priorityName)}`}>{priorityName.toLowerCase()}</span>
-                              <span className="font-mono font-bold text-slate-300">{count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <EmptyState label="Loading priority distribution..." />
-                      )}
-                    </div>
-                  </div>
-                </section>
-
-                {/* ── Section 3: Categories & Standardized Distributions ── */}
-                <section>
-                  <div className="card p-4">
-                    <SectionHeader title="Incident Categories" />
-                    {analyticsCategories && analyticsCategories.length > 0 ? (
-                      <div className="space-y-2.5 max-h-60 overflow-y-auto">
-                        {analyticsCategories.map((cat: any) => {
-                          const totalCount = analyticsOverview?.total_tickets || 1;
-                          const pct = Math.min(100, Math.round((cat.count / totalCount) * 100));
-                          return (
-                            <div key={cat.category} className="space-y-1">
-                              <div className="flex justify-between text-xs font-medium">
-                                <span className="text-slate-300">{cat.category}</span>
-                                <span className="font-mono text-slate-400">{cat.count} ({pct}%)</span>
-                              </div>
-                              <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                                <div className="bg-blue-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <EmptyState label="Loading category statistics..." />
-                    )}
-                  </div>
-                </section>
-
-                {/* ── Section 4: SLA Performance ───────────────────────── */}
-                <section>
-                  <SectionHeader title="SLA Breakdown" />
-                  {analyticsSla ? (
-                    <div className="space-y-4">
-                      {/* SLA metrics */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        {[
-                          { label: "Compliance Rate", value: `${analyticsSla.compliance_pct}%`, color: analyticsSla.compliance_pct >= 90 ? "text-emerald-400" : "text-rose-400" },
-                          { label: "Avg SLA Usage", value: `${analyticsSla.avg_sla_usage_pct}%`, color: "text-yellow-400" },
-                          { label: "Avg First Response", value: `${analyticsSla.avg_first_response_hours}h`, color: "text-sky-400" },
-                          { label: "Avg Resolution", value: `${analyticsSla.avg_resolution_hours}h`, color: "text-violet-400" },
-                        ].map(({ label, value, color }) => (
-                          <div key={label} className="card p-3 text-center">
-                            <span className="section-header block mb-1">{label}</span>
-                            <span className={`text-xl font-bold font-mono ${color}`}>{value}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Timeline status counts */}
-                      <div className="card p-3">
-                        <span className="section-header block mb-2">Active SLA States</span>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                          {[
-                            { label: "Healthy", count: analyticsSla.healthy, badge: "badge-sla-healthy" },
-                            { label: "Warn 75%", count: analyticsSla.warning_75, badge: "badge-sla-w75" },
-                            { label: "Warn 90%", count: analyticsSla.warning_90, badge: "badge-sla-w90" },
-                            { label: "Breached", count: analyticsSla.breached, badge: "badge-sla-breached" },
-                            { label: "Escalated L1", count: analyticsSla.escalated_l1, badge: "badge-sla-esc1" },
-                            { label: "Escalated L2", count: analyticsSla.escalated_l2, badge: "badge-sla-esc2" },
-                            { label: "Escalated L3", count: analyticsSla.escalated_l3, badge: "badge-sla-esc3" },
-                          ].map(({ label, count, badge }) => (
-                            <div key={label} className="flex justify-between items-center py-1 px-2 bg-slate-800/40 rounded border border-slate-700/20">
-                              <span className={`badge ${badge} text-[10px]`}>{label}</span>
-                              <span className="font-mono font-bold text-slate-300">{count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <EmptyState label="Loading SLA statistics..." />
-                  )}
-                </section>
-
-                {/* ── Section 5: Team Performance & Workload ───────────── */}
-                <section>
-                  <SectionHeader title="Team Workload & Performance" />
-                  {analyticsTeams && analyticsTeams.length > 0 ? (
-                    <div className="card p-4 overflow-x-auto">
-                      <table className="w-full text-xs text-left">
-                        <thead>
-                          <tr className="border-b border-slate-700/50 pb-2 text-slate-500">
-                            <th className="py-2">Support Team</th>
-                            <th className="py-2 text-center">Open</th>
-                            <th className="py-2 text-center">Resolved</th>
-                            <th className="py-2 text-center">Breached</th>
-                            <th className="py-2 text-center">Avg Resolution</th>
-                            <th className="py-2 text-right">Workload</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {analyticsTeams.map((team: any) => (
-                            <tr key={team.team} className="border-b border-slate-700/20 hover:bg-slate-800/20">
-                              <td className="py-2 font-medium text-slate-200">{team.team}</td>
-                              <td className="py-2 text-center font-mono text-indigo-400">{team.open}</td>
-                              <td className="py-2 text-center font-mono text-emerald-400">{team.resolved}</td>
-                              <td className="py-2 text-center font-mono text-rose-400">{team.breaches}</td>
-                              <td className="py-2 text-center font-mono text-slate-400">{team.avg_resolution_hours}h</td>
-                              <td className="py-2 text-right font-mono font-semibold text-slate-300">{team.workload_pct}%</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <EmptyState label="Loading team workload statistics..." />
-                  )}
-                </section>
-
-                {/* ── Section 6: Security & Audit Metrics ──────────────── */}
-                <section>
-                  <SectionHeader title="Security Compliance Audit" />
-                  {analyticsSecurity ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      {[
-                        { label: "Access Denials", value: analyticsSecurity.access_denied_events, color: "text-rose-400" },
-                        { label: "RBAC Violations", value: analyticsSecurity.rbac_violations, color: "text-red-400" },
-                        { label: "Approval Requests", value: analyticsSecurity.approval_requests, color: "text-amber-400" },
-                        { label: "Rejected Approvals", value: analyticsSecurity.approval_rejections, color: "text-orange-400" },
-                        { label: "Security Logs", value: analyticsSecurity.security_events, color: "text-slate-400" },
-                        { label: "Audit Log Events", value: analyticsSecurity.audit_events, color: "text-violet-400" },
-                      ].map(({ label, value, color }) => (
-                        <div key={label} className="card p-3 flex flex-col gap-1">
-                          <span className="section-header">{label}</span>
-                          <span className={`text-xl font-bold font-mono ${color}`}>{value}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <EmptyState label="Loading security statistics..." />
-                  )}
-                </section>
-
-                {/* ── Section 7: User Statistics ───────────────────────── */}
-                <section>
-                  <SectionHeader title="User Session Metrics" />
-                  {analyticsUsers ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                      {[
-                        { label: "Employees", value: analyticsUsers.employees, color: "text-emerald-400" },
-                        { label: "Managers", value: analyticsUsers.managers, color: "text-amber-400" },
-                        { label: "Admins", value: analyticsUsers.admins, color: "text-rose-400" },
-                        { label: "Active Sessions", value: analyticsUsers.active_sessions, color: "text-sky-400" },
-                        { label: "Avg Daily Users", value: analyticsUsers.avg_daily_users, color: "text-indigo-400" },
-                      ].map(({ label, value, color }) => (
-                        <div key={label} className="card p-3 text-center">
-                          <span className="section-header block mb-1">{label}</span>
-                          <span className={`text-xl font-bold font-mono ${color}`}>{value}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <EmptyState label="Loading user statistics..." />
-                  )}
-                </section>
-
-                {/* ── Section 8: Root Cause & Diagnostics ──────────────── */}
-                <section>
-                  <SectionHeader title="Root Cause Analysis & Diagnostics" />
-                  {analyticsRootCauses ? (
-                    <div className="space-y-4">
-                      {/* Grid cards for insights */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="card p-3.5 space-y-2">
-                          <span className="section-header block">Hotspot Categories</span>
-                          <div className="flex flex-wrap gap-2">
-                            {analyticsRootCauses.top_recurring_categories?.map((cat: string) => (
-                              <span key={cat} className="badge badge-waiting text-xs font-semibold px-2.5 py-1">{cat}</span>
-                            ))}
-                          </div>
-                          <div className="text-xs pt-1 border-t border-slate-700/30 text-slate-400">
-                            Most Affected Team: <strong className="text-rose-400 font-bold">{analyticsRootCauses.most_affected_support_team}</strong>
-                          </div>
-                        </div>
-
-                        <div className="card p-3.5 space-y-2">
-                          <span className="section-header block">Top Root Causes</span>
-                          <ol className="list-decimal list-inside text-xs text-slate-300 space-y-1">
-                            {analyticsRootCauses.top_repeated_root_causes?.map((cause: string, idx: number) => (
-                              <li key={idx} className="truncate">{cause}</li>
-                            ))}
-                          </ol>
-                        </div>
-                      </div>
-
-                      {/* Hotspots by category */}
-                      <div className="card p-3.5 space-y-3">
-                        <span className="section-header block">Most Common Issue Descriptions</span>
-                        <div className="space-y-2 text-xs">
-                          {[
-                            { title: "VPN Gateway Hotspot", desc: analyticsRootCauses.most_common_vpn_issue },
-                            { title: "Software Application Hotspot", desc: analyticsRootCauses.most_common_software_issue },
-                            { title: "Network Infrastructure Hotspot", desc: analyticsRootCauses.most_common_network_issue },
-                          ].map(({ title, desc }) => (
-                            <div key={title} className="flex justify-between items-start gap-3 py-1.5 border-b border-slate-700/20">
-                              <span className="font-semibold text-slate-400 min-w-[150px]">{title}</span>
-                              <span className="text-slate-300 text-right italic font-mono truncate">{desc}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Actionable recommendations */}
-                      <div className="card p-3.5 border-blue-500/20 bg-blue-950/10 space-y-2">
-                        <span className="section-header text-blue-400 font-bold flex items-center gap-1.5">
-                          <svg className="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zm-1 9a1 1 0 100-2v-3a1 1 0 00-1-1H9a1 1 0 100 2v3a1 1 0 001 1h1z" clipRule="evenodd" />
-                          </svg>
-                          System Recommendations
-                        </span>
-                        <ul className="list-disc list-inside text-xs text-slate-300 space-y-1">
-                          {analyticsRootCauses.recommendations?.map((rec: string, idx: number) => (
-                            <li key={idx} className="leading-relaxed">{rec}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  ) : (
-                    <EmptyState label="Loading root cause diagnostics..." />
-                  )}
-                </section>
               </div>
             )}
           </div>
@@ -2320,12 +1618,161 @@ export default function Home() {
                             <span className="text-amber-500 font-bold">{actionResult.servicenow_id}</span>
                           </div>
                           <div>
-                            <span className="text-slate-500 block mb-0.5">Action Executed</span>
+                            <span className="text-slate-500 block mb-0.5">Recent Actions</span>
                             <span className="text-slate-300 font-semibold">{actionResult.action_type}</span>
                           </div>
                         </div>
                       </div>
                     )}
+
+                    {/* ServiceNow IT Filters Card */}
+                    <div className="card p-3 mb-4 bg-slate-900/40 border border-slate-800/80">
+                      <button
+                        onClick={() => setFiltersExpanded(!filtersExpanded)}
+                        className="w-full flex items-center justify-between text-slate-300 hover:text-slate-100 transition-colors text-xs font-bold uppercase tracking-wider"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Filter className="w-3.5 h-3.5 text-blue-500" />
+                          <span>ServiceNow IT Queue Filters</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {filtersExpanded ? (
+                            <span className="text-[10px] text-slate-500 font-semibold">(Click to Collapse)</span>
+                          ) : (
+                            <span className="text-[10px] text-slate-500 font-semibold">(Click to Expand Filters)</span>
+                          )}
+                          <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${filtersExpanded ? "rotate-180" : ""}`} />
+                        </div>
+                      </button>
+
+                      {filtersExpanded && (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-3 mt-3 border-t border-slate-850 text-xs">
+                          <div>
+                            <label className="block text-slate-500 mb-1 text-[10px] font-bold uppercase">Lifecycle Status</label>
+                            <select
+                              value={filterStatus}
+                              onChange={(e) => setFilterStatus(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-850 p-2 rounded text-slate-300 font-semibold focus:border-blue-500 outline-none"
+                            >
+                              <option value="">(All Statuses)</option>
+                              <option value="OPEN">OPEN</option>
+                              <option value="ASSIGNED">ASSIGNED</option>
+                              <option value="IN_PROGRESS">IN_PROGRESS</option>
+                              <option value="WAITING_FOR_USER">WAITING_FOR_USER</option>
+                              <option value="RESOLVED">RESOLVED</option>
+                              <option value="CLOSED">CLOSED</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-slate-500 mb-1 text-[10px] font-bold uppercase">Incident Severity</label>
+                            <select
+                              value={filterPriority}
+                              onChange={(e) => setFilterPriority(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-850 p-2 rounded text-slate-300 font-semibold focus:border-blue-500 outline-none"
+                            >
+                              <option value="">(All Severities)</option>
+                              <option value="LOW">LOW</option>
+                              <option value="MEDIUM">MEDIUM</option>
+                              <option value="HIGH">HIGH</option>
+                              <option value="CRITICAL">CRITICAL</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-slate-500 mb-1 text-[10px] font-bold uppercase">Operational Category</label>
+                            <select
+                              value={filterCategory}
+                              onChange={(e) => setFilterCategory(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-850 p-2 rounded text-slate-300 font-semibold focus:border-blue-500 outline-none"
+                            >
+                              <option value="">(All Categories)</option>
+                              <option value="VPN">VPN Support</option>
+                              <option value="Outlook">Outlook / Email</option>
+                              <option value="Password">Password Reset</option>
+                              <option value="Software">Software Install</option>
+                              <option value="Hardware">Hardware Repair</option>
+                              <option value="Network">Network / WiFi</option>
+                              <option value="SAP">SAP Support</option>
+                              <option value="General">General IT Help</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-slate-500 mb-1 text-[10px] font-bold uppercase">Assignment Group</label>
+                            <select
+                              value={filterGroup}
+                              onChange={(e) => setFilterGroup(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-850 p-2 rounded text-slate-300 font-semibold focus:border-blue-500 outline-none"
+                            >
+                              <option value="">(All Groups)</option>
+                              <option value="Helpdesk">Helpdesk L1/L2</option>
+                              <option value="Network">Network Ops</option>
+                              <option value="Sysadmin">System Admin</option>
+                              <option value="Security">Security Operations</option>
+                              <option value="Hardware">Hardware Desk</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-slate-500 mb-1 text-[10px] font-bold uppercase">Assigned Engineer</label>
+                            <select
+                              value={filterEngineer}
+                              onChange={(e) => setFilterEngineer(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-850 p-2 rounded text-slate-300 font-semibold focus:border-blue-500 outline-none"
+                            >
+                              <option value="">(All Engineers)</option>
+                              <option value="Robert Chen (NetOps)">Robert Chen (NetOps)</option>
+                              <option value="Emily Watson (Helpdesk L2)">Emily Watson (Helpdesk L2)</option>
+                              <option value="Marcus Aurelius (SysOps)">Marcus Aurelius (SysOps)</option>
+                              <option value="Vesper Lynd (SecOps)">Vesper Lynd (SecOps)</option>
+                              <option value="Dave Grohl (Hardware Desk)">Dave Grohl (Hardware Desk)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-slate-500 mb-1 text-[10px] font-bold uppercase">SLA Target Health</label>
+                            <select
+                              value={filterSla}
+                              onChange={(e) => setFilterSla(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-850 p-2 rounded text-slate-300 font-semibold focus:border-blue-500 outline-none"
+                            >
+                              <option value="">(All SLA Health)</option>
+                              <option value="HEALTHY">HEALTHY</option>
+                              <option value="WARNING">WARNING</option>
+                              <option value="BREACHED">BREACHED</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-slate-500 mb-1 text-[10px] font-bold uppercase">Created Date</label>
+                            <input
+                              type="date"
+                              value={filterCreatedDate}
+                              onChange={(e) => setFilterCreatedDate(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-850 p-2 rounded text-slate-300 font-semibold focus:border-blue-500 outline-none"
+                            />
+                          </div>
+
+                          <div className="flex items-end justify-end">
+                            <button
+                              onClick={() => {
+                                setFilterStatus("");
+                                setFilterPriority("");
+                                setFilterCategory("");
+                                setFilterGroup("");
+                                setFilterEngineer("");
+                                setFilterSla("");
+                                setFilterCreatedDate("");
+                              }}
+                              className="w-full py-2 bg-slate-800 hover:bg-slate-750 font-bold rounded text-slate-300 border border-slate-700/60 transition-colors"
+                            >
+                              Clear All Filters
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
 
                     {/* Main Tickets Section */}
                     <div>
@@ -2379,9 +1826,9 @@ export default function Home() {
                                   </div>
                                   <div className="text-[10px] text-slate-400 font-medium">
                                     Requester: <span className="text-slate-200 font-bold">{
-                                      t.created_by === "employee" ? "Raghvendra Bhati" :
-                                      t.created_by === "manager" ? "Sarah Jenkins" :
-                                      t.created_by === "admin" ? "Alex Rivera" : (t.created_by || "System User")
+                                      t.created_by === "employee" ? "Rahul Sharma" :
+                                      t.created_by === "manager" ? "Priya Verma" :
+                                      t.created_by === "admin" ? "Amit Patel" : (t.created_by || "System User")
                                     }</span>
                                   </div>
                                 </div>
@@ -2512,141 +1959,6 @@ export default function Home() {
                         </div>
                       </div>
                     )}
-                  </div>
-                )}
-
-                {/* ═══════════════════════════════════════════════════════════════ */}
-                {/* SERVICE CATALOG TAB                                            */}
-                {/* ═══════════════════════════════════════════════════════════════ */}
-                {activeRightTab === "service_catalog" && (
-                  <div className="p-6 space-y-6">
-                    <div className="flex justify-between items-center mb-2">
-                      <div>
-                        <h2 className="text-lg font-bold text-slate-100">Enterprise Service Catalog</h2>
-                        <p className="text-xs text-slate-400 font-semibold mt-0.5">Select an IT service from the catalog below to place a request.</p>
-                      </div>
-                    </div>
-
-                    {Object.entries(groupedCatalog).map(([categoryName, items]) => (
-                      <div key={categoryName} className="space-y-3">
-                        <h3 className="text-xs font-bold uppercase tracking-wider text-blue-400 border-b border-slate-800 pb-1.5">{categoryName}</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                          {items.map((item: any) => (
-                            <motion.div
-                              key={item.service_id}
-                              whileHover={{ y: -3, scale: 1.01 }}
-                              onClick={() => {
-                                setRequestCatalogItem(item);
-                                const defaultForm: Record<string, string> = {};
-                                (CATALOG_REQUIRED_SLOTS[item.service_id] || []).forEach(slot => {
-                                  defaultForm[slot] = "";
-                                });
-                                setRequestFormDetails(defaultForm);
-                              }}
-                              className="card p-4 hover:border-blue-500/30 transition-all cursor-pointer flex flex-col justify-between"
-                            >
-                              <div>
-                                <div className="flex items-start justify-between gap-2 mb-2">
-                                  <h4 className="text-sm font-bold text-slate-200">{item.name}</h4>
-                                  <span className="text-[9px] font-mono font-bold bg-slate-800 border border-slate-750 px-2 py-0.5 rounded text-slate-400">{item.service_id}</span>
-                                </div>
-                                <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed mb-4 font-semibold">{item.description}</p>
-                              </div>
-                              <div className="flex justify-between items-center border-t border-slate-850 pt-3 text-[10px] text-slate-500 font-semibold">
-                                <span>Est. Fulfillment: <strong className="text-slate-350">{item.estimated_completion}</strong></span>
-                                {item.approval_required && (
-                                  <span className="text-amber-500 font-bold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">Requires Approval</span>
-                                )}
-                              </div>
-                            </motion.div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* ═══════════════════════════════════════════════════════════════ */}
-                {/* SERVICE REQUESTS TAB                                           */}
-                {/* ═══════════════════════════════════════════════════════════════ */}
-                {activeRightTab === "service_requests" && (
-                  <div className="p-6 space-y-6">
-                    <div className="flex justify-between items-center mb-2">
-                      <div>
-                        <h2 className="text-lg font-bold text-slate-100">Service Requests Log</h2>
-                        <p className="text-xs text-slate-400 font-semibold mt-0.5">Track and manage catalog request workflows.</p>
-                      </div>
-                      <button
-                        onClick={fetchServiceRequests}
-                        className="p-1.5 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-750 transition-colors text-slate-400 hover:text-slate-200 flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        Refresh
-                      </button>
-                    </div>
-
-                    <div className="card p-5">
-                      <SectionHeader title="All Catalog Requests" count={serviceRequests.length} icon={<FileText className="w-4 h-4 text-slate-400" />} />
-                      <div className="enterprise-table-container">
-                        <table className="enterprise-table">
-                          <thead>
-                            <tr>
-                              <th>Request ID</th>
-                              <th>Service Name</th>
-                              <th>Requested By</th>
-                              <th>Stage</th>
-                              <th>Status</th>
-                              <th>Created</th>
-                              <th>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {serviceRequests.length === 0 ? (
-                              <tr>
-                                <td colSpan={7} className="text-center py-6 text-slate-500 italic font-semibold">No service requests recorded</td>
-                              </tr>
-                            ) : (
-                              serviceRequests.slice().reverse().map((req: any) => (
-                                <tr key={req.request_id} className="hover:bg-slate-800/40 transition-colors">
-                                  <td className="font-mono font-bold text-slate-300">{req.request_id}</td>
-                                  <td className="font-semibold text-slate-200">{req.service_name}</td>
-                                  <td className="font-mono text-slate-400">@{req.requested_by}</td>
-                                  <td className="text-slate-400 text-xs font-semibold">{req.stage}</td>
-                                  <td>
-                                    <span className={statusBadgeClass(req.status)}>{req.status}</span>
-                                  </td>
-                                  <td className="font-mono text-slate-500 text-xs">
-                                    {fmtDate(req.created_at)} {fmtTime(req.created_at)}
-                                  </td>
-                                  <td>
-                                    <button
-                                      onClick={async () => {
-                                        try {
-                                          const res = await authFetch(`${API_BASE_URL}/service-requests/${req.request_id}/details`);
-                                          if (res.ok) {
-                                            setSelectedServiceRequest(await res.json());
-                                            setServiceRequestDrawerOpen(true);
-                                            setWorkNotesText("");
-                                          } else {
-                                            const err = await res.json();
-                                            alert(err.detail || "Failed to load request details.");
-                                          }
-                                        } catch (e: any) {
-                                          alert(e.message || "An error occurred.");
-                                        }
-                                      }}
-                                      className="px-2.5 py-1 rounded bg-slate-850 hover:bg-slate-750 border border-slate-750 text-[10px] font-bold text-blue-400 transition-colors cursor-pointer"
-                                    >
-                                      Details
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
                   </div>
                 )}
 
@@ -3109,55 +2421,6 @@ export default function Home() {
                               </thead>
                               <tbody>
                                 {systemStatus.slowest_apis.map((api: any, idx: number) => (
-                                  <tr key={idx}>
-                                    <td className="font-mono text-xs font-bold text-indigo-400 w-24">{api.method}</td>
-                                    <td className="font-mono text-xs text-slate-350">{api.path}</td>
-                                    <td className="font-mono text-xs text-rose-400 font-bold w-32">{api.duration}s</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      )}
-                    </section>
-
-                    {/* Real-time Observability Metrics Section */}
-                    <section className="space-y-4">
-                      <SectionHeader title="Real-Time Observability Metrics" icon={<TrendingUp className="w-4 h-4 text-indigo-400" />} />
-                      
-                      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-                        {[
-                          { label: "Throughput (RPM)", val: systemStatus?.rpm ?? 0, desc: "Total HTTP requests in the last 60 seconds", color: "text-blue-400 border-blue-500/20 bg-blue-950/5" },
-                          { label: "Error Rate", val: `${systemStatus?.error_rate ?? 0}%`, desc: "Percentage of failed requests in the last minute", color: (systemStatus?.error_rate > 5 ? "text-rose-400 border-rose-500/20 bg-rose-950/5" : "text-emerald-450 border-emerald-500/20 bg-emerald-950/5") },
-                          { label: "Avg AI Latency", val: systemStatus?.average_ai_latency ? `${systemStatus.average_ai_latency.toFixed(2)}s` : "N/A", desc: "Average response time for Gemini LLM API calls", color: "text-indigo-400 border-indigo-500/20 bg-indigo-950/5" },
-                          { label: "Tool Success", val: `${systemStatus?.tool_success_rate ?? 100}%`, desc: "Success rate of agent tool actions in AD, SNOW, Graph", color: "text-cyan-400 border-cyan-500/20 bg-cyan-950/5" },
-                          { label: "Active Sessions", val: systemStatus?.active_sessions ?? 0, desc: "Unique active agent sessions in the last 24 hours", color: "text-purple-400 border-purple-500/20 bg-purple-950/5" },
-                          { label: "Notification Queue", val: systemStatus?.notification_backlog ?? 0, desc: "Pending and queued notifications in backlog", color: "text-amber-400 border-amber-500/20 bg-amber-950/5" }
-                        ].map((metric, i) => (
-                          <div key={i} className={`card p-4 flex flex-col justify-between border rounded-xl hover:border-slate-650 transition-all ${metric.color}`}>
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">{metric.label}</span>
-                            <span className="text-2xl font-bold font-mono my-2 block">{metric.val}</span>
-                            <span className="text-[9px] text-slate-500 leading-tight">{metric.desc}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Slowest API Latencies List */}
-                      {systemStatus?.slowest_apis && systemStatus.slowest_apis.length > 0 && (
-                        <div className="card p-4 mt-4">
-                          <SectionHeader title="Slowest API Latencies (Top 5)" icon={<Clock className="w-4 h-4 text-rose-400" />} />
-                          <div className="enterprise-table-container max-h-52">
-                            <table className="enterprise-table">
-                              <thead>
-                                <tr>
-                                  <th>Method</th>
-                                  <th>Endpoint</th>
-                                  <th>Max Latency</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {systemStatus.slowest_apis.map((api, idx) => (
                                   <tr key={idx}>
                                     <td className="font-mono text-xs font-bold text-indigo-400 w-24">{api.method}</td>
                                     <td className="font-mono text-xs text-slate-350">{api.path}</td>
@@ -3965,263 +3228,6 @@ export default function Home() {
                       )}
                     </section>
 
-                    {/* ═══════════════════════════════════════════════════════════════ */}
-                    {/* SERVICENOW ITSM OPERATIONAL METRICS                           */}
-                    {/* ═══════════════════════════════════════════════════════════════ */}
-                    <section className="space-y-6 pt-6 border-t border-slate-800/80">
-                      <SectionHeader title="ServiceNow ITSM Operational Metrics" icon={<Activity className="w-4 h-4 text-blue-500" />} />
-                      
-                      {/* 3 columns: MTTR/MTTResp/SLA Rate, Aging Buckets, and CSAT */}
-                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        
-                        {/* Column 1: Core KPIs */}
-                        <div className="card p-5 space-y-4">
-                          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Resolution & Response Latency</h3>
-                          
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800/80">
-                              <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Mean Time to Resolve (MTTR)</span>
-                              <span className="text-2xl font-extrabold font-mono text-blue-400 block mt-1">{execMetrics?.avg_mttr_hours ?? 0}h</span>
-                              <span className="text-[9px] text-slate-500 block mt-0.5">Resolved/Closed tickets mean</span>
-                            </div>
-                            
-                            <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800/80">
-                              <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Mean Time to Respond (MTTResp)</span>
-                              <span className="text-2xl font-extrabold font-mono text-indigo-400 block mt-1">{execMetrics?.avg_mttresp_mins ?? 0}m</span>
-                              <span className="text-[9px] text-slate-500 block mt-0.5">First Assignment history mean</span>
-                            </div>
-
-                            <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800/80">
-                              <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">SLA Compliance Rate</span>
-                              <span className="text-2xl font-extrabold font-mono text-emerald-400 block mt-1">{execMetrics?.sla_compliance_rate ?? 100}%</span>
-                              <span className="text-[9px] text-slate-500 block mt-0.5">{execMetrics?.total_breached_slas ?? 0} breached targets</span>
-                            </div>
-
-                            <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800/80">
-                              <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">CSAT Satisfaction</span>
-                              <span className="text-2xl font-extrabold font-mono text-amber-400 block mt-1">{execMetrics?.avg_csat ?? 0}/5</span>
-                              <span className="text-[9px] text-slate-500 block mt-0.5">{execMetrics?.recommendation_rate ?? 100}% recommend ({execMetrics?.total_csat_submissions ?? 0} surveys)</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Column 2: Workload Aging Buckets */}
-                        <div className="card p-5 flex flex-col justify-between">
-                          <div>
-                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Active Workload Aging Breakdown</h3>
-                            <p className="text-[11px] text-slate-500 mb-4">Distribution of open/active incidents based on execution duration since ticket creation.</p>
-                            <div className="space-y-2.5">
-                              {Object.entries(execMetrics?.aging_buckets || { "0-4h": 0, "4-8h": 0, "8-24h": 0, "1-3d": 0, "3-7d": 0, "7d+": 0 }).map(([bucket, count]: any) => {
-                                const maxVal = Math.max(...(Object.values(execMetrics?.aging_buckets || { "0-4h": 1 }) as number[])) || 1;
-                                const pct = Math.max(5, (count / maxVal) * 100);
-                                
-                                // Choose color based on age severity
-                                let barColor = "bg-blue-500";
-                                if (bucket === "7d+") barColor = "bg-rose-500 shadow-lg shadow-rose-500/10";
-                                else if (bucket === "3-7d" || bucket === "1-3d") barColor = "bg-amber-500 shadow-lg shadow-amber-500/10";
-                                
-                                return (
-                                  <div key={bucket} className="flex items-center justify-between gap-3 text-xs">
-                                    <span className="w-10 font-mono font-bold text-slate-400">{bucket}</span>
-                                    <div className="flex-1 bg-slate-900 rounded-full h-2 overflow-hidden border border-slate-800/80">
-                                      <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
-                                    </div>
-                                    <span className="w-6 font-mono text-right font-bold text-slate-200">{count}</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Column 3: Summary details / description */}
-                        <div className="card p-5 flex flex-col justify-between">
-                          <div>
-                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">ServiceNow Process Alignment</h3>
-                            <p className="text-xs text-slate-450 leading-relaxed space-y-2">
-                              This panel displays real-time operational efficiency metrics matching ServiceNow's ITSM standard KPIs. 
-                              By tracking Mean Time to Resolve (MTTR), SLA compliance risk, and aging backlogs, IT management can preemptively deploy resources to critical hotspots.
-                            </p>
-                            <div className="mt-4 p-3 bg-blue-500/5 rounded-lg border border-blue-500/15 flex items-start gap-2.5">
-                              <Sparkles className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
-                              <p className="text-[11px] text-blue-200/80 leading-relaxed">
-                                AI-driven categorization and similarity clustering automatically flag incoming duplicates to optimize response overhead and MTTR curves.
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-[10px] text-slate-500 italic mt-4 text-right">
-                            Auto-close resolved tickets configured for 5 days.
-                          </div>
-                        </div>
-
-                      </div>
-
-                      {/* Incident Clusters Section */}
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div className="card p-5 space-y-4">
-                          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                            <div>
-                              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">AI-Clustered Incident Groups</h3>
-                              <p className="text-[11px] text-slate-500 mt-0.5">Aggregating similar incidents into recurring clusters to identify root problems.</p>
-                            </div>
-                            <span className="badge badge-waiting">{incidentClusters?.length || 0} active clusters</span>
-                          </div>
-
-                          <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
-                            {incidentClusters && incidentClusters.length > 0 ? (
-                              incidentClusters.map((cluster) => {
-                                const avgMttrHr = cluster.avg_mttr_sec ? (cluster.avg_mttr_sec / 3600).toFixed(1) : "0.0";
-                                return (
-                                  <div key={cluster.id} className="p-4 bg-slate-900/40 border border-slate-800 rounded-xl space-y-3 hover:border-slate-700/80 transition-all">
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div>
-                                        <h4 className="text-xs font-bold text-blue-400">{cluster.name}</h4>
-                                        <p className="text-[10px] text-slate-500 font-mono mt-0.5">Created at: {fmtDate(cluster.created_at)}</p>
-                                      </div>
-                                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                                        <span className="badge badge-open">{cluster.open_count} open</span>
-                                        <span className="badge badge-resolved">{cluster.resolved_count} resolved</span>
-                                      </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-3 gap-2 py-1.5 border-t border-b border-slate-800/60 text-[10.5px]">
-                                      <div>
-                                        <span className="text-slate-500 block uppercase tracking-wider">Total Incidents</span>
-                                        <span className="font-mono font-bold text-slate-350">{cluster.total_count}</span>
-                                      </div>
-                                      <div>
-                                        <span className="text-slate-500 block uppercase tracking-wider">Average MTTR</span>
-                                        <span className="font-mono font-bold text-slate-350">{avgMttrHr} hrs</span>
-                                      </div>
-                                      <div>
-                                        <span className="text-slate-500 block uppercase tracking-wider">Affected Users</span>
-                                        <span className="font-mono font-bold text-slate-350 truncate block" title={cluster.affected_users?.join(", ")}>
-                                          {cluster.affected_users?.length || 0} users
-                                        </span>
-                                      </div>
-                                    </div>
-
-                                    {cluster.affected_users && cluster.affected_users.length > 0 && (
-                                      <div className="flex flex-wrap gap-1 items-center">
-                                        <span className="text-[9px] text-slate-500 uppercase tracking-wider mr-1">Users:</span>
-                                        {cluster.affected_users.map((u: string) => (
-                                          <span key={u} className="text-[9.5px] px-1.5 py-0.5 bg-slate-800 rounded text-slate-400 font-mono">{u}</span>
-                                        ))}
-                                      </div>
-                                    )}
-
-                                    {/* Editable known fix */}
-                                    <div className="space-y-1.5 pt-1">
-                                      <span className="text-[10px] font-bold text-slate-450 uppercase tracking-wider block">Known Resolution Fix</span>
-                                      {editingClusterId === cluster.id ? (
-                                        <div className="flex gap-2">
-                                          <textarea
-                                            className="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-300 focus:outline-none focus:border-blue-500/80 resize-none min-h-[48px]"
-                                            value={editingClusterFix}
-                                            onChange={(e) => setEditingClusterFix(e.target.value)}
-                                            placeholder="Define steps to resolve incidents in this cluster..."
-                                          />
-                                          <div className="flex flex-col gap-1.5 justify-end">
-                                            <button
-                                              onClick={() => handleUpdateClusterFix(cluster.id, editingClusterFix)}
-                                              className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-md text-[10px] font-bold tracking-wider uppercase transition-colors"
-                                            >
-                                              Save
-                                            </button>
-                                            <button
-                                              onClick={() => setEditingClusterId(null)}
-                                              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-md text-[10px] font-bold tracking-wider uppercase transition-colors"
-                                            >
-                                              Cancel
-                                            </button>
-                                          </div>
-                                        </div>
-                                      ) : (
-                                        <div className="flex items-start justify-between gap-3 p-2 bg-slate-950/50 rounded-lg border border-slate-900 text-xs">
-                                          <span className="text-slate-400 italic">
-                                            {cluster.known_fix ? cluster.known_fix : "No resolution defined yet."}
-                                          </span>
-                                          <button
-                                            onClick={() => {
-                                              setEditingClusterId(cluster.id);
-                                              setEditingClusterFix(cluster.known_fix || "");
-                                            }}
-                                            className="text-[10px] font-bold text-blue-400 hover:text-blue-300 uppercase tracking-wider flex-shrink-0"
-                                          >
-                                            Edit Fix
-                                          </button>
-                                        </div>
-                                      )}
-                                    </div>
-
-                                  </div>
-                                );
-                              })
-                            ) : (
-                              <EmptyState label="No incident clusters detected yet." />
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Gemini-Generated Knowledge Drafts Section */}
-                        <div className="card p-5 space-y-4">
-                          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                            <div>
-                              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Gemini-Generated Knowledge Drafts</h3>
-                              <p className="text-[11px] text-slate-500 mt-0.5">Self-compiling knowledge base drafts generated automatically upon ticket resolution.</p>
-                            </div>
-                            <span className="badge badge-resolved">{kbDrafts?.length || 0} drafts available</span>
-                          </div>
-
-                          <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
-                            {kbDrafts && kbDrafts.length > 0 ? (
-                              kbDrafts.map((draft) => (
-                                <div key={draft.id} className="p-4 bg-slate-900/40 border border-slate-800 rounded-xl space-y-2.5 hover:border-slate-700/80 transition-all">
-                                  <div className="flex items-start justify-between gap-2">
-                                    <h4 className="text-xs font-bold text-slate-200 leading-snug">{draft.title}</h4>
-                                    <button
-                                      onClick={() => setSelectedTicketId(draft.ticket_id)}
-                                      className="font-mono text-[10px] text-blue-400 hover:text-blue-300 font-bold flex-shrink-0 hover:underline"
-                                    >
-                                      {draft.ticket_id}
-                                    </button>
-                                  </div>
-
-                                  <div className="space-y-2 text-[11px]">
-                                    <div>
-                                      <span className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block">Environment</span>
-                                      <span className="text-slate-350">{draft.environment || "Not specified"}</span>
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                      <div>
-                                        <span className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block">Symptom</span>
-                                        <span className="text-slate-350 line-clamp-2" title={draft.symptoms}>{draft.symptoms || "Not documented"}</span>
-                                      </div>
-                                      <div>
-                                        <span className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block">Root Cause</span>
-                                        <span className="text-slate-350 line-clamp-2" title={draft.root_cause}>{draft.root_cause || "Not documented"}</span>
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <span className="text-[9.5px] font-bold text-emerald-500 uppercase tracking-wider block">Proposed Resolution Fix</span>
-                                      <span className="text-slate-300 font-semibold bg-emerald-950/20 p-2 border border-emerald-950/50 rounded-lg block mt-0.5">
-                                        {draft.resolution || "No resolution details."}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="text-[9px] text-slate-500 text-right">
-                                    Compiled: {fmtDate(draft.created_at)}
-                                  </div>
-                                </div>
-                              ))
-                            ) : (
-                              <EmptyState label="No knowledge base drafts compiled yet." />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </section>
-
                   </div>
                 )}
               </motion.div>
@@ -4324,135 +3330,6 @@ export default function Home() {
                           {/* Tab: Info (Basic, Requester, Assignment, SLA, Timestamps) */}
                           {activeDrawerTab === "info" && (
                             <div className="space-y-6">
-                              {/* Reopened Banner */}
-                              {selectedTicketDetails.ticket.reopen_count > 0 && (
-                                <div className="bg-rose-950/20 border border-rose-500/25 rounded-xl p-4 text-xs space-y-2">
-                                  <div className="flex items-center gap-2 text-rose-400 font-bold">
-                                    <AlertTriangle className="w-4 h-4 animate-pulse" />
-                                    <span>Incident Reopened ({selectedTicketDetails.ticket.reopen_count} times)</span>
-                                  </div>
-                                  <p className="text-slate-300">
-                                    Last reopened by <strong>@{selectedTicketDetails.ticket.reopened_by}</strong>.
-                                  </p>
-                                  {selectedTicketDetails.ticket.reopened_at && (
-                                    <div className="text-[10px] text-slate-500 font-mono">
-                                      Reopened on: {fmtDate(selectedTicketDetails.ticket.reopened_at)} {fmtTime(selectedTicketDetails.ticket.reopened_at)}
-                                    </div>
-                                  )}
-                                  {selectedTicketDetails.ticket.previous_resolution && (
-                                    <div className="bg-slate-900/60 p-2.5 rounded border border-slate-800/80">
-                                      <span className="text-[10px] text-slate-500 block uppercase font-bold mb-1">Previous Resolution Context</span>
-                                      <p className="text-slate-350">{selectedTicketDetails.ticket.previous_resolution}</p>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* CSAT Survey Banner */}
-                              {selectedTicketDetails.ticket.status === "CLOSED" && user?.role === "EMPLOYEE" && !csatSubmittedList[selectedTicketDetails.ticket.ticket_id] && (
-                                <div className="card p-4 space-y-4 border-l-2 border-l-emerald-500 bg-emerald-950/5">
-                                  <SectionHeader title="Help Us Improve: CSAT Feedback Survey" icon={<Sparkles className="w-4 h-4 text-emerald-400 animate-pulse" />} />
-                                  <div className="space-y-3 text-xs">
-                                    <div>
-                                      <label className="block text-slate-400 mb-1">Overall Satisfaction Rating (1-5)</label>
-                                      <div className="flex gap-2">
-                                        {[1, 2, 3, 4, 5].map((val) => (
-                                          <button
-                                            key={val}
-                                            onClick={() => setCsatRating(val)}
-                                            className={`w-8 h-8 rounded-lg font-bold border transition-all cursor-pointer ${
-                                              csatRating === val
-                                                ? "bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-500/10"
-                                                : "bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200"
-                                            }`}
-                                          >
-                                            {val}
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-4">
-                                      <div>
-                                        <label className="block text-slate-500 mb-1">Response Time (1-5)</label>
-                                        <select
-                                          value={csatResponseRating}
-                                          onChange={(e) => setCsatResponseRating(Number(e.target.value))}
-                                          className="w-full bg-slate-900 border border-slate-800 rounded p-1 text-slate-300"
-                                        >
-                                          {[1, 2, 3, 4, 5].map(v => <option key={v} value={v}>{v}</option>)}
-                                        </select>
-                                      </div>
-                                      <div>
-                                        <label className="block text-slate-500 mb-1">Resolution Quality (1-5)</label>
-                                        <select
-                                          value={csatQualityRating}
-                                          onChange={(e) => setCsatQualityRating(Number(e.target.value))}
-                                          className="w-full bg-slate-900 border border-slate-800 rounded p-1 text-slate-300"
-                                        >
-                                          {[1, 2, 3, 4, 5].map(v => <option key={v} value={v}>{v}</option>)}
-                                        </select>
-                                      </div>
-                                    </div>
-
-                                    <div>
-                                      <label className="block text-slate-400 mb-1">Written Feedback (Optional)</label>
-                                      <textarea
-                                        rows={2}
-                                        value={csatFeedback}
-                                        onChange={(e) => setCsatFeedback(e.target.value)}
-                                        placeholder="Tell us what went well or how we can improve..."
-                                        className="w-full bg-slate-900 border border-slate-800 rounded p-2 text-slate-300"
-                                      />
-                                    </div>
-
-                                    <label className="flex items-center gap-2 text-slate-400 select-none cursor-pointer">
-                                      <input
-                                        type="checkbox"
-                                        checked={csatRecommend}
-                                        onChange={(e) => setCsatRecommend(e.target.checked)}
-                                        className="rounded bg-slate-900 border-slate-800 text-emerald-600 focus:ring-0"
-                                      />
-                                      I would recommend this support service to colleagues
-                                    </label>
-
-                                    <button
-                                      onClick={handleCSATSubmit}
-                                      disabled={isSubmittingCSAT}
-                                      className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition-colors cursor-pointer"
-                                    >
-                                      {isSubmittingCSAT ? "Submitting..." : "Submit CSAT Feedback"}
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Reopen Action Panel */}
-                              {(selectedTicketDetails.ticket.status === "RESOLVED" || selectedTicketDetails.ticket.status === "CLOSED") && (
-                                <div className="card p-4 space-y-4 border-l-2 border-l-rose-500 bg-rose-950/5">
-                                  <SectionHeader title="Reopen support incident" icon={<RefreshCw className="w-4 h-4 text-rose-400" />} />
-                                  <div className="space-y-2 text-xs">
-                                    <p className="text-slate-400">
-                                      If this issue is not fully resolved or has reoccurred, please specify a reason below to transition it back to active troubleshooting.
-                                    </p>
-                                    <textarea
-                                      rows={2}
-                                      value={reopenReasonText}
-                                      onChange={(e) => setReopenReasonText(e.target.value)}
-                                      placeholder="Reason for reopening this ticket..."
-                                      className="w-full bg-slate-900 border border-slate-800 rounded p-2 text-slate-300 placeholder-slate-650 font-semibold"
-                                    />
-                                    <button
-                                      onClick={handleReopenTicket}
-                                      disabled={isReopening || !reopenReasonText.trim()}
-                                      className="w-full py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg transition-colors cursor-pointer"
-                                    >
-                                      {isReopening ? "Reopening..." : "Reopen Ticket"}
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-
                               {/* Status Summary Banner */}
                               <div className="bg-[#111827]/40 border border-slate-800/60 rounded-xl p-4 flex items-center justify-between">
                                 <div>
@@ -4522,6 +3399,14 @@ export default function Home() {
                                     <span className="text-slate-500 block mb-1">RBAC Role Privilege</span>
                                     <span className="badge badge-assigned text-[10px]">{selectedTicketDetails.requester.role}</span>
                                   </div>
+                                  <div>
+                                    <span className="text-slate-500 block mb-1">Workstation Device</span>
+                                    <span className="text-slate-300 font-semibold">{selectedTicketDetails.requester.device}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-500 block mb-1">Operating System</span>
+                                    <span className="text-slate-300 font-semibold">{selectedTicketDetails.requester.operating_system}</span>
+                                  </div>
                                 </div>
                               </div>
 
@@ -4546,85 +3431,6 @@ export default function Home() {
                                     <span className="text-slate-300 font-mono">{selectedTicketDetails.assignment.queue}</span>
                                   </div>
                                 </div>
-
-                                {user?.role !== "EMPLOYEE" && (
-                                  <div className="pt-3 border-t border-slate-800/80 space-y-3 text-xs">
-                                    <span className="font-bold text-slate-400 block mb-1 uppercase tracking-wider text-[10px]">Reassign Incident Technician</span>
-                                    <div className="grid grid-cols-2 gap-2">
-                                      <div>
-                                        <label className="block text-slate-500 mb-1">Support Group</label>
-                                        <select
-                                          value={assignGroup}
-                                          onChange={(e) => setAssignGroup(e.target.value)}
-                                          className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-slate-300"
-                                        >
-                                          <option value="">(Select Group)</option>
-                                          <option value="Network Team">Network Team</option>
-                                          <option value="Messaging Team">Messaging Team</option>
-                                          <option value="Desktop Support Team">Desktop Support Team</option>
-                                          <option value="SAP Support Team">SAP Support Team</option>
-                                          <option value="IT Support Team">IT Support Team</option>
-                                        </select>
-                                      </div>
-                                      <div>
-                                        <label className="block text-slate-500 mb-1">Support Engineer</label>
-                                        <select
-                                          value={assignEngineer}
-                                          onChange={(e) => setAssignEngineer(e.target.value)}
-                                          className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-slate-300"
-                                        >
-                                          <option value="">(Select Engineer)</option>
-                                          <option value="Robert Chen (NetOps)">Robert Chen (NetOps)</option>
-                                          <option value="Emily Watson (Helpdesk L2)">Emily Watson (Helpdesk L2)</option>
-                                          <option value="Marcus Aurelius (SysOps)">Marcus Aurelius (SysOps)</option>
-                                          <option value="Vesper Lynd (SecOps)">Vesper Lynd (SecOps)</option>
-                                          <option value="Dave Grohl (Hardware Desk)">Dave Grohl (Hardware Desk)</option>
-                                        </select>
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <label className="block text-slate-500 mb-1">Reassignment Reason</label>
-                                      <input
-                                        type="text"
-                                        value={assignReason}
-                                        onChange={(e) => setAssignReason(e.target.value)}
-                                        placeholder="Reason for changing support tier..."
-                                        className="w-full bg-slate-900 border border-slate-800 rounded p-2 text-slate-300 font-semibold placeholder-slate-700"
-                                      />
-                                    </div>
-                                    <button
-                                      onClick={handleAssignTicket}
-                                      disabled={isUpdatingAssignment || !assignEngineer}
-                                      className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-lg transition-colors cursor-pointer"
-                                    >
-                                      {isUpdatingAssignment ? "Reassigning..." : "Apply Reassignment"}
-                                    </button>
-                                  </div>
-                                )}
-
-                                {assignmentHistory.length > 0 && (
-                                  <div className="pt-3 border-t border-slate-800/80 space-y-2 text-xs">
-                                    <span className="font-bold text-slate-450 block mb-1 uppercase tracking-wider text-[10px]">Assignment Audit Trail</span>
-                                    <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
-                                      {assignmentHistory.map((h: any) => (
-                                        <div key={h.id} className="bg-slate-900/60 p-2 rounded border border-slate-800/85">
-                                          <div className="flex justify-between text-[9px] text-slate-500 font-mono mb-1">
-                                            <span>Assigned by: @{h.assigned_by}</span>
-                                            <span>{fmtDate(h.assigned_time)} {fmtTime(h.assigned_time)}</span>
-                                          </div>
-                                          <p className="text-slate-300">
-                                            Moved to group <strong className="text-blue-400">{h.assigned_group}</strong> and engineer <strong className="text-slate-200">{h.assigned_engineer}</strong>.
-                                          </p>
-                                          {h.reason && (
-                                            <p className="text-[10px] text-slate-400 italic mt-0.5">
-                                              Reason: {h.reason}
-                                            </p>
-                                          )}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
                               </div>
 
                               {/* Time & SLA Metadata */}
@@ -4721,24 +3527,35 @@ export default function Home() {
                               </div>
 
                               <div className="card p-4 space-y-4">
-                                <div>
-                                  <span className="text-slate-500 text-xs block mb-1 font-bold">AI Diagnoses Summary</span>
-                                  <p className="text-xs text-slate-350 leading-relaxed font-semibold bg-slate-900/40 p-3 rounded-lg border border-slate-800/40">
-                                    {selectedTicketDetails.ai_diagnosis.summary}
-                                  </p>
+                                <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-850 space-y-3">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block border-b border-slate-800 pb-1.5">
+                                    ServiceNow Incident Summary Card
+                                  </span>
+                                  <div className="grid grid-cols-2 gap-3 text-xs">
+                                    <div>
+                                      <span className="text-slate-500 block text-[10px]">Identified Issue</span>
+                                      <span className="text-slate-200 font-bold">{selectedTicketDetails.ai_diagnosis.root_cause || "Unresolved"}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-500 block text-[10px]">AI Confidence Rating</span>
+                                      <span className="text-blue-400 font-bold font-mono">{selectedTicketDetails.ai_diagnosis.confidence_score}%</span>
+                                    </div>
+                                  </div>
+                                  <div className="text-xs">
+                                    <span className="text-slate-500 block text-[10px] mb-1">Recommended Next Step</span>
+                                    <p className="text-slate-300 leading-relaxed font-semibold bg-slate-900/40 p-2 rounded border border-slate-800/40">
+                                      {selectedTicketDetails.ai_diagnosis.summary || "Await engineer review."}
+                                    </p>
+                                  </div>
                                 </div>
-                                <div>
-                                  <span className="text-slate-500 text-xs block mb-1 font-bold">Determined Root Cause</span>
-                                  <p className="text-xs text-slate-350 leading-relaxed bg-slate-900/40 p-3 rounded-lg border border-slate-800/40 border-l-2 border-l-rose-500">
-                                    {selectedTicketDetails.ai_diagnosis.root_cause}
-                                  </p>
-                                </div>
+
                                 <div>
                                   <span className="text-slate-500 text-xs block mb-1 font-bold">Troubleshooting Actions Taken</span>
                                   <p className="text-xs text-slate-355 leading-relaxed font-mono whitespace-pre-wrap bg-slate-900/40 p-3 rounded-lg border border-slate-800/40">
-                                    {selectedTicketDetails.ai_diagnosis.troubleshooting_steps}
+                                    {selectedTicketDetails.ai_diagnosis.troubleshooting_steps || "None recorded."}
                                   </p>
                                 </div>
+
                                 <div>
                                   <span className="text-slate-500 text-xs block mb-1 font-bold">Automated Integrations Executed</span>
                                   {selectedTicketDetails.ai_diagnosis.tools_executed.length === 0 ? (
@@ -4753,6 +3570,17 @@ export default function Home() {
                                     </div>
                                   )}
                                 </div>
+
+                                <div>
+                                  <span className="text-slate-500 text-xs block mb-1 font-bold">Gemini Cognitive Diagnostics Report</span>
+                                  {selectedTicketDetails.ai_diagnosis.engineer_summary ? (
+                                    <div className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-lg border border-slate-850 max-h-60 overflow-y-auto whitespace-pre-wrap font-mono">
+                                      {selectedTicketDetails.ai_diagnosis.engineer_summary}
+                                    </div>
+                                  ) : (
+                                    <p className="text-xs text-slate-500 italic">No cognitive diagnostics report generated yet.</p>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           )}
@@ -4763,7 +3591,7 @@ export default function Home() {
                               <div>
                                 <SectionHeader title="Linked Requests & Task execution" icon={<ArrowUpRight className="w-4 h-4 text-slate-400" />} />
                                 {selectedTicketDetails.related.requests.length === 0 ? (
-                                  <EmptyState label="No related requests." />
+                                  <EmptyState label="No related incidents found." />
                                 ) : (
                                   <div className="grid grid-cols-1 gap-3">
                                     {selectedTicketDetails.related.requests.map((req: any, idx: number) => (
@@ -4785,7 +3613,7 @@ export default function Home() {
                               <div>
                                 <SectionHeader title="Associated Workflow Approvals" icon={<CheckCircle2 className="w-4 h-4 text-slate-400" />} />
                                 {selectedTicketDetails.related.approvals.length === 0 ? (
-                                  <EmptyState label="No approvals available." />
+                                  <EmptyState label="No approvals pending." />
                                 ) : (
                                   <div className="grid grid-cols-1 gap-3">
                                     {selectedTicketDetails.related.approvals.map((app: any, idx: number) => (
@@ -4825,7 +3653,7 @@ export default function Home() {
                                       : "text-slate-400 hover:text-slate-200"
                                   }`}
                                 >
-                                  ITSM Comments ({ticketComments.length})
+                                  ITSM Comments & Notes
                                 </button>
                               </div>
 
@@ -4857,31 +3685,59 @@ export default function Home() {
                                 </>
                               ) : (
                                 <>
-                                  <SectionHeader title="ServiceNow Ticket Comments & Work Notes" icon={<FileText className="w-4 h-4 text-slate-400" />} />
+                                  <div className="flex border-b border-slate-800/80 mb-3 gap-2">
+                                    <button
+                                      onClick={() => setCommentsSubTab("comments")}
+                                      className={`px-3 py-1 text-xs font-semibold border-b-2 transition-all ${
+                                        commentsSubTab === "comments"
+                                          ? "border-b-blue-500 text-blue-400 font-bold"
+                                          : "border-b-transparent text-slate-400 hover:text-slate-300"
+                                      }`}
+                                    >
+                                      Customer Comments ({(selectedTicketDetails.comments || []).length})
+                                    </button>
+                                    {user?.role !== "EMPLOYEE" && (
+                                      <button
+                                        onClick={() => setCommentsSubTab("notes")}
+                                        className={`px-3 py-1 text-xs font-semibold border-b-2 transition-all ${
+                                          commentsSubTab === "notes"
+                                            ? "border-b-amber-500 text-amber-400 font-bold"
+                                            : "border-b-transparent text-slate-400 hover:text-slate-300"
+                                        }`}
+                                      >
+                                        Internal Notes ({(selectedTicketDetails.internal_notes || []).length})
+                                      </button>
+                                    )}
+                                  </div>
+
                                   <div className="space-y-4 max-h-[350px] overflow-y-auto pr-1">
-                                    {ticketComments.length === 0 ? (
-                                      <EmptyState label="No comments or work notes posted yet." />
-                                    ) : (
-                                      ticketComments.map((c: any) => (
+                                    {(() => {
+                                      const list = commentsSubTab === "notes"
+                                        ? (selectedTicketDetails.internal_notes || [])
+                                        : (selectedTicketDetails.comments || []);
+                                      if (list.length === 0) {
+                                        return <EmptyState label={commentsSubTab === "notes" ? "No internal notes recorded yet." : "No customer comments yet."} />;
+                                      }
+                                      return list.map((c: any) => (
                                         <div
                                           key={c.id}
                                           className={`flex flex-col p-3 rounded-xl border ${
                                             c.is_internal
                                               ? "bg-amber-950/20 border-amber-500/20 mr-auto rounded-tl-none max-w-[85%] border-l-2 border-l-amber-500"
-                                              : "bg-slate-900 border-slate-800 ml-auto items-end rounded-tr-none max-w-[85%]"
+                                              : "bg-slate-900/60 border-slate-800 ml-auto items-end rounded-tr-none max-w-[85%]"
                                           }`}
                                         >
                                           <div className="flex items-center gap-1.5 mb-1.5">
                                             {c.is_internal && <Lock className="w-3 h-3 text-amber-400" />}
                                             <span className={`text-[9px] font-bold uppercase tracking-wider ${c.is_internal ? "text-amber-400" : "text-blue-400"}`}>
-                                              @{c.author} {c.is_internal ? "(Internal Work Note)" : "(Customer Comment)"}
+                                              @{c.author} {c.is_internal ? "(Internal Note)" : "(Customer Comment)"}
                                             </span>
                                           </div>
                                           <p className="text-xs text-slate-250 whitespace-pre-wrap leading-relaxed font-semibold">{c.text}</p>
                                           <span className="text-[8px] text-slate-500 block mt-1.5 font-mono">{fmtDate(c.created_at)} {fmtTime(c.created_at)}</span>
                                         </div>
-                                      ))
-                                    )}
+                                      ));
+                                    })()}
                                   </div>
 
                                   {/* Add Comment input form */}
@@ -4890,24 +3746,18 @@ export default function Home() {
                                       rows={2}
                                       value={commentText}
                                       onChange={(e) => setCommentText(e.target.value)}
-                                      placeholder="Type a new comment or work note..."
-                                      className="w-full text-xs bg-slate-900 border border-slate-800 p-2.5 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-200 placeholder-slate-600 font-semibold"
+                                      placeholder={commentsSubTab === "notes" ? "Type a confidential internal work note..." : "Type a reply to the customer..."}
+                                      className="w-full text-xs bg-slate-900 border border-slate-800 p-2.5 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-200 placeholder-slate-600 font-semibold resize-none"
                                     />
                                     <div className="flex items-center justify-between">
-                                      {user?.role !== "EMPLOYEE" ? (
-                                        <label className="flex items-center gap-2 text-xs text-slate-450 select-none cursor-pointer font-bold">
-                                          <input
-                                            type="checkbox"
-                                            checked={isCommentInternal}
-                                            onChange={(e) => setIsCommentInternal(e.target.checked)}
-                                            className="rounded bg-slate-900 border-slate-800 text-blue-600 focus:ring-0 focus:ring-offset-0"
-                                          />
-                                          Post as Internal Work Note
-                                        </label>
-                                      ) : <div />}
+                                      <span className="text-[10px] text-slate-500 font-semibold">
+                                        Posting as: <strong className={commentsSubTab === "notes" ? "text-amber-400" : "text-blue-400"}>
+                                          {commentsSubTab === "notes" ? "Internal Work Note" : "Customer Comment"}
+                                        </strong>
+                                      </span>
                                       
                                       <button
-                                        onClick={handleAddComment}
+                                        onClick={() => handleAddComment(commentText, commentsSubTab === "notes")}
                                         disabled={isSubmittingComment || !commentText.trim()}
                                         className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
                                       >
@@ -4989,123 +3839,258 @@ export default function Home() {
                           )}
                         </div>
 
-                        {/* Footer - Admin Actions Panel */}
-                        {user?.role === "ADMIN" && (
-                          <div className="p-4 border-t border-slate-800 bg-[#0F172A]/90 space-y-3">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Administrative ITSM Controls</span>
-                            
-                            <div className="flex flex-wrap gap-2">
-                              {selectedTicketDetails.ticket.status !== "IN_PROGRESS" && selectedTicketDetails.ticket.status !== "CLOSED" && selectedTicketDetails.ticket.status !== "RESOLVED" && (
-                                <button
-                                  onClick={() => handleAdminAction("start_work")}
-                                  className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-blue-600/10"
-                                >
-                                  Start Work
-                                </button>
-                              )}
-                              
-                              {selectedTicketDetails.ticket.status !== "WAITING" && selectedTicketDetails.ticket.status !== "CLOSED" && selectedTicketDetails.ticket.status !== "RESOLVED" && (
-                                <button
-                                  onClick={() => handleAdminAction("put_on_hold")}
-                                  className="flex-1 py-2 px-3 bg-slate-800 hover:bg-slate-750 text-xs font-bold text-slate-200 rounded-lg border border-slate-700/50 transition-colors"
-                                >
-                                  Put On Hold
-                                </button>
-                              )}
+                        {/* Footer - Role-Restricted Action Panel */}
+                        <div className="p-4 border-t border-slate-800 bg-[#0F172A]/90 space-y-3">
+                          {user?.role === "ADMIN" && (
+                            <>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Administrative ITSM Controls</span>
+                              <div className="flex flex-wrap gap-2">
+                                {selectedTicketDetails.ticket.status !== "IN_PROGRESS" && selectedTicketDetails.ticket.status !== "CLOSED" && selectedTicketDetails.ticket.status !== "RESOLVED" && (
+                                  <button
+                                    onClick={() => handleAdminAction("start_work")}
+                                    className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-blue-500/10 cursor-pointer"
+                                  >
+                                    Start Work
+                                  </button>
+                                )}
+                                
+                                {selectedTicketDetails.ticket.status !== "WAITING" && selectedTicketDetails.ticket.status !== "CLOSED" && selectedTicketDetails.ticket.status !== "RESOLVED" && (
+                                  <button
+                                    onClick={() => handleAdminAction("put_on_hold")}
+                                    className="flex-1 py-2 px-3 bg-slate-800 hover:bg-slate-750 text-xs font-bold text-slate-200 rounded-lg border border-slate-700/50 transition-colors cursor-pointer"
+                                  >
+                                    Put On Hold
+                                  </button>
+                                )}
 
-                              {selectedTicketDetails.ticket.status !== "WAITING_FOR_USER" && selectedTicketDetails.ticket.status !== "CLOSED" && selectedTicketDetails.ticket.status !== "RESOLVED" && (
-                                <button
-                                  onClick={() => {
-                                    const note = prompt("Please provide additional information request details:");
-                                    if (note) handleAdminAction("request_more_information", { note });
-                                  }}
-                                  className="flex-1 py-2 px-3 bg-slate-800 hover:bg-slate-750 text-xs font-bold text-slate-200 rounded-lg border border-slate-700/50 transition-colors"
-                                >
-                                  Request Info
-                                </button>
-                              )}
+                                {selectedTicketDetails.ticket.status !== "WAITING_FOR_USER" && selectedTicketDetails.ticket.status !== "CLOSED" && selectedTicketDetails.ticket.status !== "RESOLVED" && (
+                                  <button
+                                    onClick={() => {
+                                      const note = prompt("Please provide additional information request details:");
+                                      if (note) handleAdminAction("request_more_information", { note });
+                                    }}
+                                    className="flex-1 py-2 px-3 bg-slate-800 hover:bg-slate-750 text-xs font-bold text-slate-200 rounded-lg border border-slate-700/50 transition-colors cursor-pointer"
+                                  >
+                                    Request Info
+                                  </button>
+                                )}
 
-                              {selectedTicketDetails.ticket.status !== "RESOLVED" && selectedTicketDetails.ticket.status !== "CLOSED" && (
-                                <button
-                                  onClick={() => {
-                                    setConfirmAction({
-                                      action: "resolve",
-                                      title: "Resolve Ticket?",
-                                      desc: "Are you sure this issue has been resolved? This will notify the employee."
-                                    });
-                                  }}
-                                  className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-emerald-600/10"
-                                >
-                                  Resolve
-                                </button>
-                              )}
+                                {selectedTicketDetails.ticket.status !== "RESOLVED" && selectedTicketDetails.ticket.status !== "CLOSED" && (
+                                  <button
+                                    onClick={() => {
+                                      setConfirmAction({
+                                        action: "resolve",
+                                        title: "Resolve Ticket?",
+                                        desc: "Are you sure this issue has been resolved? This will notify the employee."
+                                      });
+                                    }}
+                                    className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-emerald-600/10 cursor-pointer"
+                                  >
+                                    Resolve
+                                  </button>
+                                )}
 
-                              {selectedTicketDetails.ticket.status !== "CLOSED" && (
-                                <button
-                                  onClick={() => {
-                                    setConfirmAction({
-                                      action: "close",
-                                      title: "Close Ticket?",
-                                      desc: "This action will mark the ticket as Closed in ITSM logs. Destructive operations cannot be undone."
-                                    });
-                                  }}
-                                  className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-rose-600/10"
-                                >
-                                  Close Ticket
-                                </button>
-                              )}
+                                {selectedTicketDetails.ticket.status !== "CLOSED" && (
+                                  <button
+                                    onClick={() => {
+                                      setConfirmAction({
+                                        action: "close",
+                                        title: "Close Ticket?",
+                                        desc: "This action will mark the ticket as Closed in ITSM logs. Destructive operations cannot be undone."
+                                      });
+                                    }}
+                                    className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-rose-600/10 cursor-pointer"
+                                  >
+                                    Close Ticket
+                                  </button>
+                                )}
 
-                              {(selectedTicketDetails.ticket.status === "CLOSED" || selectedTicketDetails.ticket.status === "RESOLVED") && (
-                                <button
-                                  onClick={() => handleAdminAction("reopen")}
-                                  className="flex-1 py-2 px-3 bg-violet-600 hover:bg-violet-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-violet-600/10"
-                                >
-                                  Reopen Ticket
-                                </button>
-                              )}
-                            </div>
-
-                            {/* Team Assignment & Priority updates */}
-                            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800">
-                              <div>
-                                <label className="text-[9px] text-slate-500 font-bold block mb-1 uppercase tracking-wider">Transfer Support Team</label>
-                                <select
-                                  value={selectedTicketDetails.ticket.assigned_team || ""}
-                                  onChange={(e) => {
-                                    if (e.target.value) {
-                                      handleAdminAction("transfer_team", { team: e.target.value });
-                                    }
-                                  }}
-                                  className="w-full text-xs bg-slate-900 border border-slate-800 p-2 rounded-lg text-slate-350 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
-                                >
-                                  <option value="">Select Team...</option>
-                                  <option value="Helpdesk">Helpdesk L1/L2</option>
-                                  <option value="Network">Network Ops</option>
-                                  <option value="Sysadmin">System Admin</option>
-                                  <option value="Security">Security Operations</option>
-                                  <option value="Hardware">Hardware Desk</option>
-                                </select>
+                                {(selectedTicketDetails.ticket.status === "CLOSED" || selectedTicketDetails.ticket.status === "RESOLVED") && (
+                                  <button
+                                    onClick={() => handleAdminAction("reopen")}
+                                    className="flex-1 py-2 px-3 bg-violet-600 hover:bg-violet-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-violet-600/10 cursor-pointer"
+                                  >
+                                    Reopen Ticket
+                                  </button>
+                                )}
                               </div>
-                              <div>
-                                <label className="text-[9px] text-slate-500 font-bold block mb-1 uppercase tracking-wider">Modify Priority Level</label>
-                                <select
-                                  value={selectedTicketDetails.ticket.priority || ""}
-                                  onChange={(e) => {
-                                    if (e.target.value) {
-                                      handleAdminAction("change_priority", { priority: e.target.value });
-                                    }
-                                  }}
-                                  className="w-full text-xs bg-slate-900 border border-slate-800 p-2 rounded-lg text-slate-350 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
-                                >
-                                  <option value="LOW">LOW (24 Hours)</option>
-                                  <option value="MEDIUM">MEDIUM (8 Hours)</option>
-                                  <option value="HIGH">HIGH (4 Hours)</option>
-                                  <option value="CRITICAL">CRITICAL (1 Hour)</option>
-                                </select>
+
+                              <div className="grid grid-cols-3 gap-3 pt-2 border-t border-slate-800">
+                                <div>
+                                  <label className="text-[9px] text-slate-500 font-bold block mb-1 uppercase tracking-wider">Transfer Team</label>
+                                  <select
+                                    value={selectedTicketDetails.ticket.assigned_team || ""}
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        handleAdminAction("transfer_team", { team: e.target.value });
+                                      }
+                                    }}
+                                    className="w-full text-xs bg-slate-900 border border-slate-800 p-2 rounded-lg text-slate-350 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                                  >
+                                    <option value="">Select Team...</option>
+                                    <option value="Helpdesk">Helpdesk L1/L2</option>
+                                    <option value="Network">Network Ops</option>
+                                    <option value="Sysadmin">System Admin</option>
+                                    <option value="Security">Security Operations</option>
+                                    <option value="Hardware">Hardware Desk</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[9px] text-slate-500 font-bold block mb-1 uppercase tracking-wider">Assign Engineer</label>
+                                  <select
+                                    value={selectedTicketDetails.ticket.assigned_engineer || ""}
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        handleAdminAction("reassign", {
+                                          team: selectedTicketDetails.ticket.assigned_team,
+                                          engineer: e.target.value
+                                        });
+                                      }
+                                    }}
+                                    className="w-full text-xs bg-slate-900 border border-slate-800 p-2 rounded-lg text-slate-355 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                                  >
+                                    <option value="">Select Engineer...</option>
+                                    <option value="Emily Watson (Helpdesk L2)">Emily Watson (Helpdesk L2)</option>
+                                    <option value="Robert Chen (NetOps)">Robert Chen (NetOps)</option>
+                                    <option value="Marcus Aurelius (SysOps)">Marcus Aurelius (SysOps)</option>
+                                    <option value="Vesper Lynd (SecOps)">Vesper Lynd (SecOps)</option>
+                                    <option value="Dave Grohl (Hardware Desk)">Dave Grohl (Hardware Desk)</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[9px] text-slate-500 font-bold block mb-1 uppercase tracking-wider">Modify Priority</label>
+                                  <select
+                                    value={selectedTicketDetails.ticket.priority || ""}
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        handleAdminAction("change_priority", { priority: e.target.value });
+                                      }
+                                    }}
+                                    className="w-full text-xs bg-slate-900 border border-slate-800 p-2 rounded-lg text-slate-355 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                                  >
+                                    <option value="LOW">LOW (24 Hours)</option>
+                                    <option value="MEDIUM">MEDIUM (8 Hours)</option>
+                                    <option value="HIGH">HIGH (4 Hours)</option>
+                                    <option value="CRITICAL">CRITICAL (1 Hour)</option>
+                                  </select>
+                                </div>
                               </div>
-                            </div>
-                          </div>
-                        )}
+                            </>
+                          )}
+
+                          {user?.role === "MANAGER" && (
+                            <>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 block mb-1">IT Manager Operational Controls</span>
+                              <div className="flex flex-wrap gap-2">
+                                {/* Approve / Reject if ticket is pending approval or status is WAITING_APPROVAL */}
+                                {(selectedTicketDetails.ticket.status === "WAITING_APPROVAL" || selectedTicketDetails.related.approvals.some((a: any) => a.status === "PENDING")) && (
+                                  <>
+                                    <button
+                                      onClick={() => handleAdminAction("approve")}
+                                      className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-emerald-600/10 cursor-pointer"
+                                    >
+                                      Approve
+                                    </button>
+                                    <button
+                                      onClick={() => handleAdminAction("reject")}
+                                      className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-rose-600/10 cursor-pointer"
+                                    >
+                                      Reject
+                                    </button>
+                                  </>
+                                )}
+                                
+                                <button
+                                  onClick={() => handleAdminAction("assign", {
+                                    team: selectedTicketDetails.ticket.assigned_team,
+                                    engineer: `${user.username} (Manager)`
+                                  })}
+                                  className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-blue-500/10 cursor-pointer"
+                                >
+                                  Assign to Me
+                                </button>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800">
+                                <div>
+                                  <label className="text-[9px] text-slate-500 font-bold block mb-1 uppercase tracking-wider">Transfer Support Group</label>
+                                  <select
+                                    value={selectedTicketDetails.ticket.assigned_team || ""}
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        handleAdminAction("transfer_team", { team: e.target.value });
+                                      }
+                                    }}
+                                    className="w-full text-xs bg-slate-900 border border-slate-800 p-2 rounded-lg text-slate-355 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                                  >
+                                    <option value="">Select Team...</option>
+                                    <option value="Helpdesk">Helpdesk L1/L2</option>
+                                    <option value="Network">Network Ops</option>
+                                    <option value="Sysadmin">System Admin</option>
+                                    <option value="Security">Security Operations</option>
+                                    <option value="Hardware">Hardware Desk</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[9px] text-slate-500 font-bold block mb-1 uppercase tracking-wider">Assign Support Engineer</label>
+                                  <select
+                                    value={selectedTicketDetails.ticket.assigned_engineer || ""}
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        handleAdminAction("reassign", {
+                                          team: selectedTicketDetails.ticket.assigned_team,
+                                          engineer: e.target.value
+                                        });
+                                      }
+                                    }}
+                                    className="w-full text-xs bg-slate-900 border border-slate-800 p-2 rounded-lg text-slate-355 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                                  >
+                                    <option value="">Select Engineer...</option>
+                                    <option value="Emily Watson (Helpdesk L2)">Emily Watson (Helpdesk L2)</option>
+                                    <option value="Robert Chen (NetOps)">Robert Chen (NetOps)</option>
+                                    <option value="Marcus Aurelius (SysOps)">Marcus Aurelius (SysOps)</option>
+                                    <option value="Vesper Lynd (SecOps)">Vesper Lynd (SecOps)</option>
+                                    <option value="Dave Grohl (Hardware Desk)">Dave Grohl (Hardware Desk)</option>
+                                  </select>
+                                </div>
+                              </div>
+                            </>
+                          )}
+
+                          {user?.role === "EMPLOYEE" && (
+                            <>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Employee Actions</span>
+                              <div className="flex flex-wrap gap-2">
+                                {selectedTicketDetails.ticket.status === "RESOLVED" && (
+                                  <button
+                                    onClick={() => handleAdminAction("confirm_resolution")}
+                                    className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-emerald-600/10 cursor-pointer"
+                                  >
+                                    Confirm Resolution
+                                  </button>
+                                )}
+
+                                {(selectedTicketDetails.ticket.status === "CLOSED" || selectedTicketDetails.ticket.status === "RESOLVED") && (
+                                  <button
+                                    onClick={() => handleAdminAction("reopen")}
+                                    className="flex-1 py-2 px-3 bg-violet-600 hover:bg-violet-500 text-xs font-bold text-white rounded-lg transition-colors shadow-lg shadow-violet-600/10 cursor-pointer"
+                                  >
+                                    Reopen Ticket
+                                  </button>
+                                )}
+
+                                {selectedTicketDetails.ticket.status !== "CLOSED" && selectedTicketDetails.ticket.status !== "RESOLVED" && (
+                                  <button
+                                    onClick={() => setCommentViewMode("it_workflow")}
+                                    className="flex-1 py-2 px-3 bg-slate-800 hover:bg-slate-750 text-xs font-bold text-slate-200 rounded-lg border border-slate-700/50 transition-colors cursor-pointer text-center"
+                                  >
+                                    Add Customer Comment
+                                  </button>
+                                )}
+                              </div>
+                            </>
+                          )}
+                        </div>
                       </>
                     ) : (
                       <div className="flex-1 flex items-center justify-center text-slate-500 italic text-xs">
@@ -5114,465 +4099,6 @@ export default function Home() {
                     )}
                   </motion.div>
                 </>
-              )}
-            </AnimatePresence>
-
-            {/* Clickable Service Request Details Drawer */}
-            <AnimatePresence>
-              {serviceRequestDrawerOpen && selectedServiceRequest && (
-                <>
-                  {/* Backdrop overlay */}
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="fixed inset-0 bg-black/60 z-40 cursor-pointer"
-                    onClick={() => {
-                      setServiceRequestDrawerOpen(false);
-                      setSelectedServiceRequest(null);
-                    }}
-                  />
-
-                  {/* Slide-over Panel */}
-                  <motion.div
-                    initial={{ x: "100%" }}
-                    animate={{ x: 0 }}
-                    exit={{ x: "100%" }}
-                    transition={{ type: "spring", damping: 28, stiffness: 220 }}
-                    className="fixed top-0 right-0 h-full w-[600px] z-50 bg-[#0B0F19] border-l border-slate-800/80 shadow-2xl flex flex-col text-slate-200"
-                  >
-                    {/* Header */}
-                    <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-[#0F172A]/90 backdrop-blur-md">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-blue-500/10 rounded-lg">
-                          <FileText className="w-5 h-5 text-blue-400" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-base font-bold text-slate-100">{selectedServiceRequest.request_id}</span>
-                            {selectedServiceRequest.servicenow_id && (
-                              <span className="font-mono text-xs text-amber-500 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20">
-                                {selectedServiceRequest.servicenow_id}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-slate-400 font-medium truncate max-w-[320px]">
-                            {selectedServiceRequest.service_name}
-                          </p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => {
-                          setServiceRequestDrawerOpen(false);
-                          setSelectedServiceRequest(null);
-                        }}
-                        className="p-1 hover:bg-slate-800 rounded transition-colors text-slate-400 hover:text-slate-200 cursor-pointer"
-                      >
-                        <X className="w-5 h-5" />
-                      </button>
-                    </div>
-
-                    {/* Drawer Content */}
-                    <div className="flex-1 overflow-y-auto p-5 space-y-6">
-                      
-                      {/* Top Badges */}
-                      <div className="flex gap-2 flex-wrap items-center bg-slate-900/40 p-3 rounded-xl border border-slate-800/60">
-                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold mr-1">Status:</span>
-                        <span className={statusBadgeClass(selectedServiceRequest.status)}>{selectedServiceRequest.status}</span>
-                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold ml-2 mr-1">Stage:</span>
-                        <span className="badge badge-assigned">{selectedServiceRequest.stage}</span>
-                      </div>
-
-                      {/* Fields details */}
-                      <div className="card p-4 space-y-4">
-                        <SectionHeader title="Service Request Info & Variables" icon={<Info className="w-4 h-4 text-slate-400" />} />
-                        <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-xs">
-                          <div>
-                            <span className="text-slate-500 block mb-1">Requested By</span>
-                            <span className="font-mono text-slate-200">@{selectedServiceRequest.requested_by}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block mb-1">Category</span>
-                            <span className="font-semibold text-slate-200">{selectedServiceRequest.category}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block mb-1">Assigned Fulfillment Team</span>
-                            <span className="font-bold text-blue-400">{selectedServiceRequest.assigned_team || "Helpdesk"}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block mb-1">Est. Completion</span>
-                            <span className="text-slate-250 font-semibold">{selectedServiceRequest.estimated_completion || "N/A"}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block mb-1">SLA Limit</span>
-                            <span className="text-slate-255 font-semibold">{selectedServiceRequest.sla_hours ? `${selectedServiceRequest.sla_hours} Hours` : "N/A"}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block mb-1">Created At</span>
-                            <span className="text-slate-350">{fmtDate(selectedServiceRequest.created_at)} {fmtTime(selectedServiceRequest.created_at)}</span>
-                          </div>
-                        </div>
-
-                        {/* Variables filled */}
-                        <div className="border-t border-slate-800/80 pt-4 mt-4">
-                          <span className="section-header block mb-3">Submitted Request Details (Variables)</span>
-                          <div className="bg-slate-900/60 p-3.5 rounded-xl border border-slate-850 space-y-3 font-semibold text-xs text-slate-300">
-                            {(() => {
-                              try {
-                                const vars = typeof selectedServiceRequest.details === "string" 
-                                  ? JSON.parse(selectedServiceRequest.details) 
-                                  : selectedServiceRequest.details || {};
-                                
-                                if (Object.keys(vars).length === 0) {
-                                  return <div className="text-slate-500 italic text-[11px]">No variables submitted</div>;
-                                }
-                                
-                                return Object.entries(vars).map(([key, val]) => (
-                                  <div key={key} className="flex justify-between border-b border-slate-850/50 pb-2 last:border-b-0 last:pb-0">
-                                    <span className="text-slate-505 capitalize">{key.replace(/_/g, " ")}:</span>
-                                    <span className="text-slate-200 font-mono">{String(val)}</span>
-                                  </div>
-                                ));
-                              } catch {
-                                return <div className="text-slate-400 break-all">{selectedServiceRequest.details}</div>;
-                              }
-                            })()}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Request Timeline */}
-                      <div className="card p-4 space-y-4">
-                        <SectionHeader title="Service Request Workflow Timeline" icon={<Clock className="w-4 h-4 text-slate-400" />} />
-                        <div className="space-y-4">
-                          {!selectedServiceRequest.timeline || selectedServiceRequest.timeline.length === 0 ? (
-                            <div className="text-slate-500 italic text-center py-4">No events in timeline</div>
-                          ) : (
-                            selectedServiceRequest.timeline.map((evt: any, idx: number) => (
-                              <div key={idx} className="relative pl-6 pb-2 last:pb-0 border-l border-slate-800 last:border-l-0 animate-fadeIn">
-                                <div className="absolute left-[-4.5px] top-1.5 w-2 h-2 rounded-full bg-blue-500" />
-                                <div className="flex justify-between text-[11px] mb-1 font-semibold">
-                                  <span className="text-blue-400">{evt.user} ({evt.role})</span>
-                                  <span className="text-slate-505 font-mono">{fmtDate(evt.timestamp)} {fmtTime(evt.timestamp)}</span>
-                                </div>
-                                <p className="text-xs text-slate-300 font-medium">{evt.details}</p>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Work Notes / Discussion */}
-                      <div className="card p-4 space-y-4">
-                        <SectionHeader title="Internal discussion & work notes" icon={<FileText className="w-4 h-4 text-slate-400" />} />
-                        <div className="space-y-3">
-                          <textarea
-                            value={workNotesText}
-                            onChange={(e) => setWorkNotesText(e.target.value)}
-                            placeholder="Enter work note or update description..."
-                            className="w-full bg-slate-900 border border-slate-700/60 rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-blue-500 transition-colors h-16 resize-none"
-                          />
-                          <div className="flex justify-end">
-                            <button
-                              disabled={isExecutingAction || !workNotesText.trim()}
-                              onClick={() => handleServiceRequestAction(selectedServiceRequest.request_id, "add_note", workNotesText)}
-                              className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-xs font-bold text-slate-200 border border-slate-700 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                            >
-                              Add Work Note
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Footer Actions */}
-                    <div className="p-4 border-t border-slate-800 bg-[#0F172A]/90 backdrop-blur-md flex flex-wrap gap-2.5 justify-end">
-                      {/* Approve / Reject buttons for PENDING_APPROVAL (Admin or Manager) */}
-                      {selectedServiceRequest.status === "PENDING_APPROVAL" && (user?.role === "ADMIN" || user?.role === "MANAGER") && (
-                        <>
-                          <button
-                            disabled={isExecutingAction}
-                            onClick={() => {
-                              setPendingConfirmAction({ requestId: selectedServiceRequest.request_id, action: "reject", note: workNotesText });
-                              setActionConfirmOpen(true);
-                            }}
-                            className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white rounded-lg transition-all shadow-lg hover:shadow-rose-600/10 cursor-pointer"
-                          >
-                            Reject Request
-                          </button>
-                          <button
-                            disabled={isExecutingAction}
-                            onClick={() => handleServiceRequestAction(selectedServiceRequest.request_id, "approve", workNotesText)}
-                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white rounded-lg transition-all shadow-lg hover:shadow-emerald-600/10 cursor-pointer"
-                          >
-                            Approve Request
-                          </button>
-                        </>
-                      )}
-
-                      {/* Start Fulfillment button (Admin only, when SUBMITTED or APPROVED) */}
-                      {(selectedServiceRequest.status === "APPROVED" || selectedServiceRequest.status === "SUBMITTED") && user?.role === "ADMIN" && (
-                        <button
-                          disabled={isExecutingAction}
-                          onClick={() => handleServiceRequestAction(selectedServiceRequest.request_id, "start_fulfillment", workNotesText)}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white rounded-lg transition-all shadow-lg hover:shadow-blue-600/10 cursor-pointer"
-                        >
-                          Start Fulfillment
-                        </button>
-                      )}
-
-                      {/* Complete Fulfillment button (Admin only, when FULFILLMENT) */}
-                      {selectedServiceRequest.status === "FULFILLMENT" && user?.role === "ADMIN" && (
-                        <button
-                          disabled={isExecutingAction}
-                          onClick={() => handleServiceRequestAction(selectedServiceRequest.request_id, "complete", workNotesText)}
-                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white rounded-lg transition-all shadow-lg hover:shadow-emerald-600/10 cursor-pointer"
-                        >
-                          Complete Fulfillment
-                        </button>
-                      )}
-
-                      {/* Close button (Requester when COMPLETED, Admin anytime) */}
-                      {((selectedServiceRequest.status === "COMPLETED" && (selectedServiceRequest.requested_by === user?.username || user?.role === "ADMIN")) || 
-                        (selectedServiceRequest.status !== "CLOSED" && selectedServiceRequest.status !== "REJECTED" && user?.role === "ADMIN")) && (
-                        <button
-                          disabled={isExecutingAction}
-                          onClick={() => {
-                            setPendingConfirmAction({ requestId: selectedServiceRequest.request_id, action: "close", note: workNotesText });
-                            setActionConfirmOpen(true);
-                          }}
-                          className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-xs font-bold text-slate-300 rounded-lg border border-slate-700 transition-all cursor-pointer"
-                        >
-                          Close Request
-                        </button>
-                      )}
-                    </div>
-                  </motion.div>
-                </>
-              )}
-            </AnimatePresence>
-
-            {/* Service Catalog Item Request Modal */}
-            <AnimatePresence>
-              {requestCatalogItem && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fadeIn">
-                  {/* Backdrop */}
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="absolute inset-0 bg-black/85"
-                    onClick={() => setRequestCatalogItem(null)}
-                  />
-
-                  {/* Form Modal Body */}
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="bg-[#0B0F19] border border-slate-800 p-6 rounded-2xl shadow-2xl relative max-w-md w-full z-10 space-y-4 text-slate-200"
-                  >
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <span className="text-[10px] font-mono font-bold text-blue-400 bg-blue-500/10 border border-blue-500/25 px-2 py-0.5 rounded">{requestCatalogItem.service_id}</span>
-                        <h3 className="text-base font-bold text-slate-100 mt-1">{requestCatalogItem.name}</h3>
-                        <p className="text-xs text-slate-500 mt-0.5 font-medium">{requestCatalogItem.category} Services</p>
-                      </div>
-                      <button 
-                        onClick={() => setRequestCatalogItem(null)}
-                        className="p-1 hover:bg-slate-800 rounded transition-colors text-slate-400 hover:text-slate-200 cursor-pointer"
-                      >
-                        <X className="w-5 h-5" />
-                      </button>
-                    </div>
-
-                    <p className="text-xs text-slate-400 bg-slate-900/50 p-3 rounded-lg border border-slate-800 leading-relaxed font-semibold">
-                      {requestCatalogItem.description}
-                    </p>
-
-                    <form onSubmit={async (e) => {
-                      e.preventDefault();
-                      setIsSubmittingRequest(true);
-                      try {
-                        const res = await authFetch(`${API_BASE_URL}/service-requests`, {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            service_id: requestCatalogItem.service_id,
-                            details: requestFormDetails
-                          })
-                        });
-                        if (res.ok) {
-                          const created = await res.json();
-                          alert(`Request submitted successfully! Created ID: ${created.request_id}`);
-                          setRequestCatalogItem(null);
-                          await fetchServiceRequests();
-                        } else {
-                          const err = await res.json();
-                          alert(err.detail || "Submission failed.");
-                        }
-                      } catch (err: any) {
-                        alert(err.message || "An error occurred.");
-                      } finally {
-                        setIsSubmittingRequest(false);
-                      }
-                    }} className="space-y-4">
-                      {(CATALOG_REQUIRED_SLOTS[requestCatalogItem.service_id] || ["justification"]).map((slot: string) => {
-                        const prompt = SLOT_PROMPTS_FRONTEND[slot] || slot;
-                        const value = requestFormDetails[slot] || "";
-                        
-                        return (
-                          <div key={slot} className="space-y-1.5 animate-fadeIn">
-                            <label className="section-header block">{prompt}</label>
-                            {slot === "justification" ? (
-                              <textarea
-                                required
-                                value={value}
-                                onChange={(e) => setRequestFormDetails(prev => ({ ...prev, [slot]: e.target.value }))}
-                                className="w-full bg-slate-900 border border-slate-700/60 rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-blue-500 transition-colors h-16 resize-none"
-                              />
-                            ) : slot === "start_date" ? (
-                              <input
-                                type="date"
-                                required
-                                value={value}
-                                onChange={(e) => setRequestFormDetails(prev => ({ ...prev, [slot]: e.target.value }))}
-                                className="w-full bg-slate-900 border border-slate-700/60 rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-blue-500 transition-colors"
-                              />
-                            ) : (slot === "access_type" || slot === "access_level") ? (
-                              <select
-                                required
-                                value={value}
-                                onChange={(e) => setRequestFormDetails(prev => ({ ...prev, [slot]: e.target.value }))}
-                                className="w-full bg-slate-900 border border-slate-700/60 rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-blue-500 transition-colors"
-                              >
-                                <option value="">-- Select Access Option --</option>
-                                <option value="Read-Only">Read-Only</option>
-                                <option value="Read-Write">Read-Write</option>
-                              </select>
-                            ) : slot === "action" && requestCatalogItem.service_id === "SRV006" ? (
-                              <select
-                                required
-                                value={value}
-                                onChange={(e) => setRequestFormDetails(prev => ({ ...prev, [slot]: e.target.value }))}
-                                className="w-full bg-slate-900 border border-slate-700/60 rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-blue-500 transition-colors"
-                              >
-                                <option value="">-- Select Action Option --</option>
-                                <option value="Create New">Create New</option>
-                                <option value="Modify Existing">Modify Existing</option>
-                              </select>
-                            ) : (
-                              <input
-                                type="text"
-                                required
-                                value={value}
-                                onChange={(e) => setRequestFormDetails(prev => ({ ...prev, [slot]: e.target.value }))}
-                                className="w-full bg-slate-900 border border-slate-700/60 rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-blue-500 transition-colors"
-                              />
-                            )}
-                          </div>
-                        );
-                      })}
-
-                      <div className="flex gap-3 justify-end pt-2">
-                        <button
-                          type="button"
-                          disabled={isSubmittingRequest}
-                          onClick={() => setRequestCatalogItem(null)}
-                          className="px-4 py-2 bg-slate-850 hover:bg-slate-800 text-xs font-bold text-slate-350 rounded-lg border border-slate-750 transition-colors cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={isSubmittingRequest}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white rounded-lg transition-colors cursor-pointer"
-                        >
-                          {isSubmittingRequest ? "Submitting..." : "Submit Request"}
-                        </button>
-                      </div>
-                    </form>
-                  </motion.div>
-                </div>
-              )}
-            </AnimatePresence>
-
-            {/* Service Request Action Confirmation Dialog */}
-            <AnimatePresence>
-              {actionConfirmOpen && pendingConfirmAction && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-                  {/* Backdrop */}
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="absolute inset-0 bg-black/85"
-                    onClick={() => {
-                      setActionConfirmOpen(false);
-                      setPendingConfirmAction(null);
-                    }}
-                  />
-
-                  {/* Confirmation Modal Body */}
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl relative max-w-sm w-full z-10 space-y-4 text-slate-200"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-rose-500/10 text-rose-500 rounded-lg font-bold">
-                        <AlertTriangle className="w-6 h-6 animate-bounce" />
-                      </div>
-                      <h3 className="text-base font-bold text-slate-200">
-                        {pendingConfirmAction.action === "reject" ? "Reject Service Request?" : "Close Service Request?"}
-                      </h3>
-                    </div>
-                    
-                    <p className="text-xs text-slate-400 leading-relaxed font-semibold">
-                      {pendingConfirmAction.action === "reject" 
-                        ? "Are you sure you want to reject this request? This will notify the user and cancel the fulfillment workflow."
-                        : "Are you sure you want to close this service request? This will mark the request status as CLOSED."
-                      }
-                    </p>
-
-                    {pendingConfirmAction.action === "reject" && (
-                      <div className="space-y-1.5">
-                        <label className="section-header block">Rejection Reason (Required)</label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="Provide a reason for rejection..."
-                          value={pendingConfirmAction.note || ""}
-                          onChange={(e) => setPendingConfirmAction(prev => prev ? ({ ...prev, note: e.target.value }) : null)}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-semibold text-slate-250 focus:outline-none focus:border-rose-500 transition-colors"
-                        />
-                      </div>
-                    )}
-
-                    <div className="flex gap-3 justify-end pt-2">
-                      <button
-                        disabled={isExecutingAction}
-                        onClick={() => {
-                          setActionConfirmOpen(false);
-                          setPendingConfirmAction(null);
-                        }}
-                        className="px-4 py-2 bg-slate-850 hover:bg-slate-800 text-xs font-bold text-slate-300 rounded-lg border border-slate-755 transition-colors cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        disabled={isExecutingAction || (pendingConfirmAction.action === "reject" && !pendingConfirmAction.note?.trim())}
-                        onClick={() => handleServiceRequestAction(pendingConfirmAction.requestId, pendingConfirmAction.action, pendingConfirmAction.note)}
-                        className={`px-4 py-2 text-xs font-bold text-white rounded-lg transition-colors shadow-lg cursor-pointer disabled:opacity-50 ${
-                          pendingConfirmAction.action === "reject" ? "bg-rose-600 hover:bg-rose-500 shadow-rose-600/10" : "bg-slate-700 hover:bg-slate-650"
-                        }`}
-                      >
-                        {isExecutingAction ? "Processing..." : pendingConfirmAction.action === "reject" ? "Confirm Reject" : "Confirm Close"}
-                      </button>
-                    </div>
-                  </motion.div>
-                </div>
               )}
             </AnimatePresence>
 
