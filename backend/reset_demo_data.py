@@ -78,14 +78,14 @@ def seed_tickets_and_audit(db):
     print("Seeding realistic IT Tickets and lifecycle RBAC audit logs...")
     
     # 12 Seed tickets
-    # TCK-009 is breached / escalated
-    # TCK-002, TCK-006, TCK-008, TCK-011 are resolved/closed
+    # INC000009 is breached / escalated
+    # INC000002, INC000006, INC000008, INC000011 are resolved/closed
     # Active tickets: 001, 003, 004, 005, 007, 009, 010, 012 (Total: 8, Breached: 009, compliance = 87.5%)
     now = datetime.utcnow()
     
     tickets_data = [
         {
-            "ticket_id": "TCK-001",
+            "ticket_id": "INC000001",
             "category": "VPN",
             "description": "Employee VPN gateway timeout on login. Error 809.",
             "assigned_team": "Network",
@@ -100,7 +100,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-002",
+            "ticket_id": "INC000002",
             "category": "Password",
             "description": "AD User account locked after multiple login attempts.",
             "assigned_team": "Helpdesk",
@@ -116,7 +116,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-003",
+            "ticket_id": "INC000003",
             "category": "Software",
             "description": "Requesting install of MS Visio license.",
             "assigned_team": "Sysadmin",
@@ -131,7 +131,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-004",
+            "ticket_id": "INC000004",
             "category": "Outlook",
             "description": "Outlook client crashes repeatedly on launch.",
             "assigned_team": "Helpdesk",
@@ -146,7 +146,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-005",
+            "ticket_id": "INC000005",
             "category": "SAP",
             "description": "SAP ERP Production environment throwing gateway timeouts on order forms.",
             "assigned_team": "Sysadmin",
@@ -161,7 +161,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-006",
+            "ticket_id": "INC000006",
             "category": "Network",
             "description": "Bridgestone Warehouse Switch #3 offline. Several machines lost connection.",
             "assigned_team": "Network",
@@ -177,7 +177,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-007",
+            "ticket_id": "INC000007",
             "category": "Hardware",
             "description": "Laptop monitor flicks black intermittently when opening hinges.",
             "assigned_team": "Hardware",
@@ -192,7 +192,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-008",
+            "ticket_id": "INC000008",
             "category": "Outlook",
             "description": "Need access permissions to public folder hr-info.",
             "assigned_team": "Security",
@@ -208,7 +208,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-009",
+            "ticket_id": "INC000009",
             "category": "General",
             "description": "Security Alert: Unauthorized USB device connected on Workstation-44.",
             "assigned_team": "Security",
@@ -223,7 +223,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": now - timedelta(hours=1.5)
         },
         {
-            "ticket_id": "TCK-010",
+            "ticket_id": "INC000010",
             "category": "SAP",
             "description": "SAP GUI client throws licensing error upon connection attempts.",
             "assigned_team": "Sysadmin",
@@ -238,7 +238,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-011",
+            "ticket_id": "INC000011",
             "category": "VPN",
             "description": "Requesting Cisco AnyConnect client download link and setup documentation.",
             "assigned_team": "Helpdesk",
@@ -254,7 +254,7 @@ def seed_tickets_and_audit(db):
             "sla_breached_at": None
         },
         {
-            "ticket_id": "TCK-012",
+            "ticket_id": "INC000012",
             "category": "Hardware",
             "description": "Printer on floor 2 is out of black toner cartridge.",
             "assigned_team": "Hardware",
@@ -333,9 +333,9 @@ def seed_tickets_and_audit(db):
 
 def seed_escalations(db):
     print("Seeding persistent SLA escalation events...")
-    # Seed warning and escalation audit/history matching TCK-009 (Unauthorized USB, CRITICAL, target 2h, created 3.5h ago)
+    # Seed warning and escalation audit/history matching INC000009 (Unauthorized USB, CRITICAL, target 2h, created 3.5h ago)
     # Target breach time = 1.5h ago
-    ticket_id = "TCK-009"
+    ticket_id = "INC000009"
     now = datetime.utcnow()
     breach_time = now - timedelta(hours=1.5)
 
@@ -375,37 +375,37 @@ def seed_escalations(db):
         ))
 
     db.commit()
-    print("[OK] Seeded SLA escalation histories for TCK-009.")
+    print("[OK] Seeded SLA escalation histories for INC000009.")
 
 def seed_notifications(db):
     print("Seeding notifications...")
     notifications = [
         {
-            "notification_id": "NOT-0001",
-            "ticket_id": "TCK-001",
+            "notification_id": "NTF000001",
+            "ticket_id": "INC000001",
             "recipient": "network-support@bridgestone.com",
-            "message": "Critical ticket TCK-001 has been assigned to the Network team.",
+            "message": "Critical ticket INC000001 has been assigned to the Network team.",
             "status": "SENT"
         },
         {
-            "notification_id": "NOT-0002",
-            "ticket_id": "TCK-009",
+            "notification_id": "NTF000002",
+            "ticket_id": "INC000009",
             "recipient": "security-leads@bridgestone.com",
-            "message": "SLA WARNING: TCK-009 has consumed 90% of SLA time.",
+            "message": "SLA WARNING: INC000009 has consumed 90% of SLA time.",
             "status": "SENT"
         },
         {
-            "notification_id": "NOT-0003",
-            "ticket_id": "TCK-009",
+            "notification_id": "NTF000003",
+            "ticket_id": "INC000009",
             "recipient": "secops-director@bridgestone.com",
-            "message": "ALERT: SLA Breach level 3 escalation triggered for TCK-009.",
+            "message": "ALERT: SLA Breach level 3 escalation triggered for INC000009.",
             "status": "SENT"
         },
         {
-            "notification_id": "NOT-0004",
-            "ticket_id": "TCK-003",
+            "notification_id": "NTF000004",
+            "ticket_id": "INC000003",
             "recipient": "employee@bridgestone.com",
-            "message": "Update request: Ticket TCK-003 is awaiting input from you.",
+            "message": "Update request: Ticket INC000003 is awaiting input from you.",
             "status": "SENT"
         }
     ]
@@ -425,12 +425,12 @@ def seed_approvals(db):
     print("Seeding approval request histories...")
     # Approvals list
     approvals = [
-        {"session_id": "sess-visio-seed", "recommended_action": "install_software Visio", "approval_status": "PENDING"},
-        {"session_id": "sess-adunlock-seed", "recommended_action": "unlock_ad_user employee", "approval_status": "APPROVED"},
-        {"session_id": "sess-reset-seed", "recommended_action": "reset_user_password employee", "approval_status": "APPROVED"},
-        {"session_id": "sess-usblock-seed", "recommended_action": "block_usb_port Workstation-44", "approval_status": "APPROVED"}
+        {"session_id": "sess-visio-01", "recommended_action": "install_software Visio", "approval_status": "PENDING"},
+        {"session_id": "sess-adunlock-02", "recommended_action": "unlock_ad_user employee", "approval_status": "APPROVED"},
+        {"session_id": "sess-reset-03", "recommended_action": "reset_user_password employee", "approval_status": "APPROVED"},
+        {"session_id": "sess-usblock-04", "recommended_action": "block_usb_port Workstation-44", "approval_status": "APPROVED"}
     ]
-    for a in approvals:
+    for idx, a in enumerate(approvals):
         db.add(ApprovalHistory(
             session_id=a["session_id"],
             recommended_action=a["recommended_action"],
@@ -441,10 +441,10 @@ def seed_approvals(db):
         # Seed corresponding action execution logs
         if a["approval_status"] == "APPROVED":
             db.add(ActionHistory(
-                request_id=f"REQ-{a['session_id'][-8:]}",
+                request_id=f"REQ0001{idx:02d}",
                 action_type=a["recommended_action"].split()[0],
                 status="SUCCESS",
-                servicenow_id=f"REQ0000{random_id()}",
+                servicenow_id=f"SR0000{random_id()}",
                 created_at=datetime.utcnow() - timedelta(hours=1.8)
             ))
             
@@ -459,9 +459,9 @@ def seed_audits_and_security(db):
     print("Seeding audit decisions and security alerts...")
     # General audit logs
     audits = [
-        {"sess": "sess-general-1", "msg": "How can I download the Cisco AnyConnect client?", "cat": "VPN", "dec": "ALLOW", "stat": "APPROVED", "act": "provide_download_link", "t_id": "TCK-011"},
-        {"sess": "sess-general-2", "msg": "My screen is flickering when I hinge open the laptop", "cat": "Hardware", "dec": "ALLOW", "stat": "APPROVED", "act": "create_ticket", "t_id": "TCK-007"},
-        {"sess": "sess-general-3", "msg": "Read HR public folder", "cat": "General", "dec": "DENY", "stat": "ACCESS_DENIED", "act": "block_request", "t_id": None}
+        {"sess": "sess-gen-01", "msg": "How can I download the Cisco AnyConnect client?", "cat": "VPN", "dec": "ALLOW", "stat": "APPROVED", "act": "provide_download_link", "t_id": "INC000011"},
+        {"sess": "sess-gen-02", "msg": "My screen is flickering when I hinge open the laptop", "cat": "Hardware", "dec": "ALLOW", "stat": "APPROVED", "act": "create_ticket", "t_id": "INC000007"},
+        {"sess": "sess-gen-03", "msg": "Read HR public folder", "cat": "General", "dec": "DENY", "stat": "ACCESS_DENIED", "act": "block_request", "t_id": None}
     ]
     for au in audits:
         db.add(AuditLog(
@@ -536,7 +536,7 @@ def seed_service_catalog(db):
             "name": "Software Installation",
             "category": "Software",
             "description": "Request installation or license activation of standard desktop software (e.g., Adobe Acrobat, MS Visio, Zoom Pro).",
-            "business_owner": "Sarah Jenkins",
+            "business_owner": "Priya Verma",
             "fulfillment_team": "Helpdesk",
             "approval_required": True,
             "sla_hours": 24,
@@ -548,7 +548,7 @@ def seed_service_catalog(db):
             "name": "VPN Access Request",
             "category": "Network",
             "description": "Request corporate VPN client (Cisco AnyConnect) credentials, connection profile, and multi-factor authentication setup.",
-            "business_owner": "David Vance",
+            "business_owner": "Amit Patel",
             "fulfillment_team": "Network Team",
             "approval_required": True,
             "sla_hours": 12,
@@ -560,7 +560,7 @@ def seed_service_catalog(db):
             "name": "Shared Folder Access",
             "category": "Identity",
             "description": "Request NTFS read/write permissions for specific department or project shared folders on local file servers.",
-            "business_owner": "Mark Ross",
+            "business_owner": "Rahul Sharma",
             "fulfillment_team": "Sysadmin",
             "approval_required": True,
             "sla_hours": 24,
@@ -572,7 +572,7 @@ def seed_service_catalog(db):
             "name": "SAP Account Access",
             "category": "ERP",
             "description": "Request new login credentials or modify transaction roles/permissions in the SAP ERP Production, Sandbox, or Development instances.",
-            "business_owner": "Elena Rostova",
+            "business_owner": "Priya Verma",
             "fulfillment_team": "ERP Basis Support",
             "approval_required": True,
             "sla_hours": 48,
@@ -584,7 +584,7 @@ def seed_service_catalog(db):
             "name": "Active Directory Account Unlock",
             "category": "Identity",
             "description": "Self-service or assisted domain account unlock and credential synchronization check.",
-            "business_owner": "Mark Ross",
+            "business_owner": "Rahul Sharma",
             "fulfillment_team": "Helpdesk",
             "approval_required": False,
             "sla_hours": 4,
@@ -596,7 +596,7 @@ def seed_service_catalog(db):
             "name": "Email Distribution List",
             "category": "Collaboration",
             "description": "Request creation of a new corporate email distribution group, Microsoft 365 group, or modification of member lists.",
-            "business_owner": "Amy Lin",
+            "business_owner": "Neha Singh",
             "fulfillment_team": "Helpdesk",
             "approval_required": False,
             "sla_hours": 8,
@@ -608,7 +608,7 @@ def seed_service_catalog(db):
             "name": "Printer Access Setup",
             "category": "Hardware",
             "description": "Request remote driver installation and queue configuration for office network printers and high-capacity copiers.",
-            "business_owner": "James Cole",
+            "business_owner": "Rahul Sharma",
             "fulfillment_team": "Helpdesk",
             "approval_required": False,
             "sla_hours": 12,
@@ -620,7 +620,7 @@ def seed_service_catalog(db):
             "name": "New Laptop Provisioning",
             "category": "Hardware",
             "description": "Request provisioning of a standard corporate laptop (Lenovo ThinkPad or Apple MacBook Pro) with standard software loadout.",
-            "business_owner": "James Cole",
+            "business_owner": "Rahul Sharma",
             "fulfillment_team": "Hardware Support",
             "approval_required": True,
             "sla_hours": 72,
@@ -632,7 +632,7 @@ def seed_service_catalog(db):
             "name": "External Monitor Request",
             "category": "Hardware",
             "description": "Request single 34-inch ultra-wide or dual 24-inch flat panel desktop monitors, display cables, and mounting stands.",
-            "business_owner": "James Cole",
+            "business_owner": "Rahul Sharma",
             "fulfillment_team": "Hardware Support",
             "approval_required": False,
             "sla_hours": 48,
@@ -644,7 +644,7 @@ def seed_service_catalog(db):
             "name": "Corporate Mobile Device",
             "category": "Hardware",
             "description": "Request corporate cell phone hardware (Apple iPhone or Samsung Galaxy) and corporate voice/data cellular plan.",
-            "business_owner": "James Cole",
+            "business_owner": "Rahul Sharma",
             "fulfillment_team": "Hardware Support",
             "approval_required": True,
             "sla_hours": 72,
@@ -656,7 +656,7 @@ def seed_service_catalog(db):
             "name": "New Employee Onboarding",
             "category": "HR IT",
             "description": "Provision all standard IT assets for a new hire, including email inbox, Active Directory account, hardware request, and access badges.",
-            "business_owner": "Patricia Miller",
+            "business_owner": "Neha Singh",
             "fulfillment_team": "Helpdesk",
             "approval_required": True,
             "sla_hours": 120,
@@ -668,7 +668,7 @@ def seed_service_catalog(db):
             "name": "Database Account Access",
             "category": "ERP",
             "description": "Request login credentials and schema read/write permissions on Oracle, PostgreSQL, or MS SQL Server databases.",
-            "business_owner": "Elena Rostova",
+            "business_owner": "Priya Verma",
             "fulfillment_team": "Database Admins",
             "approval_required": True,
             "sla_hours": 24,
@@ -680,7 +680,7 @@ def seed_service_catalog(db):
             "name": "Cloud Sandbox Account",
             "category": "Software",
             "description": "Request a temporary sandbox account in AWS, Microsoft Azure, or GCP for development and testing purposes.",
-            "business_owner": "Tom Jenkins",
+            "business_owner": "Rahul Sharma",
             "fulfillment_team": "Cloud Operations",
             "approval_required": True,
             "sla_hours": 24,
@@ -692,7 +692,7 @@ def seed_service_catalog(db):
             "name": "Physical Access Badge",
             "category": "Security",
             "description": "Request physical smartcard badge issuance or permissions update for entry gates, server rooms, or secured parking lots.",
-            "business_owner": "Arthur Pendelton",
+            "business_owner": "Amit Patel",
             "fulfillment_team": "Security & Facilities",
             "approval_required": True,
             "sla_hours": 24,
@@ -704,7 +704,7 @@ def seed_service_catalog(db):
             "name": "Ergonomic Desk Accessories",
             "category": "Hardware",
             "description": "Request ergonomic mouse, keyboard, desk riser, or chair evaluations to align with office wellness guidelines.",
-            "business_owner": "Arthur Pendelton",
+            "business_owner": "Amit Patel",
             "fulfillment_team": "Security & Facilities",
             "approval_required": False,
             "sla_hours": 48,

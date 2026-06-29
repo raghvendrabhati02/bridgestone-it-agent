@@ -1251,28 +1251,28 @@ def get_ticket_details(
     
     PROFILES = {
         "employee": {
-            "name": "Raghvendra Bhati",
-            "department": "IT Service Desk Operations",
-            "location": "Bangalore, India",
-            "email": "employee@bridgestone.com",
+            "name": "Rahul Sharma",
+            "department": "Manufacturing",
+            "location": "Pune",
+            "email": "rahul.sharma@bridgestone.com",
             "role": "EMPLOYEE",
             "device": "BS-EMP-WS09",
             "operating_system": "Windows 11 Enterprise"
         },
         "manager": {
-            "name": "Sarah Jenkins",
-            "department": "IT Service Desk Management",
-            "location": "Tokyo, Japan",
-            "email": "manager@bridgestone.com",
+            "name": "Priya Verma",
+            "department": "Finance",
+            "location": "Indore",
+            "email": "priya.verma@bridgestone.com",
             "role": "MANAGER",
             "device": "BS-MGR-LAP8",
             "operating_system": "macOS Sonoma"
         },
         "admin": {
-            "name": "Alex Rivera",
-            "department": "IT Infrastructure & Security",
-            "location": "Nashville, USA",
-            "email": "admin@bridgestone.com",
+            "name": "Amit Patel",
+            "department": "IT Operations",
+            "location": "Chennai",
+            "email": "amit.patel@bridgestone.com",
             "role": "ADMIN",
             "device": "BS-ADM-SRV3",
             "operating_system": "Windows Server 2022"
@@ -1283,9 +1283,9 @@ def get_ticket_details(
         req_profile = PROFILES[creator_username]
     elif creator_user:
         req_profile = {
-            "name": creator_username.title(),
-            "department": "Operations",
-            "location": "Bridgestone HQ",
+            "name": "Neha Singh",
+            "department": "HR",
+            "location": "Gurugram",
             "email": creator_user.email,
             "role": creator_user.role,
             "device": "BS-USER-LAP",
@@ -1293,9 +1293,9 @@ def get_ticket_details(
         }
     else:
         req_profile = {
-            "name": creator_username.title(),
-            "department": "Operations",
-            "location": "Bridgestone HQ",
+            "name": "Neha Singh",
+            "department": "HR",
+            "location": "Gurugram",
             "email": f"{creator_username}@bridgestone.com",
             "role": "EMPLOYEE",
             "device": "BS-USER-LAP",
@@ -1305,14 +1305,14 @@ def get_ticket_details(
     # 4. Assignment Information
     assigned_team = ticket.assigned_team or "Helpdesk"
     engineers = {
-        "Network": "Robert Chen (NetOps)",
-        "Helpdesk": "Emily Watson (Helpdesk L2)",
-        "Sysadmin": "Marcus Aurelius (SysOps)",
-        "Security": "Vesper Lynd (SecOps)",
-        "Hardware": "Dave Grohl (Hardware Desk)",
-        "General": "IT Generalist Queue Manager"
+        "Network": "Rahul Sharma (NetOps)",
+        "Helpdesk": "Neha Singh (Helpdesk L2)",
+        "Sysadmin": "Amit Patel (SysOps)",
+        "Security": "Priya Verma (SecOps)",
+        "Hardware": "Neha Singh (Hardware Desk)",
+        "General": "IT Operations Queue Manager"
     }
-    assigned_engineer = ticket.assigned_engineer or engineers.get(assigned_team, "Emily Watson (Helpdesk L2)")
+    assigned_engineer = ticket.assigned_engineer or engineers.get(assigned_team, "Neha Singh (Helpdesk L2)")
     
     # 5. SLA info
     sla_info = compute_sla_status(ticket)
@@ -2117,6 +2117,10 @@ def list_rbac_audit_logs_by_ticket(
 
 @app.on_event("startup")
 def startup_event():
+    import os
+    if os.getenv("TESTING") == "True":
+        logger.info("FastAPI Startup: Testing mode active. Skipping background scheduler.")
+        return
     from app.core.json_logger import setup_json_logging
     setup_json_logging(logging.INFO)
     logger.info("FastAPI Startup: Initializing background job scheduler.")

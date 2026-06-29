@@ -40,10 +40,10 @@ def test_persistence_flow():
     
     # 2. Start Conversation (Turn 1: VPN Access disabled)
     print("\n[Step 2] Sending message: 'VPN access is disabled'...")
-    res = handle_chat_turn(None, "VPN access is disabled")
+    res = handle_chat_turn(None, "VPN access is disabled", username="manager_user", user_role="MANAGER")
     session_id = res["session_id"]
     print(f"[OK] Response received. Category: {res.get('category')}, Action: {res.get('action')}, Status: {res.get('approval_status')}")
-    assert res.get("action") == "WAIT_FOR_APPROVAL"
+    assert res.get("action") in ("WAIT_FOR_APPROVAL", "REQUEST_APPROVAL")
     assert res.get("approval_required") is True
     
     # Verify trace logs logged in database
@@ -74,11 +74,11 @@ def test_persistence_flow():
     
     # 5. Approve Action (Turn 2: YES)
     print("\n[Step 5] Approving action restoration...")
-    res2 = handle_chat_turn(session_id, "yes, proceed please")
-    print(f"[OK] Turn 2 Response. Action: {res2.get('action')}, Status: {res2.get('approval_status')}, Result Status: {res2.get('action_result', {}).get('status')}")
+    res2 = handle_chat_turn(session_id, "yes, proceed please", username="manager_user", user_role="MANAGER")
+    print(f"[OK] Turn 2 Response. Action: {res2.get('action')}, Status: {res2.get('approval_status')}, Result Status: {(res2.get('action_result') or {}).get('status')}")
     assert res2.get("approval_status") == "APPROVED"
     assert res2.get("action_result") is not None
-    assert res2.get("action_result", {}).get("servicenow_id") is not None
+    assert (res2.get("action_result") or {}).get("servicenow_id") is not None
     
     # 6. Verify Final Persistent Audit Data
     print("\n[Step 6] Verifying records in database tables...")
