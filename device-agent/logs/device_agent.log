@@ -1,0 +1,41 @@
+2026-07-03 10:58:10 | INFO     | services.software_catalog | _load_catalog:124 | Software catalog loaded: 5 approved packages — ['7zip', 'notepadplusplus', 'vlc', 'git', 'vscode']
+2026-07-03 10:58:10 | INFO     | __main__ | <module>:188 | Starting Enterprise Device Agent v1.0 on 0.0.0.0:8765
+2026-07-03 10:58:10 | DEBUG    | asyncio | __init__:634 | Using proactor: IocpProactor
+2026-07-03 10:58:30 | DEBUG    | __main__ | health:92 | Health check requested
+2026-07-03 10:58:32 | INFO     | __main__ | system_info_route:116 | System info endpoint called
+2026-07-03 10:58:32 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-03 10:58:33 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=16.2%, RAM=1.5/15.4 GB, Disk=834.2/952.9 GB
+2026-07-03 10:58:35 | INFO     | __main__ | verify_installation:176 | Verify installation endpoint called — software='7zip'
+2026-07-03 10:58:35 | INFO     | actions.verify | run:87 | Verify requested — slug='7zip'
+2026-07-03 10:58:35 | INFO     | actions.verify | run:110 | Verifying installation of '7-Zip' (winget_id=7zip.7zip)
+2026-07-03 10:58:35 | INFO     | services.command_executor | run_winget:87 | Executing command: winget list --id 7zip.7zip --exact --accept-source-agreements
+2026-07-03 10:58:43 | INFO     | services.command_executor | run_winget:125 | Command finished — returncode=2316632084, already_installed=False, success=False
+2026-07-03 10:58:43 | DEBUG    | services.command_executor | run_winget:131 | winget stdout:
+No installed package found matching input criteria.
+
+2026-07-03 10:58:43 | INFO     | actions.verify | run:150 | '7-Zip' is NOT installed on this device.
+2026-07-03 10:58:45 | INFO     | __main__ | verify_installation:176 | Verify installation endpoint called — software='badslug'
+2026-07-03 10:58:45 | INFO     | actions.verify | run:87 | Verify requested — slug='badslug'
+2026-07-03 10:58:45 | WARNING  | actions.verify | run:99 | REJECTED verify request — 'badslug' is not in the approved software catalog. Approved slugs: ['7zip', 'git', 'notepadplusplus', 'vlc', 'vscode']
+2026-07-03 11:05:35 | INFO     | __main__ | install_software:146 | Install software endpoint called — software='7zip'
+2026-07-03 11:05:35 | INFO     | actions.install | run:48 | Install requested — slug='7zip'
+2026-07-03 11:05:35 | INFO     | actions.install | run:82 | Installing '7-Zip' (winget_id=7zip.7zip)
+2026-07-03 11:05:35 | INFO     | services.command_executor | run_winget:87 | Executing command: winget install --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements
+2026-07-03 11:06:10 | INFO     | services.command_executor | run_winget:125 | Command finished — returncode=2316632332, already_installed=False, success=False
+2026-07-03 11:06:10 | DEBUG    | services.command_executor | run_winget:131 | winget stdout:
+Found 7-Zip [7zip.7zip] Version 26.02
+This application is licensed to you by its owner.
+Microsoft is not responsible for, nor does it grant any licenses to, third-party packages.
+Downloading https://github.com/ip7z/7zip/releases/download/26.02/7z2602-x64.msi
+Successfully verified installer hash
+Starting package install...
+The installer will request to run as administrator. Expect a prompt.
+You cancelled the installation.
+Installer failed with exit code: 1602
+Installer log is available at: C:\Users\raghvendra-bhati\AppData\Local\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir\7zip.7zip.26.02-26-07-03-11-05-43.log
+
+2026-07-03 11:06:10 | ERROR    | actions.install | run:139 | Installation of '7-Zip' failed. winget exited with code 2316632332. Check the log file for the full winget output.
+2026-07-05 10:47:42 | INFO     | services.software_catalog | _load_catalog:124 | Software catalog loaded: 5 approved packages — ['7zip', 'notepadplusplus', 'vlc', 'git', 'vscode']
+2026-07-05 10:48:40 | INFO     | services.software_catalog | _load_catalog:124 | Software catalog loaded: 5 approved packages — ['7zip', 'notepadplusplus', 'vlc', 'git', 'vscode']
+2026-07-05 10:48:40 | INFO     | __main__ | <module>:188 | Starting Enterprise Device Agent v1.0 on 0.0.0.0:8765
+2026-07-05 10:48:40 | DEBUG    | asyncio | __init__:634 | Using proactor: IocpProactor
