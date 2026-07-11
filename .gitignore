@@ -4,7 +4,6 @@
 __pycache__/
 *.py[cod]
 *.pyo
-*.pyd
 .pytest_cache/
 .mypy_cache/
 .coverage
@@ -16,7 +15,7 @@ venv/
 backend/venv/
 backend/venv_312/
 
-# Database
+# Databases
 *.db
 *.sqlite3
 
@@ -32,21 +31,13 @@ backend/venv_312/
 .vscode/
 .idea/
 
-# OS Files
+# OS
 .DS_Store
 Thumbs.db
 
-# =========================
 # Node / Next.js
-# =========================
 node_modules/
 .next/
 out/
 dist/
 build/
-
-# =========================
-# Misc
-# =========================
-*.tmp
-*.bak
