@@ -15,6 +15,7 @@ def run_all_tests():
     # Set TESTING environment variable to prevent APScheduler locking issues
     env = os.environ.copy()
     env["TESTING"] = "True"
+    env["PYTHONIOENCODING"] = "utf-8"
     
     for test_file in test_files:
         basename = os.path.basename(test_file)
@@ -27,7 +28,10 @@ def run_all_tests():
                 [python_exe, test_file],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 env=env,
+                cwd=backend_dir,
                 timeout=45
             )
             if res.returncode == 0:

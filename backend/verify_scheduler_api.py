@@ -5,6 +5,9 @@ import sys
 import os
 
 def main():
+    if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     print("\n" + "=" * 60)
     print("  VERIFY_SCHEDULER_API: FastAPI REST Endpoints Tests")
     print("=" * 60)

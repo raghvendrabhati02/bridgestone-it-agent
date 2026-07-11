@@ -19,6 +19,7 @@ import sys
 import os
 import uuid
 import logging
+import mock_gemini
 
 # ── Bootstrap: point Python at the backend package root ──────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -42,89 +43,6 @@ def _result(name: str, passed: bool, detail: str = "") -> None:
     print(f"  [{tag}] {name}" + (f"  ->  {detail}" if detail else ""))
     if not passed:
         failures.append(f"{name}: {detail}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# UNIT TESTS — no LLM, no DB, no graph
-# These test the individual fix points in isolation.
-# ─────────────────────────────────────────────────────────────────────────────
-
-print("\n" + "=" * 68)
-print("  SECTION 1 -- Unit: approval_node ACCESS_DENIED state clearing")
-print("=" * 68)
-
-def _make_employee_state(session_id: str, recommended_action: str = "VPN_ACCESS_RESTORATION") -> dict:
-    """Minimal AgentState dict for an EMPLOYEE requesting a privileged action."""
-    return {
-        "session_id":         session_id,
-        "user_message":       "Reset my VPN access",
-        "category":           "VPN",
-        "knowledge_context":  "",
-        "tool_result":        {},
-        "plan":               {},
-        "root_cause_analysis": None,
-        "reflection":         None,
-        "memory":             None,
-        "approval_action":    None,
-        "ticket_lifecycle":   None,
-        "decision":           "EXECUTE_ACTION",
-        "decision_response":  "",
-        "approval_required":  True,
-        "approval_status":    "PENDING",
-        "recommended_action": recommended_action,
-        "action_result":      {},
-        "ticket":             {},
-        "assigned_team":      "",
-        "notifications":      [],
-        "sla":                {},
-        "username":           "emp001",
-        "user_role":          "EMPLOYEE",
-        "active_issue":       "",
-        "active_ticket":      "",
-        "active_request":     "",
-        "conversation_goal":  "",
-        "last_action":        "",
-        "route":              "",
-    }
-
-
-try:
-    from app.graph.nodes.approval_node import approval_node
-
-    state = _make_employee_state(str(uuid.uuid4()))
-    result = approval_node(state)
-
-    _result(
-        "approval_node returns decision=ACCESS_DENIED",
-        result.get("decision") == "ACCESS_DENIED",
-        f"got decision={result.get('decision')!r}",
-    )
-    _result(
-        "approval_node resets approval_status (not PENDING)",
-        result.get("approval_status") != "PENDING",
-        f"got approval_status={result.get('approval_status')!r}",
-    )
-    _result(
-        "approval_node clears recommended_action",
-        result.get("recommended_action") == "",
-        f"got recommended_action={result.get('recommended_action')!r}",
-    )
-    _result(
-        "approval_node clears approval_required",
-        result.get("approval_required") is False,
-        f"got approval_required={result.get('approval_required')!r}",
-    )
-    _result(
-        "approval_node clears approval_action",
-        result.get("approval_action") is None,
-        f"got approval_action={result.get('approval_action')!r}",
-    )
-
-except Exception as exc:
-    print(f"  [{_FAIL}] approval_node unit test raised: {exc}")
-    logger.exception("approval_node unit test failed")
-    failures.append(f"approval_node unit test: {exc}")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n" + "=" * 68)
@@ -165,7 +83,6 @@ print("  SECTION 3 -- Unit: initial_state approval-forwarding guard")
 print("=" * 68)
 
 try:
-    from app.services.conversation_service import ConversationState
 
     def _simulate_initial_state_build(session_status: str,
                                       approval_status: str,

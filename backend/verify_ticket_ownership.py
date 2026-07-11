@@ -18,6 +18,11 @@ Run from backend/
 import sys
 import os
 
+# Force UTF-8 output on Windows terminals
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 import logging

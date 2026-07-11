@@ -25,6 +25,7 @@ from app.database.models.sla_escalation_history import SlaEscalationHistory
 from app.database.models.sla_audit_event import SlaAuditEvent
 from app.database.models.service_catalog import ServiceCatalogItem
 from app.database.models.service_request import ServiceRequest
+from app.database.models.device import Device
 from app.core.security import hash_password
 
 def clear_data(db):
@@ -46,6 +47,7 @@ def clear_data(db):
         db.query(ServiceCatalogItem).delete()
         db.query(Conversation).delete()
         db.query(SessionModel).delete()
+        db.query(Device).delete()
         db.query(User).delete()
         db.commit()
         print("[OK] Purge successful. Database schema preserved.")
@@ -272,6 +274,13 @@ def seed_tickets_and_audit(db):
 
     for t in tickets_data:
         c_time = now - timedelta(hours=t["hours_ago"])
+        
+        from app.services.itsm_classifier import classify_request
+        classification = classify_request(t["category"], t["description"])
+        app_status = classification.approval_status
+        if t["status"] in ("ASSIGNED", "IN_PROGRESS", "RESOLVED", "CLOSED") and classification.requires_approval:
+            app_status = "APPROVED"
+
         ticket = Ticket(
             ticket_id=t["ticket_id"],
             category=t["category"],
@@ -286,7 +295,11 @@ def seed_tickets_and_audit(db):
             created_at=c_time,
             sla_state=t["sla_state"],
             sla_breached=t["sla_breached"],
-            sla_breached_at=t["sla_breached_at"]
+            sla_breached_at=t["sla_breached_at"],
+            request_type=classification.request_type,
+            approval_status=app_status,
+            manager=classification.manager,
+            assignment_group=t["assigned_team"]
         )
         db.add(ticket)
         
@@ -963,6 +976,185 @@ def seed_service_requests(db):
     db.commit()
     print("[OK] Seeded 6 service requests with full audit history.")
 
+def seed_devices(db):
+    print("Seeding standard demo devices...")
+    from app.database.models.device import Device
+    from datetime import datetime, timedelta
+
+    devices_to_seed = [
+        {
+            "id": "JP-TOK-EDG-001",
+            "hostname": "JP-TOK-EDG-001",
+            "serial_number": "BS-JP-99281",
+            "manufacturer": "Lenovo",
+            "model": "ThinkPad X1 Carbon Gen 11",
+            "operating_system": "Windows 11 Enterprise (v23H2)",
+            "ram": 16.0,
+            "cpu": 45.2,
+            "disk": 256.0,
+            "ip_address": "10.142.34.8",
+            "mac_address": "00:1A:2B:3C:4D:5E",
+            "agent_version": "1.0",
+            "status": "Online",
+            "username": "takahashi.k",
+            "department": "Logistics",
+            "installed_software": ["7zip", "Chrome", "Slack", "VPN Client"],
+            "running_processes": ["chrome.exe", "slack.exe", "vpn_agent.exe", "explorer.exe"],
+            "network_interfaces": [{"name": "Ethernet", "ip": "10.142.34.8", "status": "up"}]
+        },
+        {
+            "id": "US-NSH-LPT-284",
+            "hostname": "US-NSH-LPT-284",
+            "serial_number": "BS-US-44810",
+            "manufacturer": "Dell",
+            "model": "Latitude 7440",
+            "operating_system": "Windows 11 Enterprise (v22H2)",
+            "ram": 32.0,
+            "cpu": 18.5,
+            "disk": 512.0,
+            "ip_address": "10.120.45.102",
+            "mac_address": "1A:2B:3C:4D:5E:6F",
+            "agent_version": "1.0",
+            "status": "Online",
+            "username": "smith.j",
+            "department": "HR",
+            "installed_software": ["Chrome", "Office 365", "Zoom", "7zip"],
+            "running_processes": ["msedge.exe", "teams.exe", "outlook.exe"],
+            "network_interfaces": [{"name": "Wi-Fi", "ip": "10.120.45.102", "status": "up"}]
+        },
+        {
+            "id": "EU-BRU-SRV-049",
+            "hostname": "EU-BRU-SRV-049",
+            "serial_number": "BS-EU-00192",
+            "manufacturer": "HP",
+            "model": "ProLiant DL360 Gen10",
+            "operating_system": "Windows Server 2022",
+            "ram": 64.0,
+            "cpu": 58.0,
+            "disk": 1024.0,
+            "ip_address": "10.88.12.3",
+            "mac_address": "2B:3C:4D:5E:6F:7A",
+            "agent_version": "1.0",
+            "status": "Online",
+            "username": "admin.bru",
+            "department": "IT Operations",
+            "installed_software": ["IIS", "SQL Server 2019", "7zip"],
+            "running_processes": ["sqlservr.exe", "w3wp.exe"],
+            "network_interfaces": [{"name": "LAN 1", "ip": "10.88.12.3", "status": "up"}]
+        },
+        {
+            "id": "AP-SGP-LPT-105",
+            "hostname": "AP-SGP-LPT-105",
+            "serial_number": "BS-AP-77312",
+            "manufacturer": "Apple",
+            "model": "MacBook Pro 14\"",
+            "operating_system": "macOS Sonoma",
+            "ram": 16.0,
+            "cpu": 0.0,
+            "disk": 512.0,
+            "ip_address": "10.200.74.52",
+            "mac_address": "3C:4D:5E:6F:7A:8B",
+            "agent_version": "1.0",
+            "status": "Offline",
+            "username": "tan.a",
+            "department": "Finance",
+            "installed_software": ["Excel", "Slack", "Chrome"],
+            "running_processes": [],
+            "network_interfaces": [{"name": "Wi-Fi", "ip": "10.200.74.52", "status": "down"}]
+        },
+        {
+            "id": "US-DET-LPT-901",
+            "hostname": "US-DET-LPT-901",
+            "serial_number": "BS-US-88412",
+            "manufacturer": "Dell",
+            "model": "Precision 5570",
+            "operating_system": "Windows 11 Enterprise (v23H2)",
+            "ram": 32.0,
+            "cpu": 92.0,
+            "disk": 1024.0,
+            "ip_address": "10.120.89.15",
+            "mac_address": "4D:5E:6F:7A:8B:9C",
+            "agent_version": "1.0",
+            "status": "Error",
+            "username": "miller.d",
+            "department": "Engineering",
+            "installed_software": ["Visual Studio", "Docker Desktop", "Chrome"],
+            "running_processes": ["dockerd.exe", "devenv.exe"],
+            "network_interfaces": [{"name": "Ethernet", "ip": "10.120.89.15", "status": "up"}]
+        },
+        {
+            "id": "JP-TOK-EDG-002",
+            "hostname": "JP-TOK-EDG-002",
+            "serial_number": "BS-JP-99282",
+            "manufacturer": "Lenovo",
+            "model": "ThinkPad L14 Gen 4",
+            "operating_system": "Windows 11 Enterprise (v23H2)",
+            "ram": 16.0,
+            "cpu": 12.0,
+            "disk": 256.0,
+            "ip_address": "10.142.34.12",
+            "mac_address": "5E:6F:7A:8B:9C:0D",
+            "agent_version": "0.9",
+            "status": "Updating",
+            "username": "sato.y",
+            "department": "Logistics",
+            "installed_software": ["Chrome", "VPN Client"],
+            "running_processes": ["winget.exe", "chrome.exe"],
+            "network_interfaces": [{"name": "Ethernet", "ip": "10.142.34.12", "status": "up"}]
+        },
+        {
+            "id": "EU-BRU-LPT-012",
+            "hostname": "EU-BRU-LPT-012",
+            "serial_number": "BS-EU-44510",
+            "manufacturer": "Lenovo",
+            "model": "ThinkPad T14 Gen 3",
+            "operating_system": "Windows 11 Enterprise (v22H2)",
+            "ram": 16.0,
+            "cpu": 0.0,
+            "disk": 256.0,
+            "ip_address": "10.88.34.90",
+            "mac_address": "6F:7A:8B:9C:0D:1E",
+            "agent_version": "1.0",
+            "status": "Inactive",
+            "username": "dupont.m",
+            "department": "Sales",
+            "installed_software": ["Chrome", "Office 365"],
+            "running_processes": [],
+            "network_interfaces": []
+        }
+    ]
+
+    for dev_data in devices_to_seed:
+        last_hb = datetime.utcnow() - timedelta(minutes=5) if dev_data["status"] == "Online" else datetime.utcnow() - timedelta(days=5)
+        if dev_data["status"] == "Updating":
+            last_hb = datetime.utcnow() - timedelta(minutes=1)
+
+        device = Device(
+            id=dev_data["id"],
+            hostname=dev_data["hostname"],
+            serial_number=dev_data["serial_number"],
+            manufacturer=dev_data["manufacturer"],
+            model=dev_data["model"],
+            operating_system=dev_data["operating_system"],
+            ram=dev_data["ram"],
+            cpu=dev_data["cpu"],
+            disk=dev_data["disk"],
+            ip_address=dev_data["ip_address"],
+            mac_address=dev_data["mac_address"],
+            agent_version=dev_data["agent_version"],
+            status=dev_data["status"],
+            last_heartbeat=last_hb,
+            last_seen=last_hb,
+            username=dev_data["username"],
+            department=dev_data["department"],
+            installed_software=dev_data["installed_software"],
+            running_processes=dev_data["running_processes"],
+            network_interfaces=dev_data["network_interfaces"]
+        )
+        db.add(device)
+    db.commit()
+    print("[OK] Seeded 7 enterprise devices.")
+
 def main():
     db = SessionLocal()
     try:
@@ -976,6 +1168,7 @@ def main():
         seed_scheduler_history(db)
         seed_service_catalog(db)
         seed_service_requests(db)
+        seed_devices(db)
         print("="*60)
         print("DATABASE RESET AND DEMO SEED COMPLETED SUCCESSFULLY [OK]")
         print("="*60)

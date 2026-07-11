@@ -1,16 +1,11 @@
 import logging
 import os
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.services.intent_service import detect_intent
-from app.services.conversation_service import (
-    start_conversation,
-    process_message,
-    handle_chat_turn
-)
+from app.services.conversation_service import handle_chat_turn
 from app.services.ticket_service import (
     get_all_tickets,
     create_ticket
@@ -32,6 +27,8 @@ from app.services.audit_service import (
 from app.core.security import get_current_user, RoleChecker, get_db_context
 from app.api.auth import router as auth_router
 from app.api.analytics import router as analytics_router
+from app.api.devices import router as devices_router
+from app.api.executions import router as executions_router
 from app.database.models.user import User
 
 
@@ -57,10 +54,27 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Mount static files for screenshots
+from fastapi.staticfiles import StaticFiles
+IMAGES_DIR_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "knowledge_base", "images"))
+os.makedirs(IMAGES_DIR_PATH, exist_ok=True)
+app.mount("/images", StaticFiles(directory=IMAGES_DIR_PATH), name="images")
+
 # Enable CORS Middleware to allow requests from the Next.js frontend (e.g., http://localhost:3000)
+cors_origins_env = os.getenv("CORS_ORIGINS")
+if cors_origins_env:
+    origins = [orig.strip() for orig in cors_origins_env.split(",") if orig.strip()]
+else:
+    origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000"
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For production, specify the exact origins permitted
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -77,6 +91,7 @@ def get_correlation_id_for_session(session_id: str) -> str:
         return ""
     if session_id in SESSION_CORRELATION_CACHE:
         return SESSION_CORRELATION_CACHE[session_id]
+    db = None
     try:
         from app.database.connection import SessionLocal
         db = SessionLocal()
@@ -84,18 +99,19 @@ def get_correlation_id_for_session(session_id: str) -> str:
         trace = db.query(AgentTrace).filter(AgentTrace.session_id == session_id).filter(AgentTrace.correlation_id != None).first()
         if trace:
             SESSION_CORRELATION_CACHE[session_id] = trace.correlation_id
-            db.close()
             return trace.correlation_id
         from app.database.models.audit_log import AuditLog
         log = db.query(AuditLog).filter(AuditLog.session_id == session_id).filter(AuditLog.correlation_id != None).first()
         if log:
             SESSION_CORRELATION_CACHE[session_id] = log.correlation_id
-            db.close()
             return log.correlation_id
-        db.close()
     except Exception:
         pass
+    finally:
+        if db:
+            db.close()
     return ""
+
 
 def save_session_correlation(session_id: str, correlation_id: str):
     if session_id and correlation_id:
@@ -160,6 +176,7 @@ async def monitor_requests(request: Request, call_next):
     auth_header = request.headers.get("authorization")
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header.split(" ")[1]
+        db_sess = None
         try:
             from app.core.security import decode_token
             payload = decode_token(token)
@@ -172,9 +189,11 @@ async def monitor_requests(request: Request, call_next):
                 user = db_sess.query(User).filter(User.username == username).first()
                 if user:
                     role_ctx.set(user.role)
-                db_sess.close()
         except Exception:
             pass
+        finally:
+            if db_sess:
+                db_sess.close()
             
     # Track request timestamp
     now = time.time()
@@ -365,6 +384,8 @@ def system_status(db: Session = Depends(get_db_context)):
 # Include Auth Router
 app.include_router(auth_router)
 app.include_router(analytics_router)
+app.include_router(devices_router)
+app.include_router(executions_router)
 
 
 class ChatRequest(BaseModel):
@@ -699,11 +720,17 @@ def list_tickets(
             "servicenow_id": t.servicenow_id,
             "created_by": t.created_by,
             "created_at": t.created_at.isoformat() + "Z",
+            "updated_at": t.updated_at.isoformat() + "Z" if t.updated_at else t.created_at.isoformat() + "Z",
             "resolved_at": t.resolved_at.isoformat() + "Z" if t.resolved_at else None,
             "closed_at": t.closed_at.isoformat() + "Z" if t.closed_at else None,
             "sla_state": t.sla_state or "HEALTHY",
             "sla_breached": t.sla_breached or False,
             "sla_breached_at": t.sla_breached_at.isoformat() + "Z" if t.sla_breached_at else None,
+            # ITSM Workflow fields
+            "request_type": t.request_type,
+            "manager": t.manager,
+            "approval_status": t.approval_status,
+            "assignment_group": t.assignment_group or t.assigned_team,
         })
     return results
 
@@ -756,10 +783,16 @@ def run_ticket_action(
     elif action in ("approve", "reject"):
         if current_user.role not in ("ADMIN", "MANAGER"):
             raise HTTPException(status_code=403, detail="Only Managers and Admins can approve or reject actions.")
-    elif action in ("assign", "reassign", "transfer_team", "assign_team"):
+    elif action in ("assign", "reassign", "transfer_team", "assign_team", "accept"):
         if current_user.role not in ("ADMIN", "MANAGER"):
-            raise HTTPException(status_code=403, detail="Only Managers and Admins can assign or transfer tickets.")
-    elif action in ("start_work", "put_on_hold", "request_more_information", "change_priority", "resolve", "escalate"):
+            raise HTTPException(status_code=403, detail="Only Managers and Admins can assign or accept tickets.")
+    elif action in ("manager_approve", "manager_reject"):
+        if current_user.role not in ("MANAGER", "ADMIN"):
+            raise HTTPException(status_code=403, detail="Only Managers can approve or reject service requests.")
+    elif action == "reject_request":
+        if current_user.role not in ("ADMIN", "MANAGER"):
+            raise HTTPException(status_code=403, detail="Only Admins and Managers can reject requests.")
+    elif action in ("start_work", "put_on_hold", "request_more_information", "change_priority", "resolve", "fulfill", "escalate", "pending"):
         if current_user.role != "ADMIN":
             raise HTTPException(status_code=403, detail="Only Admin users can execute this ticket lifecycle action.")
     elif action in ("close", "confirm_resolution"):
@@ -821,6 +854,119 @@ def run_ticket_action(
         )
         db.commit()
         return {"message": f"Action approval {status_str.lower()} successfully."}
+
+    # ── ITSM: manager_approve ────────────────────────────────────────────────
+    if action == "manager_approve":
+        if ticket.request_type not in ("SERVICE_REQUEST", "PRIVILEGED_ACTION"):
+            raise HTTPException(status_code=400, detail="Only SERVICE_REQUEST or PRIVILEGED_ACTION tickets require manager approval.")
+        ticket.approval_status = "APPROVED"
+        ticket.status = "APPROVED"
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="MANAGER_APPROVED",
+            actor=current_user.username,
+            action="manager_approve",
+            description=f"Request approved by manager {current_user.username}. Forwarded to admin queue."
+        )
+        from app.services.notification_service import create_notification as _notif
+        _notif(ticket_id=ticket_id, recipient=ticket.created_by or "Employee",
+               message=f"Your request {ticket_id} has been approved by your manager and is now in the admin queue.")
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="APPROVED",
+            details={"action": "manager_approve", "note": request.note or ""}
+        )
+        db.commit()
+        return {"message": "Request approved. Ticket moved to admin queue.", "status": "APPROVED", "approval_status": "APPROVED"}
+
+    # ── ITSM: manager_reject ─────────────────────────────────────────────────
+    elif action == "manager_reject":
+        if ticket.request_type not in ("SERVICE_REQUEST", "PRIVILEGED_ACTION"):
+            raise HTTPException(status_code=400, detail="Only SERVICE_REQUEST or PRIVILEGED_ACTION tickets can be rejected by manager.")
+        ticket.approval_status = "REJECTED"
+        ticket.status = "REJECTED"
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="MANAGER_REJECTED",
+            actor=current_user.username,
+            action="manager_reject",
+            description=f"Request rejected by manager {current_user.username}. Reason: {request.note or 'No reason provided.'}"
+        )
+        from app.services.notification_service import create_notification as _notif
+        _notif(ticket_id=ticket_id, recipient=ticket.created_by or "Employee",
+               message=f"Your request {ticket_id} has been rejected by your manager. Reason: {request.note or 'No reason provided.'}")
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="REJECTED",
+            details={"action": "manager_reject", "note": request.note or ""}
+        )
+        db.commit()
+        return {"message": "Request rejected.", "status": "REJECTED", "approval_status": "REJECTED"}
+
+    # ── ITSM: accept (admin accepts into queue) ──────────────────────────────
+    elif action == "accept":
+        ticket.status = "ASSIGNED"
+        if ticket.approval_status not in ("APPROVED", "NOT_REQUIRED"):
+            ticket.approval_status = "APPROVED"
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_ACCEPTED",
+            actor=current_user.username,
+            action="accept",
+            description=f"Ticket accepted by admin {current_user.username} and moved to assigned queue."
+        )
+        from app.services.notification_service import create_notification as _notif
+        _notif(ticket_id=ticket_id, recipient=ticket.created_by or "Employee",
+               message=f"Your ticket {ticket_id} has been accepted and assigned to the IT team.")
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="ASSIGNED",
+            details={"action": "accept", "note": request.note or ""}
+        )
+        db.commit()
+        return {"message": "Ticket accepted and assigned.", "status": "ASSIGNED"}
+
+    # ── ITSM: reject_request (admin hard-rejects) ────────────────────────────
+    elif action == "reject_request":
+        ticket.status = "REJECTED"
+        ticket.approval_status = "REJECTED"
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="REQUEST_REJECTED",
+            actor=current_user.username,
+            action="reject_request",
+            description=f"Request rejected by {current_user.role} {current_user.username}. Reason: {request.note or 'No reason provided.'}"
+        )
+        from app.services.notification_service import create_notification as _notif
+        _notif(ticket_id=ticket_id, recipient=ticket.created_by or "Employee",
+               message=f"Your request {ticket_id} has been rejected. Reason: {request.note or 'No reason provided.'}")
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="REJECTED",
+            details={"action": "reject_request", "note": request.note or ""}
+        )
+        db.commit()
+        return {"message": "Request rejected.", "status": "REJECTED"}
 
     # Otherwise we are updating fields
     new_status = old_status
@@ -959,6 +1105,36 @@ def run_ticket_action(
             details={"action": "put_on_hold", "note": request.note or ""}
         )
 
+    elif action == "pending":
+        new_status = "PENDING"
+        ticket.status = new_status
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_PENDING",
+            actor=current_user.username,
+            action="pending",
+            description=f"Ticket set to Pending by {current_user.username}."
+        )
+
+        create_notification(
+            ticket_id=ticket_id,
+            recipient=ticket.created_by or "Employee",
+            message=f"Ticket {ticket_id} status updated to PENDING."
+        )
+        log_rbac_event(
+            user=current_user.username,
+            role=current_user.role,
+            action="update_ticket_lifecycle",
+            ticket_id=ticket_id,
+            old_state=old_status,
+            new_state=new_status,
+            details={"action": "pending", "note": request.note or ""}
+        )
+
     elif action in ("request_more_information", "request_information"):
         new_status = "WAITING_FOR_USER"
         ticket.status = new_status
@@ -1028,7 +1204,8 @@ def run_ticket_action(
         )
 
     elif action == "resolve":
-        new_status = "RESOLVED"
+        is_sr = (ticket.request_type == "SERVICE_REQUEST")
+        new_status = "FULFILLED" if is_sr else "RESOLVED"
         ticket.status = new_status
         ticket.resolved_at = datetime.datetime.utcnow()
         db.commit()
@@ -1037,16 +1214,16 @@ def run_ticket_action(
         TimelineService.log_event(
             db=db,
             ticket_id=ticket_id,
-            event_type="TICKET_RESOLVED",
+            event_type="TICKET_FULFILLED" if is_sr else "TICKET_RESOLVED",
             actor=current_user.username,
             action="resolve",
-            description=f"Ticket resolved by {current_user.username}."
+            description=f"Ticket fulfilled by {current_user.username}." if is_sr else f"Ticket resolved by {current_user.username}."
         )
 
         create_notification(
             ticket_id=ticket_id,
             recipient=ticket.created_by or "Employee",
-            message=f"Ticket {ticket_id} has been marked as RESOLVED."
+            message=f"Ticket {ticket_id} has been marked as FULFILLED." if is_sr else f"Ticket {ticket_id} has been marked as RESOLVED."
         )
         log_rbac_event(
             user=current_user.username,
@@ -1056,6 +1233,37 @@ def run_ticket_action(
             old_state=old_status,
             new_state=new_status,
             details={"action": "resolve", "note": request.note or ""}
+        )
+
+    elif action == "fulfill":
+        new_status = "FULFILLED"
+        ticket.status = new_status
+        ticket.resolved_at = datetime.datetime.utcnow()
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_FULFILLED",
+            actor=current_user.username,
+            action="fulfill",
+            description=f"Ticket fulfilled by {current_user.username}."
+        )
+
+        create_notification(
+            ticket_id=ticket_id,
+            recipient=ticket.created_by or "Employee",
+            message=f"Ticket {ticket_id} has been marked as FULFILLED."
+        )
+        log_rbac_event(
+            user=current_user.username,
+            role=current_user.role,
+            action="update_ticket_lifecycle",
+            ticket_id=ticket_id,
+            old_state=old_status,
+            new_state=new_status,
+            details={"action": "fulfill", "note": request.note or ""}
         )
 
     elif action in ("close", "confirm_resolution"):
@@ -2566,5 +2774,515 @@ def dismiss_duplicate_ticket(
         return {"message": "Duplicate relationship warning dismissed."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Knowledge Base Admin Portal Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/knowledge/articles")
+def admin_list_articles(
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    return kas.list_all_articles()
+
+@app.get("/api/admin/knowledge/articles/{article_id}")
+def admin_get_article(
+    article_id: str,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    art = kas.get_article(article_id)
+    if not art:
+        raise HTTPException(status_code=404, detail=f"Article {article_id} not found")
+    return art
+
+@app.post("/api/admin/knowledge/articles")
+def admin_create_article(
+    body: dict,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    try:
+        return kas.create_article(body)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/admin/knowledge/articles/{article_id}")
+def admin_update_article(
+    article_id: str,
+    body: dict,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    try:
+        return kas.update_article(article_id, body)
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/admin/knowledge/articles/{article_id}")
+def admin_delete_article(
+    article_id: str,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    try:
+        kas.delete_article(article_id)
+        return {"message": "Article deleted successfully"}
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/knowledge/articles/{article_id}/publish")
+def admin_publish_article(
+    article_id: str,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    try:
+        return kas.publish_article(article_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/knowledge/articles/{article_id}/archive")
+def admin_archive_article(
+    article_id: str,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    try:
+        return kas.archive_article(article_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/knowledge/articles/{article_id}/versions")
+def admin_get_versions(
+    article_id: str,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    return kas.get_version_history(article_id)
+
+@app.get("/api/admin/knowledge/articles/{article_id}/versions/{version}")
+def admin_get_version_content(
+    article_id: str,
+    version: str,
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    content = kas.get_version_content(article_id, version)
+    if not content:
+        raise HTTPException(status_code=404, detail=f"Version {version} of {article_id} not found")
+    return content
+
+@app.post("/api/admin/knowledge/articles/{article_id}/upload")
+def admin_upload_screenshot(
+    article_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    import app.services.knowledge_admin_service as kas
+    try:
+        content = file.file.read()
+        saved_filename = kas.upload_screenshot(article_id, file.filename, content)
+        return {"filename": saved_filename}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ITSM Workflow Endpoints
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/itsm/manager-approvals")
+def get_manager_approval_queue(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Returns all SERVICE_REQUEST and PRIVILEGED_ACTION tickets pending manager approval."""
+    logger.info("ITSM: GET /api/itsm/manager-approvals for user %s", current_user.username)
+    if current_user.role not in ("MANAGER", "ADMIN"):
+        raise HTTPException(status_code=403, detail="Only Managers and Admins can view the approval queue.")
+
+    from app.database.models.ticket import Ticket
+    tickets_q = db.query(Ticket).filter(
+        Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"]),
+        Ticket.approval_status == "PENDING",
+        Ticket.status.notin_(["REJECTED", "CLOSED"])
+    )
+
+    # Managers can only see tickets assigned to them or unassigned
+    if current_user.role == "MANAGER":
+        tickets_q = tickets_q.filter(
+            (Ticket.manager == current_user.username) | (Ticket.manager == None)
+        )
+
+    results = []
+    for t in tickets_q.order_by(Ticket.created_at.desc()).all():
+        results.append({
+            "ticket_id": t.ticket_id,
+            "category": t.category,
+            "description": t.description or t.issue_description,
+            "issue_description": t.issue_description,
+            "assigned_team": t.assigned_team,
+            "priority": t.priority,
+            "status": t.status,
+            "created_by": t.created_by,
+            "created_at": t.created_at.isoformat() + "Z",
+            "updated_at": t.updated_at.isoformat() + "Z" if t.updated_at else t.created_at.isoformat() + "Z",
+            "request_type": t.request_type,
+            "manager": t.manager,
+            "approval_status": t.approval_status,
+            "assignment_group": t.assignment_group or t.assigned_team,
+            "sla_hours": t.sla_hours,
+            "sla_state": t.sla_state or "HEALTHY",
+        })
+    return {"count": len(results), "tickets": results}
+
+
+@app.get("/api/itsm/admin-queue")
+def get_admin_queue(
+    status: str | None = None,
+    request_type: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Returns all tickets in the admin processing queue (non-closed, non-rejected)."""
+    logger.info("ITSM: GET /api/itsm/admin-queue for user %s", current_user.username)
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only Admins can view the full admin queue.")
+
+    from app.database.models.ticket import Ticket
+    tickets_q = db.query(Ticket).filter(
+        Ticket.status.notin_(["CLOSED", "REJECTED"])
+    )
+
+    if status:
+        tickets_q = tickets_q.filter(Ticket.status == status.upper())
+    if request_type:
+        tickets_q = tickets_q.filter(Ticket.request_type == request_type.upper())
+
+    results = []
+    for t in tickets_q.order_by(Ticket.created_at.desc()).all():
+        results.append({
+            "ticket_id": t.ticket_id,
+            "category": t.category,
+            "description": t.description or t.issue_description,
+            "issue_description": t.issue_description,
+            "assigned_team": t.assigned_team,
+            "assigned_engineer": t.assigned_engineer,
+            "priority": t.priority,
+            "status": t.status,
+            "created_by": t.created_by,
+            "created_at": t.created_at.isoformat() + "Z",
+            "updated_at": t.updated_at.isoformat() + "Z" if t.updated_at else t.created_at.isoformat() + "Z",
+            "resolved_at": t.resolved_at.isoformat() + "Z" if t.resolved_at else None,
+            "request_type": t.request_type,
+            "manager": t.manager,
+            "approval_status": t.approval_status,
+            "assignment_group": t.assignment_group or t.assigned_team,
+            "sla_hours": t.sla_hours,
+            "sla_state": t.sla_state or "HEALTHY",
+            "sla_breached": t.sla_breached or False,
+        })
+    return {"count": len(results), "tickets": results}
+
+
+@app.get("/api/itsm/my-requests")
+def get_my_requests(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Returns tickets created by the current user with full ITSM metadata for status tracking."""
+    from app.database.models.ticket import Ticket
+    tickets_q = db.query(Ticket).filter(Ticket.created_by == current_user.username)
+    results = []
+    for t in tickets_q.order_by(Ticket.created_at.desc()).all():
+        results.append({
+            "ticket_id": t.ticket_id,
+            "category": t.category,
+            "description": t.description or t.issue_description,
+            "issue_description": t.issue_description,
+            "assigned_team": t.assigned_team,
+            "assigned_engineer": t.assigned_engineer,
+            "priority": t.priority,
+            "status": t.status,
+            "created_by": t.created_by,
+            "created_at": t.created_at.isoformat() + "Z",
+            "updated_at": t.updated_at.isoformat() + "Z" if t.updated_at else t.created_at.isoformat() + "Z",
+            "resolved_at": t.resolved_at.isoformat() + "Z" if t.resolved_at else None,
+            "closed_at": t.closed_at.isoformat() + "Z" if t.closed_at else None,
+            "request_type": t.request_type,
+            "manager": t.manager,
+            "approval_status": t.approval_status,
+            "assignment_group": t.assignment_group or t.assigned_team,
+            "sla_hours": t.sla_hours,
+            "sla_state": t.sla_state or "HEALTHY",
+            "sla_breached": t.sla_breached or False,
+        })
+    return {"count": len(results), "tickets": results}
+
+
+@app.get("/api/itsm/manager-tickets")
+def get_manager_tickets(
+    approval_status: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Returns tickets for manager view, filtered by approval_status."""
+    if current_user.role not in ("MANAGER", "ADMIN"):
+        raise HTTPException(status_code=403, detail="Only Managers and Admins can view manager tickets.")
+
+    from app.database.models.ticket import Ticket
+    from app.database.models.audit_log import AuditLog
+    from app.database.models.agent_trace import AgentTrace
+
+    query = db.query(Ticket).filter(
+        Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"])
+    )
+
+    if current_user.role == "MANAGER":
+        query = query.filter(
+            (Ticket.manager == current_user.username) | (Ticket.manager == None)
+        )
+
+    if approval_status and approval_status.upper() != "ALL":
+        query = query.filter(Ticket.approval_status == approval_status.upper())
+
+    results = []
+    for t in query.order_by(Ticket.created_at.desc()).all():
+        # Get AI Diagnosis / Recommendation dynamically
+        audit_record = db.query(AuditLog).filter(AuditLog.ticket_id == t.ticket_id).first()
+        session_id = audit_record.session_id if audit_record else None
+        
+        ai_recommendation = None
+        if session_id:
+            trace = db.query(AgentTrace).filter(AgentTrace.session_id == session_id).first()
+            if trace and trace.output_data:
+                out_data = trace.output_data
+                if isinstance(out_data, dict):
+                    ai_recommendation = out_data.get("summary") or out_data.get("thought")
+        
+        if not ai_recommendation:
+            # Fallback based on category
+            if t.category == "VPN":
+                ai_recommendation = "Verify AD lock status and reset remote access gateway session."
+            elif t.category == "Password":
+                ai_recommendation = "Check domain controller lockout status and unlock AD user."
+            elif t.category == "Software":
+                ai_recommendation = "Approve license assignment for Microsoft Visio."
+            else:
+                ai_recommendation = f"Verify request alignment with {t.category} policies."
+
+        results.append({
+            "ticket_id": t.ticket_id,
+            "category": t.category,
+            "description": t.description or t.issue_description,
+            "issue_description": t.issue_description,
+            "assigned_team": t.assigned_team,
+            "assigned_engineer": t.assigned_engineer,
+            "priority": t.priority,
+            "status": t.status,
+            "created_by": t.created_by,
+            "created_at": t.created_at.isoformat() + "Z",
+            "updated_at": t.updated_at.isoformat() + "Z" if t.updated_at else t.created_at.isoformat() + "Z",
+            "resolved_at": t.resolved_at.isoformat() + "Z" if t.resolved_at else None,
+            "closed_at": t.closed_at.isoformat() + "Z" if t.closed_at else None,
+            "request_type": t.request_type,
+            "manager": t.manager,
+            "approval_status": t.approval_status,
+            "assignment_group": t.assignment_group or t.assigned_team,
+            "sla_hours": t.sla_hours,
+            "sla_state": t.sla_state or "HEALTHY",
+            "sla_breached": t.sla_breached or False,
+            "ai_recommendation": ai_recommendation
+        })
+    return {"count": len(results), "tickets": results}
+
+
+class ExecuteActionRequest(BaseModel):
+    action_name: str
+    device_id: str
+
+
+@app.get("/api/it-actions/list")
+def list_device_actions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.device_action_service import DeviceActionService
+    actions = DeviceActionService.get_actions(current_user.username, db)
+    return {"actions": actions}
+
+
+@app.post("/api/it-actions/execute")
+def execute_device_action(
+    req: ExecuteActionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.device_action_service import DeviceActionService
+    try:
+        res = DeviceActionService.execute_action(
+            username=current_user.username,
+            device_id=req.device_id,
+            action_name=req.action_name,
+            db=db
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/it-actions/history")
+def get_device_action_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services.device_action_service import DeviceActionService
+    # Employees only see their own execution history. Managers & Admins see all.
+    username_filter = current_user.username if current_user.role == "EMPLOYEE" else None
+    history = DeviceActionService.get_execution_history(db, username_filter)
+    
+    results = []
+    for h in history:
+        results.append({
+            "id": h.id,
+            "timestamp": h.timestamp.isoformat() + "Z",
+            "username": h.username,
+            "device_id": h.device_id,
+            "action_name": h.action_name,
+            "result": h.result,
+            "duration": h.duration,
+            "logs": h.logs
+        })
+    return {"history": results}
+
+
+class DeviceAgentActionRequest(BaseModel):
+    action: str
+    parameters: dict | None = None
+
+
+@app.get("/api/device-agent/status")
+@app.get("/api/device-agent/health")
+def get_device_agent_status(
+    current_user: User = Depends(get_current_user)
+):
+    from app.services.device_agent_service import DeviceAgentService
+    service = DeviceAgentService()
+    return service.get_status()
+
+
+@app.get("/api/device-agent/system-info")
+def get_device_agent_system_info(
+    current_user: User = Depends(get_current_user)
+):
+    from app.services.device_agent_service import DeviceAgentService
+    service = DeviceAgentService()
+    return service.get_system_info()
+
+
+@app.get("/api/device-agent/history")
+def get_device_agent_history(
+    current_user: User = Depends(get_current_user)
+):
+    from app.services.device_agent_service import DeviceAgentService
+    service = DeviceAgentService()
+    return service.get_history()
+
+
+@app.post("/api/device-agent/action")
+def post_device_agent_action(
+    req: DeviceAgentActionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    import time
+    from datetime import datetime
+    from app.services.device_agent_service import DeviceAgentService
+    from app.database.models.execution_history import ExecutionHistory
+    from app.database.models.rbac_audit_log import RbacAuditLog
+
+    start_time = time.time()
+    service = DeviceAgentService()
+    
+    # Execute action via service
+    res = service.execute_action(req.action, req.parameters or {})
+    duration = round((time.time() - start_time) * 1000) # duration in ms
+    
+    # Check if agent was offline
+    if res.get("connected") is False:
+        return {
+            "connected": False,
+            "message": "Enterprise Device Agent Offline"
+        }
+        
+    success = res.get("success", False)
+    result_str = "SUCCESS" if success else "FAILED"
+    
+    # Format logs/message output
+    logs_val = res.get("logs", [])
+    if isinstance(logs_val, list):
+        logs_str = "\n".join(logs_val)
+    else:
+        logs_str = str(logs_val) if logs_val else res.get("message", "")
+
+    # Map request action to display name
+    action_display_name = req.action.replace("_", " ").title()
+    
+    # Query device department and agent version
+    from app.database.models.device import Device
+    import json
+    device_obj = db.query(Device).filter(Device.id == "BS-EMP-WS09").first()
+    device_dept = device_obj.department if device_obj else "IT Operations"
+    device_av = device_obj.agent_version if device_obj else "1.0"
+
+    # 2. Store to ExecutionHistory
+    history_entry = ExecutionHistory(
+        timestamp=datetime.utcnow(),
+        username=current_user.username,
+        device_id="BS-EMP-WS09",
+        action_name=action_display_name,
+        result=result_str,
+        status="Success" if success else "Failed",
+        duration=round(duration / 1000.0, 2), # convert ms to seconds
+        logs=logs_str,
+        parameters=json.dumps(req.parameters or {}),
+        started_at=datetime.fromtimestamp(start_time),
+        completed_at=datetime.utcnow(),
+        agent_version=device_av,
+        department=device_dept
+    )
+    db.add(history_entry)
+
+    # 3. Store to RbacAuditLog
+    audit_log = RbacAuditLog(
+        timestamp=datetime.utcnow(),
+        user=current_user.username,
+        role=current_user.role,
+        action=f"device_agent_action: {req.action}",
+        details=f"Result: {result_str} | Duration: {duration}ms"
+    )
+    db.add(audit_log)
+    db.commit()
+
+    return {
+        "success": success,
+        "message": res.get("message", "Execution complete"),
+        "duration_ms": duration,
+        "logs": logs_val if isinstance(logs_val, list) else [logs_str]
+    }
+
 
 

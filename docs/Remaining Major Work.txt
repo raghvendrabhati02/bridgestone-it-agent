@@ -1,0 +1,58 @@
+Remaining Major Work
+🔥 Phase 1 (Most Important)
+Conversation State Machine
+Context-aware Yes/No
+Multi-turn reasoning
+Troubleshooting-first logic
+
+Estimated: 2–3 days
+
+🔥 Phase 2
+Knowledge Base
+RAG Integration
+Screenshot support
+
+Estimated: 2–3 days
+
+🔥 Phase 3
+Guided troubleshooting for:
+VPN
+Outlook
+Password
+Printer
+Network
+SAP
+Software
+
+Estimated: 3–4 days
+
+🔥 Phase 4
+Frontend polish
+Better chat UX
+Knowledge Base viewer
+Screenshot rendering
+
+Estimated: 2–3 days
+
+🔥 Phase 5
+Testing
+Bug fixing
+Edge cases
+
+Estimated: 2–3 days
+
+🔥 Phase 6
+Deployment
+Docker
+README
+Documentation
+Architecture diagrams
+
+Estimated: 2 days
+
+Total Remaining
+
+If we work efficiently:
+
+Development: ~12–15 days
+Testing & polishing: ~5 days

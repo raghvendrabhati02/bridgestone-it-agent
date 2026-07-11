@@ -24,3 +24,7 @@ from app.database.models.workflow_models import (
     CSATSurvey,
     KnowledgeDraft
 )
+from app.database.models.execution_history import ExecutionHistory
+from app.database.models.device import Device
+
+

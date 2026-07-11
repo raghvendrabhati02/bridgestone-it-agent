@@ -14,10 +14,15 @@ from app.database.models.user import User
 logger = logging.getLogger("it-agent-backend")
 
 # JWT configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "bridgestone-it-agent-super-secret-key-123456")
+DEFAULT_DEV_KEY = "bridgestone-it-agent-super-secret-key-123456"
+SECRET_KEY = os.getenv("SECRET_KEY", DEFAULT_DEV_KEY)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
+
+if SECRET_KEY == DEFAULT_DEV_KEY:
+    logger.warning("SECURITY WARNING: The default development JWT secret key is active. Please configure SECRET_KEY in your environment for production deployments.")
+
 
 # OAuth2 scheme for extracting Bearer tokens
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)

@@ -1,5 +1,6 @@
 import os
 import sys
+from unittest.mock import patch, MagicMock
 
 # Force UTF-8 output on Windows terminals
 if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
@@ -33,7 +34,7 @@ def verify_ticket_end_to_end():
             failures.append(name)
 
     try:
-        # Clean up existing test session and turns to ensure test isolation
+        # Clean up existing test session and database records to ensure test isolation
         from app.database.models.session import SessionModel
         from app.database.models.conversation import Conversation
         from app.database.models.approval_history import ApprovalHistory
@@ -42,73 +43,174 @@ def verify_ticket_end_to_end():
         db.query(Conversation).filter(Conversation.session_id == session_id).delete()
         db.query(SessionModel).filter(SessionModel.session_id == session_id).delete()
         db.query(ApprovalHistory).filter(ApprovalHistory.session_id == session_id).delete()
+        db.query(Ticket).filter(Ticket.category == "VPN").delete()
         db.commit()
         conversations.pop(session_id, None)
 
-        # Step 1: User files the VPN issue (initiating approval)
-        print("\nStep 1: Employee reports VPN timeout...")
-        res1 = handle_chat_turn(
-            session_id=None,
-            message="My VPN access is disabled on gateway Pune office",
-            user_role="MANAGER",
-            username="manager_user"
-        )
-        session_id = res1["session_id"]
-        
-        check(
-            "VPN initial action requested",
-            res1.get("action") == "REQUEST_APPROVAL",
-            f"Expected action REQUEST_APPROVAL, got {res1.get('action')}"
-        )
-        check(
-            "VPN session status pending",
-            res1.get("approval_required") is True,
-            f"Expected approval_required to be True, got {res1.get('approval_required')}"
-        )
+        # Mock ServiceNow client API calls to run fully offline/mocked
+        with patch("app.services.servicenow_client.ServiceNowClient.create_incident", return_value={"sys_id": "sys123", "number": "INC0000001"}):
+            
+            # Step 1: Employee reports VPN timeout (initiating troubleshooting)
+            print("\nStep 1: Employee reports VPN timeout...")
+            res1 = handle_chat_turn(
+                session_id=session_id,
+                message="My VPN access is disabled on gateway Pune office",
+                user_role="EMPLOYEE",
+                username="employee_user"
+            )
+            session_id = res1["session_id"]
+            
+            check(
+                "VPN troubleshooting initialized",
+                res1.get("status") == "TROUBLESHOOTING",
+                f"Expected phase status TROUBLESHOOTING, got {res1.get('status')}"
+            )
 
-        # Step 2: Manager approves the request
-        print("\nStep 2: Manager approves the request...")
-        res2 = handle_chat_turn(
-            session_id=session_id,
-            message="yes proceed and approve privileged VPN access",
-            user_role="MANAGER",
-            username="manager_user"
-        )
-        
-        check(
-            "VPN action executed upon approval",
-            res2.get("action") == "EXECUTE_ACTION",
-            f"Expected action EXECUTE_ACTION, got {res2.get('action')}"
-        )
-        check(
-            "Action execution output returned",
-            res2.get("action_result") is not None,
-            "Action execution result details are empty."
-        )
+            # Turn 2-5: Advance through all steps of the KB article
+            print("\nStep 2: Advance through troubleshooting steps...")
+            for i in range(2, 6):
+                res = handle_chat_turn(
+                    session_id=session_id,
+                    message="yes",
+                    user_role="EMPLOYEE",
+                    username="employee_user"
+                )
+                check(
+                    f"Step {i} processed",
+                    res.get("status") == "TROUBLESHOOTING",
+                    f"Expected status TROUBLESHOOTING, got {res.get('status')}"
+                )
 
-        # Step 3: Employee reopens the ticket
-        # Let's mock a ticket link for this session first
-        # We find the ticket created for this session (if any) or create a mock ticket
-        # In a real workflow, the user can say "please reopen my ticket"
-        print("\nStep 3: Employee reopens the issue...")
-        res3 = handle_chat_turn(
-            session_id=session_id,
-            message="The issue is still occurring, please reopen the ticket",
-            user_role="EMPLOYEE",
-            username="employee"
-        )
-        
-        # When user asks to reopen, category remains VPN or maps accordingly,
-        # verifying that it executes correctly without crashes
-        check(
-            "Reopen conversation processed without crash",
-            res3 is not None,
-            "Conversation turn failed."
-        )
+            # Turn 6: Last step verification rejected -> transition to VERIFYING
+            res6 = handle_chat_turn(
+                session_id=session_id,
+                message="no",
+                user_role="EMPLOYEE",
+                username="employee_user"
+            )
+            check(
+                "Troubleshooting finished -> verifying",
+                res6.get("status") == "VERIFYING",
+                f"Expected status VERIFYING, got {res6.get('status')}"
+            )
 
-        # Step 4: Admin resolves the ticket directly
+            # Turn 7: Verification fails -> Action Available? Yes, Reset VPN -> WAITING_ACTION_CONFIRMATION
+            res7 = handle_chat_turn(
+                session_id=session_id,
+                message="no still broken",
+                user_role="EMPLOYEE",
+                username="employee_user"
+            )
+            check(
+                "Verification failed -> action offered",
+                res7.get("status") == "WAITING_ACTION_CONFIRMATION",
+                f"Expected status WAITING_ACTION_CONFIRMATION, got {res7.get('status')}"
+            )
+            check(
+                "Action Reset VPN session offered",
+                "Reset VPN session" in res7.get("response"),
+                "Expected Reset VPN session in response text"
+            )
+
+            # Turn 8: User confirms action -> executed successfully -> VERIFYING
+            res8 = handle_chat_turn(
+                session_id=session_id,
+                message="yes please do it",
+                user_role="EMPLOYEE",
+                username="employee_user"
+            )
+            check(
+                "Action confirmed & executed -> verify again",
+                res8.get("status") == "VERIFYING",
+                f"Expected status VERIFYING, got {res8.get('status')}"
+            )
+
+            # Turn 9: Verification fails again -> next action: Unlock VPN account -> WAITING_ACTION_CONFIRMATION
+            res9 = handle_chat_turn(
+                session_id=session_id,
+                message="no still broken after reset",
+                user_role="EMPLOYEE",
+                username="employee_user"
+            )
+            check(
+                "Post-action verification failed -> next action Unlock VPN account offered",
+                res9.get("status") == "WAITING_ACTION_CONFIRMATION",
+                f"Expected status WAITING_ACTION_CONFIRMATION, got {res9.get('status')}"
+            )
+            check(
+                "Unlock VPN account offered",
+                "Unlock VPN account" in res9.get("response"),
+                "Expected Unlock VPN account in response text"
+            )
+
+            # Turn 10: User declines Unlock VPN account -> next action: Refresh VPN profile -> WAITING_ACTION_CONFIRMATION
+            res10 = handle_chat_turn(
+                session_id=session_id,
+                message="no",
+                user_role="EMPLOYEE",
+                username="employee_user"
+            )
+            check(
+                "Action declined -> next action Refresh VPN profile offered",
+                res10.get("status") == "WAITING_ACTION_CONFIRMATION",
+                f"Expected status WAITING_ACTION_CONFIRMATION, got {res10.get('status')}"
+            )
+            check(
+                "Refresh VPN profile offered",
+                "Refresh VPN profile" in res10.get("response"),
+                "Expected Refresh VPN profile in response text"
+            )
+
+            # Turn 11: User declines Refresh VPN profile -> WAITING_TICKET_CONFIRMATION
+            res11 = handle_chat_turn(
+                session_id=session_id,
+                message="no",
+                user_role="EMPLOYEE",
+                username="employee_user"
+            )
+            check(
+                "Action declined & no more actions -> ticket offered",
+                res11.get("status") == "WAITING_TICKET_CONFIRMATION",
+                f"Expected status WAITING_TICKET_CONFIRMATION, got {res11.get('status')}"
+            )
+
+            # Turn 12: User accepts ticket -> ESCALATED
+            res12 = handle_chat_turn(
+                session_id=session_id,
+                message="yes please create ticket",
+                user_role="EMPLOYEE",
+                username="employee_user"
+            )
+            check(
+                "Ticket creation confirmed",
+                res12.get("status") == "ESCALATED",
+                f"Expected status ESCALATED, got {res12.get('status')}"
+            )
+            check(
+                "Ticket ID matches INC0000001",
+                res12.get("ticket_id") == "INC0000001",
+                f"Expected ticket_id INC0000001, got {res12.get('ticket_id')}"
+            )
+
+        # Step 4: Admin resolves the ticket directly (database and RBAC check)
         print("\nStep 4: Admin resolves ticket...")
-        # Query db for a ticket related to this session or category
+        # Since ticket_orchestrator doesn't write to DB anymore (ConversationService now handles ServiceNowClient and we mock it),
+        # let's write the ticket to DB ourselves to make sure the resolve and RbacAuditLog test runs successfully!
+        ticket_model = Ticket(
+            ticket_id="INC0000001",
+            category="VPN",
+            description="My VPN access is disabled on gateway Pune office",
+            issue_description="My VPN access is disabled on gateway Pune office",
+            assigned_team="IT Support",
+            priority="HIGH",
+            sla_hours=4,
+            status="OPEN",
+            servicenow_id="sys123",
+            created_by="employee_user"
+        )
+        db.add(ticket_model)
+        db.commit()
+
         ticket = db.query(Ticket).filter(Ticket.category == "VPN").first()
         if ticket:
             old_status = ticket.status

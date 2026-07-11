@@ -215,7 +215,7 @@ class ConversationAgent:
         if self.api_key:
             try:
                 prompt = (
-                    "You are Bridgestone's Conversational IT Support Agent. Speak naturally, professionally, and warmly, just like ChatGPT.\n"
+                    "You are Bridgestone's Conversational IT Support Agent. Speak naturally, professionally, and warmly.\n"
                     f"The user message has the intent: {intent}.\n"
                     f"User message: '{message}'\n\n"
                     "=== Conversation History ===\n"
