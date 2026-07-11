@@ -1,6 +1,19 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
 from datetime import datetime
+from enum import Enum
 from app.database.base import Base
+
+class TicketState(str, Enum):
+    NEW = "NEW"
+    WAITING_MANAGER = "WAITING_MANAGER"
+    APPROVED = "APPROVED"
+    ASSIGNED = "ASSIGNED"
+    IN_PROGRESS = "IN_PROGRESS"
+    PENDING = "PENDING"
+    RESOLVED = "RESOLVED"
+    FULFILLED = "FULFILLED"
+    CLOSED = "CLOSED"
+    REJECTED = "REJECTED"
 
 class Ticket(Base):
     __tablename__ = "tickets"
@@ -13,10 +26,18 @@ class Ticket(Base):
     assigned_team = Column(String(100), nullable=True)
     priority = Column(String(50), nullable=True)
     sla_hours = Column(Integer, nullable=True)
-    status = Column(String(50), default="OPEN")
+    status = Column(String(50), default="NEW")  # Default to NEW
     servicenow_id = Column(String(100), nullable=True)
     created_by = Column(String(100), nullable=True)  # Username of the creator
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # ITSM Workflow fields
+    request_type = Column(String(50), nullable=True)      # "INCIDENT" | "SERVICE_REQUEST"
+    manager = Column(String(100), nullable=True)           # Manager username
+    approval_status = Column(String(50), nullable=True)    # "PENDING" | "APPROVED" | "REJECTED" | "NOT_REQUIRED"
+    assignment_group = Column(String(100), nullable=True)  # Maps to assignment group
+
     # ── SLA Escalation Engine fields ──────────────────────────────────────────
     sla_state = Column(String(50), nullable=True, default="HEALTHY")  # SLA state enum string
     sla_breached = Column(Boolean, nullable=True, default=False)      # True once SLA is breached

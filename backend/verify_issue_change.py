@@ -5,10 +5,10 @@ import sys
 
 def main():
     print("Starting FastAPI backend...")
-    # Start uvicorn process
+    import os
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "8000"],
-        cwd="c:/Projects/it-agent/backend",
+        cwd=os.path.dirname(os.path.abspath(__file__)),
         stdout=sys.stdout,
         stderr=sys.stderr
     )

@@ -1,0 +1,125 @@
+{
+    "article_id": "KB0002",
+    "title": "GlobalProtect VPN Connection Guide",
+    "category": "VPN",
+    "version": "1.0",
+    "source": "Bridgestone IT Knowledge Base",
+    "keywords": [
+        "vpn",
+        "globalprotect",
+        "remote access",
+        "vpn not connecting",
+        "vpn timeout",
+        "authentication failed",
+        "portal unreachable",
+        "connect vpn",
+        "work from home"
+    ],
+    "problem": "Employee cannot connect to the corporate VPN using GlobalProtect.",
+    "symptoms": [
+        "Connection timeout",
+        "Authentication failed",
+        "Portal unreachable",
+        "Disconnected",
+        "Cannot access internal applications",
+        "VPN keeps reconnecting"
+    ],
+    "prerequisites": [
+        "Internet connection is available.",
+        "Employee has valid corporate credentials.",
+        "GlobalProtect client is installed."
+    ],
+    "troubleshooting_steps": [
+        {
+            "step": 1,
+            "title": "Verify Internet Connection",
+            "instruction": "Open a public website to confirm your internet connection is working.",
+            "image": "vpn_step1.png",
+            "caption": "Internet Connectivity Check"
+        },
+        {
+            "step": 2,
+            "title": "Open GlobalProtect",
+            "instruction": "Launch the GlobalProtect application.",
+            "image": "vpn_step2.png",
+            "caption": "GlobalProtect Application"
+        },
+        {
+            "step": 3,
+            "title": "Enter VPN Portal",
+            "instruction": "Enter the Bridgestone corporate VPN portal if it is not already configured.",
+            "image": "vpn_step3.png",
+            "caption": "VPN Portal"
+        },
+        {
+            "step": 4,
+            "title": "Connect",
+            "instruction": "Click Connect and sign in using your corporate credentials.",
+            "image": "vpn_step4.png",
+            "caption": "VPN Login"
+        },
+        {
+            "step": 5,
+            "title": "Verify Connection",
+            "instruction": "Wait until GlobalProtect shows Connected before accessing internal applications.",
+            "image": "vpn_step5.png",
+            "caption": "VPN Connected"
+        }
+    ],
+    "verification": [
+        "GlobalProtect displays Connected.",
+        "Internal websites are accessible.",
+        "Shared drives can be reached.",
+        "Corporate applications open normally."
+    ],
+    "common_errors": [
+        {
+            "error": "Authentication Failed",
+            "resolution": "Verify your username and password. If credentials are correct and the problem persists, request a password reset."
+        },
+        {
+            "error": "Connection Timeout",
+            "resolution": "Check your internet connection and reconnect."
+        },
+        {
+            "error": "Portal Unreachable",
+            "resolution": "Verify the VPN portal address and try again later."
+        }
+    ],
+    "escalation": {
+        "after_attempts": 3,
+        "team": "Network Team",
+        "condition": "Escalate if VPN cannot be connected after all troubleshooting steps."
+    },
+    "screenshots": [
+        {
+            "step": 2,
+            "image": "vpn_step2.png",
+            "caption": "GlobalProtect Home Screen"
+        },
+        {
+            "step": 4,
+            "image": "vpn_step4.png",
+            "caption": "Corporate Login Screen"
+        },
+        {
+            "step": 5,
+            "image": "vpn_step5.png",
+            "caption": "Connected Status"
+        }
+    ],
+    "faq": [
+        {
+            "question": "Can I use VPN on home Wi-Fi?",
+            "answer": "Yes. Ensure your internet connection is stable before connecting."
+        },
+        {
+            "question": "Should I reconnect repeatedly?",
+            "answer": "No. Follow the troubleshooting steps first. If the issue persists after multiple attempts, contact IT."
+        }
+    ],
+    "related_articles": [
+        "KB0001",
+        "KB0003"
+    ]
+}

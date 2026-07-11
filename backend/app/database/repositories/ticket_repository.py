@@ -16,9 +16,13 @@ class TicketRepository:
         assigned_team: str,
         priority: str,
         sla_hours: int,
-        status: str = "OPEN",
+        status: str = "NEW",
         servicenow_id: str = None,
-        created_by: str = None
+        created_by: str = None,
+        request_type: str = None,
+        manager: str = None,
+        approval_status: str = None,
+        assignment_group: str = None
     ) -> Ticket:
         ticket = self.db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
         if not ticket:
@@ -36,6 +40,14 @@ class TicketRepository:
         ticket.created_by = created_by
         ticket.created_at = datetime.utcnow()
 
+        if request_type:
+            ticket.request_type = request_type
+        if manager:
+            ticket.manager = manager
+        if approval_status:
+            ticket.approval_status = approval_status
+        if assignment_group:
+            ticket.assignment_group = assignment_group
         
         self.db.commit()
         self.db.refresh(ticket)

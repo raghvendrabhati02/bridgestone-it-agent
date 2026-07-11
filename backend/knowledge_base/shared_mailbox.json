@@ -1,0 +1,127 @@
+{
+    "article_id": "KB0004",
+    "title": "Outlook Shared Mailbox Guide",
+    "category": "SHARED_MAILBOX",
+    "version": "1.0",
+    "source": "Bridgestone IT Knowledge Base",
+    "keywords": [
+        "shared mailbox",
+        "outlook",
+        "shared email",
+        "mailbox",
+        "exchange",
+        "cannot see shared mailbox",
+        "send as",
+        "shared calendar"
+    ],
+    "problem": "Employee cannot access or use a shared mailbox in Microsoft Outlook.",
+    "symptoms": [
+        "Shared mailbox not visible",
+        "Cannot send from shared mailbox",
+        "Cannot receive shared mailbox emails",
+        "Shared calendar missing",
+        "Permission denied"
+    ],
+    "prerequisites": [
+        "The Server Team has granted access to the shared mailbox.",
+        "Microsoft Outlook is installed.",
+        "The employee is connected to the corporate network or VPN."
+    ],
+    "troubleshooting_steps": [
+        {
+            "step": 1,
+            "title": "Restart Outlook",
+            "instruction": "Close Microsoft Outlook completely and reopen it. Shared mailboxes are usually added automatically after permissions are granted.",
+            "image": "sharedmailbox_step1.png",
+            "caption": "Restart Outlook"
+        },
+        {
+            "step": 2,
+            "title": "Verify Mailbox Appears",
+            "instruction": "Check the Folder Pane to see whether the shared mailbox appears automatically.",
+            "image": "sharedmailbox_step2.png",
+            "caption": "Folder Pane"
+        },
+        {
+            "step": 3,
+            "title": "Manually Add Shared Mailbox",
+            "instruction": "Go to File → Account Settings → Change → More Settings → Advanced → Add, then enter the shared mailbox email address.",
+            "image": "sharedmailbox_step3.png",
+            "caption": "Add Shared Mailbox"
+        },
+        {
+            "step": 4,
+            "title": "Verify Sending Permissions",
+            "instruction": "Create a new email and verify that the shared mailbox is available in the From field.",
+            "image": "sharedmailbox_step4.png",
+            "caption": "From Address"
+        },
+        {
+            "step": 5,
+            "title": "Verify Shared Calendar",
+            "instruction": "Open Calendar view and verify that the shared calendar appears.",
+            "image": "sharedmailbox_step5.png",
+            "caption": "Shared Calendar"
+        }
+    ],
+    "verification": [
+        "Shared mailbox appears in Outlook.",
+        "Emails can be sent from the shared mailbox.",
+        "Emails are received successfully.",
+        "Shared calendar is accessible."
+    ],
+    "common_errors": [
+        {
+            "error": "Mailbox not visible",
+            "resolution": "Restart Outlook and wait a few minutes after mailbox permissions are assigned."
+        },
+        {
+            "error": "Permission denied",
+            "resolution": "Contact the Server Team to verify mailbox permissions."
+        },
+        {
+            "error": "Cannot send as shared mailbox",
+            "resolution": "Verify Send As or Send on Behalf permissions."
+        }
+    ],
+    "escalation": {
+        "after_attempts": 2,
+        "team": "Microsoft Exchange / Server Team",
+        "condition": "Escalate if the mailbox still does not appear after manual configuration or permissions are incorrect."
+    },
+    "screenshots": [
+        {
+            "step": 2,
+            "image": "sharedmailbox_step2.png",
+            "caption": "Shared Mailbox in Folder Pane"
+        },
+        {
+            "step": 3,
+            "image": "sharedmailbox_step3.png",
+            "caption": "Advanced Account Settings"
+        },
+        {
+            "step": 4,
+            "image": "sharedmailbox_step4.png",
+            "caption": "From Field"
+        }
+    ],
+    "faq": [
+        {
+            "question": "Can I log into Windows using a shared mailbox?",
+            "answer": "No. Shared mailboxes are only used within Outlook."
+        },
+        {
+            "question": "Why can't I see the shared mailbox?",
+            "answer": "The Server Team may still be assigning permissions. Restart Outlook and try again."
+        },
+        {
+            "question": "Can multiple users access the mailbox?",
+            "answer": "Yes. Shared mailboxes are designed for team collaboration."
+        }
+    ],
+    "related_articles": [
+        "KB0006",
+        "KB0002"
+    ]
+}

@@ -1,0 +1,120 @@
+{
+    "article_id": "KB0010",
+    "title": "SAP Access and Login Troubleshooting Guide",
+    "category": "SAP",
+    "version": "1.0",
+    "source": "Bridgestone Enterprise IT Support",
+    "keywords": [
+        "sap",
+        "sap login",
+        "sap access",
+        "sap gui",
+        "sap password",
+        "sap account",
+        "sap authorization",
+        "sap error",
+        "sap connection"
+    ],
+    "problem": "Employee is unable to access or log in to the SAP system.",
+    "symptoms": [
+        "SAP login failed",
+        "Invalid username or password",
+        "SAP GUI not opening",
+        "Authorization error",
+        "Connection to SAP server failed",
+        "Transaction access denied"
+    ],
+    "prerequisites": [
+        "SAP GUI is installed.",
+        "Corporate network or VPN is connected.",
+        "Employee has an active SAP account."
+    ],
+    "troubleshooting_steps": [
+        {
+            "step": 1,
+            "title": "Verify Network Connection",
+            "instruction": "Ensure your computer is connected to the corporate network or VPN before opening SAP.",
+            "image": "sap_step1.png",
+            "caption": "Network Connection"
+        },
+        {
+            "step": 2,
+            "title": "Open SAP GUI",
+            "instruction": "Launch SAP GUI and select the appropriate production or testing system.",
+            "image": "sap_step2.png",
+            "caption": "SAP GUI"
+        },
+        {
+            "step": 3,
+            "title": "Verify Credentials",
+            "instruction": "Enter your SAP username and password carefully. Check for keyboard layout or Caps Lock issues.",
+            "image": "sap_step3.png",
+            "caption": "SAP Login"
+        },
+        {
+            "step": 4,
+            "title": "Check Authorization Error",
+            "instruction": "If login succeeds but access is denied, note the transaction code and the complete error message.",
+            "image": "sap_step4.png",
+            "caption": "Authorization Error"
+        },
+        {
+            "step": 5,
+            "title": "Retry Access",
+            "instruction": "Close SAP GUI, reopen it, and verify whether the issue has been resolved.",
+            "image": "sap_step5.png",
+            "caption": "Retry Login"
+        }
+    ],
+    "verification": [
+        "SAP opens successfully.",
+        "Login is successful.",
+        "Required transaction codes are accessible.",
+        "Business operations can be completed."
+    ],
+    "common_errors": [
+        {
+            "error": "Invalid Username or Password",
+            "resolution": "Verify credentials or request a password reset."
+        },
+        {
+            "error": "Authorization Error",
+            "resolution": "Contact the SAP Security Team to review your access permissions."
+        },
+        {
+            "error": "Cannot Reach SAP Server",
+            "resolution": "Verify VPN or corporate network connectivity."
+        }
+    ],
+    "escalation": {
+        "after_attempts": 2,
+        "team": "SAP Support Team",
+        "condition": "Escalate if login or authorization issues continue after troubleshooting."
+    },
+    "screenshots": [
+        {
+            "step": 2,
+            "image": "sap_step2.png",
+            "caption": "SAP GUI Window"
+        },
+        {
+            "step": 4,
+            "image": "sap_step4.png",
+            "caption": "Authorization Error Message"
+        }
+    ],
+    "faq": [
+        {
+            "question": "Do I need VPN to use SAP?",
+            "answer": "Yes, when working outside the corporate network."
+        },
+        {
+            "question": "Who approves SAP access?",
+            "answer": "The SAP Security or Business Application Team."
+        }
+    ],
+    "related_articles": [
+        "KB0001",
+        "KB0002"
+    ]
+}

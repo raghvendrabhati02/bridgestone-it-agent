@@ -32,8 +32,16 @@ try:
         logger.info("PostgreSQL database connection established successfully.")
     else:
         # SQLite or other configured DB url
-        engine = create_engine(DATABASE_URL)
         is_sqlite = DATABASE_URL.startswith("sqlite")
+        if is_sqlite:
+            from sqlalchemy.pool import NullPool
+            engine = create_engine(
+                DATABASE_URL,
+                connect_args={"check_same_thread": False, "timeout": 30.0},
+                poolclass=NullPool
+            )
+        else:
+            engine = create_engine(DATABASE_URL)
         logger.info("Database connection established for: %s", DATABASE_URL)
 except Exception as e:
     logger.error("Failed to connect to configured database (%s): %s", DATABASE_URL, e)
@@ -44,7 +52,7 @@ except Exception as e:
     from sqlalchemy.pool import NullPool
     engine = create_engine(
         sqlite_url,
-        connect_args={"check_same_thread": False, "timeout": 1.5},
+        connect_args={"check_same_thread": False, "timeout": 30.0},
         poolclass=NullPool
     )
 

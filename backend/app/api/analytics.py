@@ -18,6 +18,30 @@ def get_overview(
     logger.info("FastAPI Endpoint GET '/api/analytics/overview': Requested by user %s", current_user.username)
     return analytics_service.get_overview_metrics(db)
 
+
+@router.get("/dashboard")
+def get_dashboard_analytics_api(
+    time_filter: str | None = "month",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    department: str | None = None,
+    assignment_group: str | None = None,
+    category: str | None = None,
+    current_user: User = Depends(admin_or_manager),
+    db: Session = Depends(get_db_context)
+):
+    logger.info("FastAPI Endpoint GET '/api/analytics/dashboard': Requested by user %s", current_user.username)
+    return analytics_service.get_dashboard_analytics(
+        db=db,
+        time_filter=time_filter,
+        start_date=start_date,
+        end_date=end_date,
+        department=department,
+        assignment_group=assignment_group,
+        category=category
+    )
+
+
 @router.get("/tickets")
 def get_tickets(
     current_user: User = Depends(admin_or_manager),

@@ -39,3 +39,212 @@ Installer log is available at: C:\Users\raghvendra-bhati\AppData\Local\Packages\
 2026-07-05 10:48:40 | INFO     | services.software_catalog | _load_catalog:124 | Software catalog loaded: 5 approved packages — ['7zip', 'notepadplusplus', 'vlc', 'git', 'vscode']
 2026-07-05 10:48:40 | INFO     | __main__ | <module>:188 | Starting Enterprise Device Agent v1.0 on 0.0.0.0:8765
 2026-07-05 10:48:40 | DEBUG    | asyncio | __init__:634 | Using proactor: IocpProactor
+2026-07-06 14:30:43 | DEBUG    | __main__ | health:92 | Health check requested
+2026-07-10 10:32:41 | INFO     | services.software_catalog | _load_catalog:124 | Software catalog loaded: 5 approved packages — ['7zip', 'notepadplusplus', 'vlc', 'git', 'vscode']
+2026-07-10 10:32:41 | INFO     | __main__ | <module>:285 | Starting Enterprise Device Agent v1.0 on 0.0.0.0:8765
+2026-07-10 10:32:41 | DEBUG    | asyncio | __init__:634 | Using proactor: IocpProactor
+2026-07-10 10:32:44 | INFO     | __main__ | run_heartbeat_loop:97 | Starting background device agent heartbeat daemon targeting: http://localhost:8000/api/devices/heartbeat
+2026-07-10 10:32:44 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:32:45 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=49.7%, RAM=1.7/15.4 GB, Disk=833.2/952.9 GB
+2026-07-10 10:32:48 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:32:58 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:32:59 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=64.0%, RAM=2.0/15.4 GB, Disk=833.2/952.9 GB
+2026-07-10 10:33:01 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:33:11 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:33:12 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=48.4%, RAM=1.6/15.4 GB, Disk=833.1/952.9 GB
+2026-07-10 10:33:14 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:33:24 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:33:25 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=43.0%, RAM=2.0/15.4 GB, Disk=833.1/952.9 GB
+2026-07-10 10:33:27 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:33:37 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:33:38 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=42.1%, RAM=2.0/15.4 GB, Disk=833.1/952.9 GB
+2026-07-10 10:33:40 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:33:50 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:33:51 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=69.8%, RAM=1.5/15.4 GB, Disk=833.1/952.9 GB
+2026-07-10 10:33:53 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:34:03 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:34:04 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=50.4%, RAM=1.5/15.4 GB, Disk=833.0/952.9 GB
+2026-07-10 10:34:06 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:34:16 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:34:17 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=37.2%, RAM=1.6/15.4 GB, Disk=833.0/952.9 GB
+2026-07-10 10:34:19 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:34:29 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:34:30 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=58.4%, RAM=1.3/15.4 GB, Disk=833.0/952.9 GB
+2026-07-10 10:34:32 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:34:42 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:34:43 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=96.9%, RAM=1.3/15.4 GB, Disk=833.0/952.9 GB
+2026-07-10 10:34:46 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:34:56 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:34:57 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=100.0%, RAM=1.1/15.4 GB, Disk=832.9/952.9 GB
+2026-07-10 10:34:59 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:35:09 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:35:10 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=99.4%, RAM=1.1/15.4 GB, Disk=832.9/952.9 GB
+2026-07-10 10:35:12 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:35:22 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:35:23 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=100.0%, RAM=1.1/15.4 GB, Disk=832.9/952.9 GB
+2026-07-10 10:35:25 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:35:35 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:35:36 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=97.9%, RAM=1.1/15.4 GB, Disk=832.9/952.9 GB
+2026-07-10 10:35:39 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:35:49 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:35:50 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=100.0%, RAM=1.1/15.4 GB, Disk=832.9/952.9 GB
+2026-07-10 10:35:52 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:36:02 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:36:03 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=99.0%, RAM=1.1/15.4 GB, Disk=832.9/952.9 GB
+2026-07-10 10:36:06 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:36:16 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:36:17 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=100.0%, RAM=1.1/15.4 GB, Disk=832.8/952.9 GB
+2026-07-10 10:36:20 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:36:30 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:36:31 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=100.0%, RAM=1.1/15.4 GB, Disk=832.8/952.9 GB
+2026-07-10 10:36:34 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:36:44 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:36:45 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=99.2%, RAM=1.1/15.4 GB, Disk=832.8/952.9 GB
+2026-07-10 10:36:47 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:36:57 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:36:58 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=98.1%, RAM=1.1/15.4 GB, Disk=833.8/952.9 GB
+2026-07-10 10:37:01 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:37:11 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:37:12 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=94.6%, RAM=1.9/15.4 GB, Disk=836.4/952.9 GB
+2026-07-10 10:37:14 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:37:24 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:37:25 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=60.1%, RAM=1.9/15.4 GB, Disk=837.5/952.9 GB
+2026-07-10 10:37:27 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:37:37 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:37:38 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=73.1%, RAM=1.7/15.4 GB, Disk=837.4/952.9 GB
+2026-07-10 10:37:42 | WARNING  | __main__ | run_heartbeat_loop:137 | Heartbeat background loop error: HTTP Error 503: Service Unavailable
+2026-07-10 10:37:52 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:37:53 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=76.2%, RAM=2.2/15.4 GB, Disk=837.4/952.9 GB
+2026-07-10 10:37:55 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:38:05 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:38:06 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=40.8%, RAM=2.2/15.4 GB, Disk=837.3/952.9 GB
+2026-07-10 10:38:08 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:38:18 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:38:19 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=58.3%, RAM=2.1/15.4 GB, Disk=837.3/952.9 GB
+2026-07-10 10:38:21 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:38:31 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:38:32 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=55.9%, RAM=2.1/15.4 GB, Disk=837.3/952.9 GB
+2026-07-10 10:38:35 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:38:45 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:38:46 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=39.7%, RAM=2.1/15.4 GB, Disk=837.2/952.9 GB
+2026-07-10 10:38:48 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:38:58 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:38:59 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=59.1%, RAM=2.0/15.4 GB, Disk=837.2/952.9 GB
+2026-07-10 10:39:01 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:39:11 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:39:12 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=50.3%, RAM=1.7/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:39:14 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:39:24 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:39:25 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=79.0%, RAM=1.5/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:39:27 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:39:37 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:39:38 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=54.6%, RAM=1.6/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:39:40 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:39:50 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:39:51 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=31.2%, RAM=2.1/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:39:53 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:40:03 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:40:04 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=35.4%, RAM=2.0/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:40:06 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:40:16 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:40:17 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=36.3%, RAM=2.1/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:40:19 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:40:29 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:40:30 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=31.2%, RAM=2.0/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:40:32 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:40:42 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:40:43 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=43.2%, RAM=2.0/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:40:45 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:40:55 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:40:56 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=33.5%, RAM=1.9/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:40:59 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:41:09 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:41:10 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=49.0%, RAM=1.9/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:41:12 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:41:22 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:41:23 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=42.6%, RAM=1.8/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:41:25 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:41:35 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:41:36 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=37.4%, RAM=1.4/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:41:38 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:41:48 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:41:49 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=15.9%, RAM=2.2/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:41:51 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:42:01 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:42:02 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=100.0%, RAM=2.0/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:42:04 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:42:14 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:42:15 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=75.0%, RAM=2.0/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:42:17 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:42:27 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:42:28 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=29.3%, RAM=2.1/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:42:30 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:42:40 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:42:41 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=20.6%, RAM=2.0/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:42:43 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:42:53 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:42:54 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=48.1%, RAM=1.9/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:42:56 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:43:06 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:43:07 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=32.6%, RAM=1.8/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:43:10 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:43:20 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:43:21 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=25.3%, RAM=1.7/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:43:23 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:43:33 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:43:34 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=16.3%, RAM=1.6/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:43:36 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:43:46 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:43:47 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=60.9%, RAM=1.7/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:43:49 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:43:59 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:44:00 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=36.6%, RAM=1.8/15.4 GB, Disk=837.1/952.9 GB
+2026-07-10 10:44:02 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:44:12 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:44:13 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=29.8%, RAM=1.7/15.4 GB, Disk=837.0/952.9 GB
+2026-07-10 10:44:15 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:44:25 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:44:26 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=54.2%, RAM=1.7/15.4 GB, Disk=837.0/952.9 GB
+2026-07-10 10:44:28 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:44:38 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:44:39 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=52.2%, RAM=1.9/15.4 GB, Disk=837.0/952.9 GB
+2026-07-10 10:44:41 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:44:51 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:44:52 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=27.4%, RAM=1.8/15.4 GB, Disk=837.0/952.9 GB
+2026-07-10 10:44:54 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:45:04 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:45:05 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=41.3%, RAM=1.6/15.4 GB, Disk=837.0/952.9 GB
+2026-07-10 10:45:07 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:45:17 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:45:18 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=27.8%, RAM=1.9/15.4 GB, Disk=836.9/952.9 GB
+2026-07-10 10:45:20 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:45:30 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:45:31 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=23.7%, RAM=1.9/15.4 GB, Disk=836.9/952.9 GB
+2026-07-10 10:45:34 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:45:44 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:45:45 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=27.5%, RAM=1.9/15.4 GB, Disk=836.9/952.9 GB
+2026-07-10 10:45:47 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:45:57 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:45:58 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=62.6%, RAM=1.5/15.4 GB, Disk=836.9/952.9 GB
+2026-07-10 10:46:00 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:46:10 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:46:11 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=49.4%, RAM=1.8/15.4 GB, Disk=836.9/952.9 GB
+2026-07-10 10:46:13 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:46:23 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:46:24 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=49.3%, RAM=1.7/15.4 GB, Disk=836.9/952.9 GB
+2026-07-10 10:46:26 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:46:36 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:46:37 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=23.9%, RAM=1.6/15.4 GB, Disk=836.9/952.9 GB
+2026-07-10 10:46:39 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:46:49 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:46:50 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=93.0%, RAM=1.8/15.4 GB, Disk=836.9/952.9 GB
+2026-07-10 10:46:52 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:47:02 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:47:03 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=23.3%, RAM=1.6/15.4 GB, Disk=836.8/952.9 GB
+2026-07-10 10:47:05 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:47:15 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:47:16 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=35.8%, RAM=1.7/15.4 GB, Disk=836.8/952.9 GB
+2026-07-10 10:47:18 | DEBUG    | __main__ | run_heartbeat_loop:135 | Heartbeat successfully posted to central database.
+2026-07-10 10:47:28 | INFO     | actions.system_info | gather:58 | Collecting system information
+2026-07-10 10:47:29 | INFO     | actions.system_info | gather:105 | System info collected — hostname=IDLT00100013, CPU=37.0%, RAM=1.9/15.4 GB, Disk=836.8/952.9 GB
+2026-07-10 10:47:33 | WARNING  | __main__ | run_heartbeat_loop:137 | Heartbeat background loop error: <urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>

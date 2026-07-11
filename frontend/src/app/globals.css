@@ -28,8 +28,8 @@ html, body {
   height: 100%;
   margin: 0;
   padding: 0;
-  background: var(--bg-base);
-  color: var(--text-primary);
+  background: #F8FAFC;
+  color: #0F172A;
   font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
 }

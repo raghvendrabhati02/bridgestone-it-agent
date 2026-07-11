@@ -1,0 +1,131 @@
+{
+    "article_id": "KB0005",
+    "title": "IT Asset Allocation and Handover Process",
+    "category": "IT_ASSET_ALLOCATION",
+    "version": "1.0",
+    "source": "Bridgestone IT Knowledge Base",
+    "keywords": [
+        "laptop",
+        "desktop",
+        "new laptop",
+        "new employee",
+        "asset allocation",
+        "asset request",
+        "hardware request",
+        "handover",
+        "joining kit",
+        "computer request"
+    ],
+    "problem": "A new employee or existing employee requires a company laptop or desktop.",
+    "symptoms": [
+        "No laptop assigned",
+        "Need replacement laptop",
+        "Need new desktop",
+        "Joining employee requires hardware",
+        "Damaged company device"
+    ],
+    "prerequisites": [
+        "HR or Manager must raise a Service Request.",
+        "Employee details must be available.",
+        "Budget approval must be completed if required."
+    ],
+    "troubleshooting_steps": [
+        {
+            "step": 1,
+            "title": "Raise Hardware Request",
+            "instruction": "HR or the reporting manager should create a Hardware Service Request in ServiceNow at least one month before the employee joins.",
+            "image": "asset_step1.png",
+            "caption": "Create Hardware Request"
+        },
+        {
+            "step": 2,
+            "title": "Provide Employee Details",
+            "instruction": "Fill in Employee Name, Employee Code, Department, Location, Mobile Number, Email, Joining Date, and Asset Type.",
+            "image": "asset_step2.png",
+            "caption": "Employee Information"
+        },
+        {
+            "step": 3,
+            "title": "Asset Preparation",
+            "instruction": "The IT Asset Team prepares the assigned device, performs health checks, installs standard software, and applies Bridgestone configurations.",
+            "image": "asset_step3.png",
+            "caption": "Asset Preparation"
+        },
+        {
+            "step": 4,
+            "title": "Account Configuration",
+            "instruction": "Configure Outlook, Microsoft Teams, OneDrive, and other standard corporate applications.",
+            "image": "asset_step4.png",
+            "caption": "Corporate Configuration"
+        },
+        {
+            "step": 5,
+            "title": "Device Handover",
+            "instruction": "The employee receives the device, verifies functionality, signs the handover documentation, and confirms successful delivery.",
+            "image": "asset_step5.png",
+            "caption": "Asset Handover"
+        }
+    ],
+    "verification": [
+        "Employee received the assigned asset.",
+        "Windows login is successful.",
+        "Outlook is configured.",
+        "Microsoft Teams is working.",
+        "OneDrive synchronization is successful.",
+        "Standard applications are available."
+    ],
+    "common_errors": [
+        {
+            "error": "Hardware request not created",
+            "resolution": "HR or the manager should submit a Service Request through ServiceNow."
+        },
+        {
+            "error": "Required information missing",
+            "resolution": "Update the request with complete employee details before processing."
+        },
+        {
+            "error": "Asset unavailable",
+            "resolution": "IT Asset Team will allocate the next available approved device."
+        }
+    ],
+    "escalation": {
+        "after_attempts": 1,
+        "team": "IT Asset Management Team",
+        "condition": "Escalate if hardware cannot be allocated or prepared before the required joining date."
+    },
+    "screenshots": [
+        {
+            "step": 1,
+            "image": "asset_step1.png",
+            "caption": "Hardware Service Request"
+        },
+        {
+            "step": 3,
+            "image": "asset_step3.png",
+            "caption": "Asset Preparation"
+        },
+        {
+            "step": 5,
+            "image": "asset_step5.png",
+            "caption": "Asset Handover"
+        }
+    ],
+    "faq": [
+        {
+            "question": "Who can request a new laptop?",
+            "answer": "HR or the reporting manager should submit the request through ServiceNow."
+        },
+        {
+            "question": "When should the request be submitted?",
+            "answer": "Ideally at least one month before the employee's joining date."
+        },
+        {
+            "question": "What software will be installed?",
+            "answer": "Standard Bridgestone applications including Outlook, Microsoft Teams, OneDrive, and approved business software."
+        }
+    ],
+    "related_articles": [
+        "KB0006",
+        "KB0008"
+    ]
+}

@@ -1,0 +1,118 @@
+{
+    "article_id": "KB0007",
+    "title": "Network Printer Troubleshooting Guide",
+    "category": "PRINTER",
+    "version": "1.0",
+    "source": "Bridgestone Enterprise IT Support",
+    "keywords": [
+        "printer",
+        "print",
+        "cannot print",
+        "offline printer",
+        "paper jam",
+        "print queue",
+        "network printer",
+        "printer not responding"
+    ],
+    "problem": "Employee is unable to print documents using the corporate printer.",
+    "symptoms": [
+        "Printer offline",
+        "Print job stuck",
+        "Paper jam",
+        "Unable to connect to printer",
+        "Printer not found",
+        "Nothing prints"
+    ],
+    "prerequisites": [
+        "Printer is powered on.",
+        "Computer is connected to the corporate network.",
+        "Correct printer is selected."
+    ],
+    "troubleshooting_steps": [
+        {
+            "step": 1,
+            "title": "Check Printer Power",
+            "instruction": "Verify that the printer is powered on and there are no hardware error lights.",
+            "image": "printer_step1.png",
+            "caption": "Printer Power Status"
+        },
+        {
+            "step": 2,
+            "title": "Verify Network Connection",
+            "instruction": "Ensure the printer and your computer are connected to the same corporate network.",
+            "image": "printer_step2.png",
+            "caption": "Network Connection"
+        },
+        {
+            "step": 3,
+            "title": "Clear Print Queue",
+            "instruction": "Open the print queue and cancel any stuck print jobs before trying again.",
+            "image": "printer_step3.png",
+            "caption": "Print Queue"
+        },
+        {
+            "step": 4,
+            "title": "Set Correct Default Printer",
+            "instruction": "Confirm that the correct printer is selected as the default printer.",
+            "image": "printer_step4.png",
+            "caption": "Printer Settings"
+        },
+        {
+            "step": 5,
+            "title": "Print Test Page",
+            "instruction": "Print a Windows Test Page to verify printer communication.",
+            "image": "printer_step5.png",
+            "caption": "Test Page"
+        }
+    ],
+    "verification": [
+        "Test page printed successfully.",
+        "User documents print correctly.",
+        "Print queue becomes empty."
+    ],
+    "common_errors": [
+        {
+            "error": "Printer Offline",
+            "resolution": "Verify network connectivity and restart the printer."
+        },
+        {
+            "error": "Paper Jam",
+            "resolution": "Remove the jammed paper following the printer manufacturer's instructions."
+        },
+        {
+            "error": "Print Queue Stuck",
+            "resolution": "Clear all pending print jobs and retry."
+        }
+    ],
+    "escalation": {
+        "after_attempts": 3,
+        "team": "Desktop Support",
+        "condition": "Escalate if the printer remains unavailable after troubleshooting."
+    },
+    "screenshots": [
+        {
+            "step": 3,
+            "image": "printer_step3.png",
+            "caption": "Clear Print Queue"
+        },
+        {
+            "step": 4,
+            "image": "printer_step4.png",
+            "caption": "Default Printer Settings"
+        }
+    ],
+    "faq": [
+        {
+            "question": "Why is my printer showing Offline?",
+            "answer": "Usually because of a network issue, incorrect default printer, or the printer being powered off."
+        },
+        {
+            "question": "Can I install my own printer driver?",
+            "answer": "Only approved printer drivers should be installed on corporate devices."
+        }
+    ],
+    "related_articles": [
+        "KB0008",
+        "KB0009"
+    ]
+}

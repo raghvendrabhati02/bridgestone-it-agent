@@ -187,7 +187,7 @@ def verify_all_scenarios():
         db_sess = SessionModel(
             session_id=sess6,
             category="VPN",
-            status="ACTIVE"
+            status="WAITING_TICKET_CONFIRMATION"
         )
         db.add(db_sess)
         db.commit()

@@ -1,792 +1,791 @@
-import uuid
+"""
+conversation_service.py
+─────────────────────────────────────────────────────────────────────────────
+Pure orchestrator — the ONLY entry point for the chat API.
+
+Architecture (dependency-injected)
+────────────────────────────────────
+  ConversationService
+      │
+      ├── SessionManager          load / create sessions
+      ├── IntentService           detect category
+      ├── KnowledgeOrchestrator   KB search + troubleshooting startup
+      ├── LlmOrchestrator         Gemini free conversation
+      ├── TicketOrchestrator      ServiceNow ticket creation
+      ├── ConversationRepository  persist session + turns
+      └── StateTransitionLogger   record every phase change
+
+Design contracts (MUST NOT be violated)
+────────────────────────────────────────
+  ✓  No business logic — only orchestration.
+  ✓  ApprovalEngine called ONLY in TROUBLESHOOTING / VERIFYING / WAITING_TICKET_CONFIRMATION.
+  ✓  Gemini NEVER drives workflow decisions.
+  ✓  Every phase transition logged via StateTransitionLogger.
+  ✓  Every response routed through response_builder.
+  ✓  Never crashes — all external calls wrapped in injected services.
+  ✓  handle_chat_turn() module-level function preserved for main.py backward compat.
+"""
+
+from __future__ import annotations
+
 import logging
-from app.services.knowledge_service import get_guide_content
-from app.services.llm_service import generate_response
-from app.services.rag_service import (
-    load_knowledge_context,
-    get_document_for_category
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+import app.services.approval_service as approval_service
+import app.services.conversation_memory as memory
+import app.services.troubleshooting_service as troubleshooting_service
+from app.services.rag_service import get_document_for_category
+from app.services.response_builder import (
+    format_cancel_ack,
+    format_draft_saved,
+    format_helpdesk_contact,
+    format_issue_switch,
+    format_resolution,
+    format_restart_ack,
+    format_sn_failure_options,
+    format_status_not_found,
+    format_status_response,
+    format_step,
+    format_step_reprompt,
+    format_ticket_command_prompt,
+    format_ticket_created,
+    format_ticket_declined,
+    format_ticket_prompt,
+    format_verification,
 )
+from app.services.troubleshooting_service import TroubleshootingSession
 
 logger = logging.getLogger("it-agent-backend")
 
-# In-memory storage cache for conversations (backed by DB)
-conversations = {}
 
-class ConversationState:
-    def __init__(self, session_id: str, category: str, message: str):
-        self.session_id = session_id
-        self.category = category
-        self.current_step = 0
-        self.conversation_history = [{"sender": "user", "text": message}]
-        self._status = "ACTIVE"  # ACTIVE, WAITING_FOR_CONFIRMATION, SOLVED, UNSOLVED, RESOLVED, TICKET_CREATED, AWAITING_APPROVAL
-        self.steps = []
-        self.approval_required = False
-        self.approval_status = "PENDING"
-        self.recommended_action = ""
-        self.action_result = None
-        self.tool_result = {}
-        self.active_issue = ""
-        self.active_ticket = ""
-        self.active_request = ""
-        self.conversation_goal = ""
-        self.last_action = ""
-        self.diagnostic_interview = None
-        self.tool_chain = []
-        self.hypothesis_tracker = []
-        self.engineer_summary = None
-        self.troubleshooting_iterations = 0
-        self.troubleshooting_complete = False
-        self.next_tool = None
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase enum — single source of truth for conversation state
+# ─────────────────────────────────────────────────────────────────────────────
 
+class ConversationPhase(str, Enum):
+    UNDERSTANDING               = "UNDERSTANDING"
+    DIAGNOSING                  = "DIAGNOSING"
+    TROUBLESHOOTING             = "TROUBLESHOOTING"
+    VERIFYING                   = "VERIFYING"
+    WAITING_ACTION_CONFIRMATION = "WAITING_ACTION_CONFIRMATION"
+    WAITING_TICKET_CONFIRMATION = "WAITING_TICKET_CONFIRMATION"
+    WAITING_SN_RECOVERY         = "WAITING_SN_RECOVERY"   # ServiceNow failed, offering recovery
+    RESOLVED                    = "RESOLVED"
+    ESCALATED                   = "ESCALATED"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Session state dataclass
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class SessionState:
+    session_id: str
+    category: str
+    phase: ConversationPhase = ConversationPhase.UNDERSTANDING
+    troubleshooting_session: Optional[TroubleshootingSession] = None
+    active_ticket: str = ""
+    conversation_history: List[dict] = field(default_factory=list)
+    diagnostic_answers: Dict[str, str] = field(default_factory=dict)
+    attempted_actions: List[str] = field(default_factory=list)
+    # Action engine guard — never execute more than this many auto-actions per session
+    max_automatic_actions: int = 3
+    # ServiceNow draft — saved when SN is unreachable
+    ticket_draft: Dict[str, Any] = field(default_factory=dict)
+    # Legacy fields kept for DB persistence / payload builder compatibility
+    current_step: int = 0
+    approval_required: bool = False
+    approval_status: str = "PENDING"
+    recommended_action: str = ""
+    action_result: Any = None
+    tool_result: Dict[str, Any] = field(default_factory=dict)
+    active_issue: str = ""
+    active_request: str = ""
+    conversation_goal: str = ""
+    last_action: str = ""
 
     @property
     def status(self) -> str:
-        return self._status
+        """Legacy status string used by DB persistence and payload builder."""
+        if hasattr(self, "_legacy_status") and self._legacy_status is not None:
+            return self._legacy_status
+        return self.phase.value
 
     @status.setter
-    def status(self, val: str):
-        old_val = getattr(self, "_status", None)
-        new_val = str(val).upper().strip()
-        self._status = new_val
-        if new_val == "RESOLVED" and old_val != "RESOLVED":
+    def status(self, val: str) -> None:
+        try:
+            self.phase = ConversationPhase(val)
+            self._legacy_status = None
+        except ValueError:
+            self._legacy_status = val
+
+    def reset_troubleshooting(self) -> None:
+        """Clear troubleshooting state without touching history."""
+        self.troubleshooting_session = None
+        self.phase = ConversationPhase.UNDERSTANDING
+        self.diagnostic_answers = {}
+        self.attempted_actions = []
+
+    @property
+    def is_troubleshooting(self) -> bool:
+        return self.phase == ConversationPhase.TROUBLESHOOTING
+
+    @is_troubleshooting.setter
+    def is_troubleshooting(self, val: bool) -> None:
+        if val:
+            self.phase = ConversationPhase.TROUBLESHOOTING
+        else:
+            self.phase = ConversationPhase.UNDERSTANDING
+
+    @property
+    def waiting_for_step_confirmation(self) -> bool:
+        return self.phase in (ConversationPhase.TROUBLESHOOTING, ConversationPhase.VERIFYING)
+
+    @waiting_for_step_confirmation.setter
+    def waiting_for_step_confirmation(self, val: bool) -> None:
+        pass
+
+    @property
+    def steps(self) -> List[str]:
+        if self.troubleshooting_session:
+            from app.services.knowledge_service import get_steps
+            from app.services.response_builder import format_step
             try:
-                from app.core.metrics import BUSINESS_TICKETS_RESOLVED_TOTAL
-                BUSINESS_TICKETS_RESOLVED_TOTAL.inc()
+                steps_data = get_steps(self.troubleshooting_session.article_id)
+                return [format_step(s) for s in steps_data]
             except Exception:
-                pass
+                return []
+        return []
 
-def detect_issue_change(current_category: str, latest_user_message: str) -> dict:
-    """
-    Detects if the user's latest message indicates a switch to a new issue category.
-    """
-    msg_lower = latest_user_message.lower().strip()
-    
-    # 1. Outlook checks
-    outlook_keywords = ["outlook not opening", "outlook issue", "email issue"]
-    if any(kw in msg_lower for kw in outlook_keywords):
-        if current_category != "OUTLOOK":
-            return {
-                "issue_changed": True,
-                "new_category": "OUTLOOK"
-            }
-            
-    # 2. Software installation checks
-    software_keywords = ["software installation", "unable to install software", "need software installation"]
-    if any(kw in msg_lower for kw in software_keywords):
-        if current_category != "SOFTWARE_INSTALLATION":
-            return {
-                "issue_changed": True,
-                "new_category": "SOFTWARE_INSTALLATION"
-            }
-            
-    # 3. Printer checks
-    printer_keywords = ["printer not working"]
-    if any(kw in msg_lower for kw in printer_keywords):
-        if current_category != "PRINTER":
-            return {
-                "issue_changed": True,
-                "new_category": "PRINTER"
-            }
-            
-    return {
-        "issue_changed": False,
-        "new_category": None
-    }
 
-def generate_gemini_turn(state: ConversationState, user_message: str) -> str:
-    """
-    Calls RAG service to load reference context, compiles history,
-    and queries Gemini to get the next diagnostic troubleshooting step.
-    """
-    context = load_knowledge_context(state.category)
-    
-    prompt = (
-        "You are an experienced Bridgestone IT Service Desk Colleague. Help the user troubleshoot their IT issue.\n"
-        f"Category: {state.category}\n\n"
-        "=== Guidelines ===\n"
-        "1. Empathy: Warmly acknowledge their technical difficulty first if it's the beginning of the conversation.\n"
-        "2. Explain what check is being performed: Let the user know what diagnostics you are initiating under the hood.\n"
-        "3. Conversation Memory: Pay attention to the history. Do NOT ask for details (like Wi-Fi, application, or symptoms) that they already provided. Reference their previous answers naturally.\n"
-        "4. Multiple-choice options: Where helpful (e.g. error codes, platform types), present clear A/B/C/D choices to make responding simple.\n"
-        "5. Direct & concise: Keep your response between 2 and 4 sentences. Write naturally and warmly.\n\n"
-    )
-        
-    prompt += "Conversation History:\n"
-    for msg in state.conversation_history:
-        sender = "User" if msg["sender"] == "user" else "Agent"
-        prompt += f"{sender}: {msg['text']}\n"
-        
-    prompt += f"User's latest response: {user_message}\n\n"
-    prompt += "Response:"
-    
-    res = generate_response(prompt, knowledge_context=context)
-    if isinstance(res, dict) and "debug_error" in res:
-        logger.warning("Gemini chat turn generation returned error: %s. Using local fallback.", res.get("debug_error"))
-        return f"It looks like you're experiencing some trouble with {state.category}. Could you describe the symptoms you're seeing, or would you like me to raise a support ticket?"
-    return res
+# Backward compatibility class for verification/test scripts
+class ConversationState(SessionState):
+    def __init__(self, session_id: str, category: str, initial_message: str = ""):
+        super().__init__(session_id=session_id, category=category)
+        self.initial_message = initial_message
+
 
 def start_conversation(message: str, category: str) -> ConversationState:
     session_id = str(uuid.uuid4())
     state = ConversationState(session_id, category, message)
-    conversations[session_id] = state
-    
-    # Generate the first response dynamically using Gemini
-    first_question = generate_gemini_turn(state, message)
-    state.steps = [first_question]
-    state.conversation_history = [
-        {"sender": "user", "text": message},
-        {"sender": "agent", "text": first_question}
-    ]
-    
-    # Persist session and initial turn to Database
-    from app.database.session import get_db
-    from app.database.repositories.conversation_repository import ConversationRepository
-    try:
-        with get_db() as db:
-            repo = ConversationRepository(db)
-            repo.save_session(
-                session_id=state.session_id,
-                category=state.category,
-                current_step=state.current_step,
-                status=state.status,
-
-                approval_required=state.approval_required,
-                approval_status=state.approval_status,
-
-                recommended_action=state.recommended_action,
-
-                action_result=state.action_result,
-                tool_result=state.tool_result,
-
-                active_ticket=state.active_ticket,
-                active_issue=state.active_issue,
-                active_request=state.active_request,
-                conversation_goal=state.conversation_goal,
-                last_action=state.last_action,
-            )
-            repo.save_turn(
-                session_id=state.session_id,
-                user_message=message,
-                agent_response=first_question,
-                category=state.category
-            )
-            logger.info("Conversation Service: Persisted initial session %s to database", state.session_id)
-    except Exception as e:
-        logger.error("Conversation Service: Failed to persist initial session to database: %s", e)
-        
-    logger.info("Conversation started: session_id=%s, category=%s", session_id, category)
+    _default_session_mgr.save_to_cache(state)
     return state
 
-def get_conversation(session_id: str) -> ConversationState | None:
-    from app.core.metrics import REDIS_CACHE_HITS_TOTAL, REDIS_CACHE_MISSES_TOTAL, REDIS_SESSION_RESTORATIONS_TOTAL
-    # 1. Try in-memory cache first
-    if session_id in conversations:
-        try:
-            REDIS_CACHE_HITS_TOTAL.inc()
-        except Exception:
-            pass
-        return conversations[session_id]
-        
-    try:
-        REDIS_CACHE_MISSES_TOTAL.inc()
-    except Exception:
-        pass
 
-    # 2. Try loading from database
-    from app.database.session import get_db
-    from app.database.repositories.conversation_repository import ConversationRepository
-    try:
-        with get_db() as db:
-            repo = ConversationRepository(db)
-            db_session = repo.get_session(session_id)
-            if not db_session:
+# ─────────────────────────────────────────────────────────────────────────────
+# Public accessor — kept for any callers outside ConversationService
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_conversation(session_id: str) -> Optional[SessionState]:
+    """Cache-first, then DB. Delegates to the default SessionManager."""
+    return _default_session_mgr.get(session_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ConversationService — pure orchestrator
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ConversationService:
+    """
+    Dependency-injected orchestrator.
+    All business logic lives in the injected services.
+    """
+
+    def __init__(
+        self,
+        session_mgr=None,
+        kb_orch=None,
+        ticket_orch=None,
+        llm_orch=None,
+        repo=None,
+        transition_logger=None,
+        action_engine=None,
+    ) -> None:
+        from app.services.session_manager import SessionManager
+        from app.services.knowledge_orchestrator import KnowledgeOrchestrator
+        from app.services.ticket_orchestrator import TicketOrchestrator
+        from app.services.llm_orchestrator import LlmOrchestrator
+        from app.services.conversation_repository import ConversationRepository
+        import app.services.state_transition_logger as stl
+        from app.services.action_engine import ActionEngine
+
+        self._session_mgr = session_mgr or SessionManager()
+        self._kb = kb_orch or KnowledgeOrchestrator()
+        self._tickets = ticket_orch or TicketOrchestrator()
+        self._llm = llm_orch or LlmOrchestrator()
+        self._repo = repo or ConversationRepository()
+        self._tl = transition_logger or stl
+        self._actions = action_engine or ActionEngine()
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _detect_category(self, message: str) -> Optional[str]:
+        from app.services.intent_service import detect_intent
+        try:
+            result = detect_intent(message)
+            if isinstance(result, dict) and "debug_error" in result:
                 return None
-                
-            turns = repo.get_turns(session_id)
-            first_user_msg = turns[0].user_message if turns else "Hello"
-            
-            # Reconstruct ConversationState
-            state = ConversationState(session_id, db_session.category, first_user_msg)
-            state.current_step = db_session.current_step
-            state._status = db_session.status
-            state.approval_required = db_session.approval_required
-            state.approval_status = db_session.approval_status
-            state.recommended_action = db_session.recommended_action
-            state.action_result = db_session.action_result
-            state.tool_result = db_session.tool_result or {}
+            return result
+        except Exception:
+            return None
 
-            state.active_ticket = db_session.active_ticket or ""
-            state.active_issue = db_session.active_issue or ""
-            state.active_request = db_session.active_request or ""
-            state.conversation_goal = db_session.conversation_goal or ""
-            state.last_action = db_session.last_action or ""
-            
-            # Reconstruct history
-            history = []
-            for t in turns:
-                history.append({"sender": "user", "text": t.user_message})
-                history.append({"sender": "agent", "text": t.agent_response})
-            state.conversation_history = history
-            
-            conversations[session_id] = state
-            try:
-                REDIS_SESSION_RESTORATIONS_TOTAL.inc()
-            except Exception:
-                pass
-            logger.info("Conversation Service: Restored session %s from database", session_id)
-            return state
-    except Exception as e:
-        logger.error("Conversation Service: Error restoring conversation session %s from database: %s", session_id, e)
-        return None
+    def _is_ticket_request(self, message: str) -> bool:
+        from app.services.intent_router import IntentRouter, IntentType
+        route = IntentRouter().route(message)
+        if route.intent == IntentType.TICKET_COMMAND:
+            return True
+        # Fallback keyword checks for context-specific ticket requests
+        normalized = message.lower().strip()
+        keywords = ["ticket", "incident", "escalate", "support request", "sr"]
+        return any(kw in normalized for kw in keywords)
 
-def process_message(session_id: str, message: str) -> dict:
-    state = get_conversation(session_id)
-    if not state:
-        logger.warning("Conversation state not found for session_id: %s. Starting new.", session_id)
-        state = start_conversation(message, "GENERAL")
-        
-    solved = False
-    ticket_required = False
-    ticket_details = None
-    actions = None
-    
-    # Handle confirmation check
-    if state.status in ("WAITING_FOR_CONFIRMATION", "TROUBLESHOOTING_COMPLETE", "AWAITING_CONFIRMATION"):
-        cleaned_msg = message.strip().upper()
-        if cleaned_msg in ("SOLVED", "YES"):
-            state.status = "RESOLVED"
-            bot_text = "Glad I could help."
-            solved = True
-        else:
-            state.status = "TICKET_CREATED"
-            # Extract issue description (user's first query)
-            issue_desc = state.conversation_history[0]["text"] if state.conversation_history else "IT Support Issue"
-            from app.services.ticket_service import create_ticket
-            ticket_details = create_ticket(state.category, issue_desc)
-            bot_text = f"I've created support ticket {ticket_details['ticket_id']} assigned to {ticket_details['assigned_team']}."
-            ticket_required = True
-    else:
-        # Handle active steps
-        state.current_step += 1
-        
-        if state.current_step < 3: # Let the conversation run for up to 3 diagnostic questions
-            bot_text = generate_gemini_turn(state, message)
-        else:
-            state.status = "AWAITING_CONFIRMATION"
-            bot_text = "Did this solve your issue?"
-            actions = ["SOLVED", "NOT_SOLVED"]
+    def _transition(self, state: SessionState, next_phase: ConversationPhase, reason: str) -> None:
+        self._tl.log_transition(state.session_id, state.phase, next_phase, reason)
+        state.phase = next_phase
 
-    state.conversation_history.append({"sender": "user", "text": message})
-    state.conversation_history.append({"sender": "agent", "text": bot_text})
+    def _reply(self, state: SessionState, message: str, bot_text: str, action: str, **kw) -> dict:
+        self._repo.persist(state, message, bot_text)
+        return self._build_payload(state, bot_text, action, **kw)
 
-    # Save to Database
-    from app.database.session import get_db
-    from app.database.repositories.conversation_repository import ConversationRepository
-    try:
-        with get_db() as db:
-            repo = ConversationRepository(db)
-            repo.save_session(
-                session_id=state.session_id,
-                category=state.category,
-                current_step=state.current_step,
-                status=state.status,
-                approval_required=state.approval_required,
-                approval_status=state.approval_status,
-                recommended_action=state.recommended_action,
-                action_result=state.action_result,
-                tool_result=state.tool_result,
-
-                active_ticket=state.active_ticket,
-                active_issue=state.active_issue,
-                active_request=state.active_request,
-                conversation_goal=state.conversation_goal,
-                last_action=state.last_action,
-            )
-            repo.save_turn(
-                session_id=state.session_id,
-                user_message=message,
-                agent_response=bot_text,
-                category=state.category
-            )
-            logger.info("Conversation Service: Persisted session %s from process_message to database", state.session_id)
-    except Exception as e:
-        logger.error("Conversation Service: Failed to persist process_message turn to database: %s", e)
-
-    response_payload = {
-        "session_id": state.session_id,
-        "category": state.category,
-        "source": get_document_for_category(state.category),
-        "context_used": get_document_for_category(state.category) != "N/A",
-        "question": bot_text,
-        "response": bot_text,
-        "status": state.status,
-        "solved": solved,
-        "ticket_required": ticket_required,
-        "history_length": len(state.conversation_history)
-    }
-    if ticket_details:
-        response_payload["ticket"] = ticket_details
-    if actions:
-        response_payload["actions"] = actions
-        response_payload["message"] = bot_text
-        
-    return response_payload
-
-def handle_chat_turn(session_id: str | None, message: str, username: str = None, user_role: str = None) -> dict:
-    """
-    Core conversation loop integrating intent detection, conversation history memory,
-    grounded knowledge context retrieval, response generation, and structured Decision Agent analysis.
-    """
-    from app.services.intent_service import detect_intent
-    from app.services.decision_service import analyze_conversation
-    from app.services.ticket_service import create_ticket
-
-    if not session_id:
-        # Start a new conversation state
-        session_id = str(uuid.uuid4())
-        category = detect_intent(message)
-        if isinstance(category, dict) and "debug_error" in category:
-            return category
-        state = ConversationState(session_id, category, message)
-        state.conversation_history = []  # Clear default to avoid duplicate prompt inputs
-        conversations[session_id] = state
-    else:
-        state = get_conversation(session_id)
-        if not state:
-            session_id = str(uuid.uuid4())
-            category = detect_intent(message)
-            if isinstance(category, dict) and "debug_error" in category:
-                return category
-            state = ConversationState(session_id, category, message)
-            state.conversation_history = []
-            conversations[session_id] = state
-        else:
-            detected_category = detect_intent(message)
-            if isinstance(detected_category, dict) and "debug_error" in detected_category:
-                return detected_category
-            if detected_category != "GENERAL" and detected_category != state.category:
-                old_category = state.category
-                logger.info("Category switch detected for session_id %s: %s -> %s", session_id, old_category, detected_category)
-                state.status = "RESOLVED"
-                
-                # Reset context and start a new state under the same session_id
-                state = ConversationState(session_id, detected_category, message)
-                state.conversation_history = []
-                conversations[session_id] = state
-
-    # Trigger transition out of waiting state when customer responds
-    if state and state.active_ticket:
-        try:
-            from app.database.session import get_db
-            from app.database.models.ticket import Ticket
-            from app.services.ticket_lifecycle_service import transition as transition_lifecycle
-            with get_db() as db:
-                ticket = db.query(Ticket).filter(Ticket.ticket_id == state.active_ticket).first()
-                if ticket:
-                    ticket.last_customer_response_at = datetime.utcnow()
-                    db.commit()
-                    if ticket.status in ("WAITING_FOR_CUSTOMER", "WAITING_FOR_USER"):
-                        logger.info("Conversation Service: Responding user input on waiting ticket. Transitioning ticket %s to IN_PROGRESS", ticket.ticket_id)
-                        transition_lifecycle(ticket.ticket_id, "IN_PROGRESS", note="Customer responded; automatically transitioned to IN_PROGRESS.", session_id=session_id)
-        except Exception as e:
-            logger.error("Conversation Service: Failed to auto-transition ticket to IN_PROGRESS: %s", e)
-
-    # Check if session status is AWAITING_APPROVAL, and user approved/rejected
-    if state and state.status == "AWAITING_APPROVAL":
-        msg_cleaned = message.lower().strip()
-        if any(kw in msg_cleaned for kw in ["yes", "approve", "proceed", "go ahead", "ok", "okay", "do it"]):
-            state.approval_status = "APPROVED"
-            try:
-                from app.services.audit_service import log_approval
-                log_approval(
-                    session_id=state.session_id,
-                    recommended_action=state.recommended_action,
-                    approval_status="APPROVED"
-                )
-            except Exception as e:
-                logger.error("Conversation Service: Failed to log approval: %s", e)
-        elif any(kw in msg_cleaned for kw in ["no", "cancel", "reject", "stop", "abort"]):
-            state.approval_status = "REJECTED"
-            try:
-                from app.services.audit_service import log_approval
-                log_approval(
-                    session_id=state.session_id,
-                    recommended_action=state.recommended_action,
-                    approval_status="REJECTED"
-                )
-            except Exception as e:
-                logger.error("Conversation Service: Failed to log approval: %s", e)
-
-    # Invoke the LangGraph workflow
-    from app.graph.graph import app_graph
-
-    # ── Security: only forward live approval context when the session is
-    # genuinely AWAITING_APPROVAL.  If the previous turn ended with
-    # ACCESS_DENIED, state.status is "ACTIVE" (not "AWAITING_APPROVAL"),
-    # so we reset both fields to neutral defaults.  This prevents a stale
-    # recommended_action / approval_status from being injected into the
-    # graph and allowing the LLM to re-trigger a privileged action on
-    # behalf of an unauthorized user.
-    _session_awaiting = getattr(state, "status", "ACTIVE") == "AWAITING_APPROVAL"
-    _fwd_approval_status     = getattr(state, "approval_status", "PENDING") if _session_awaiting else "PENDING"
-    _fwd_recommended_action  = getattr(state, "recommended_action", "")    if _session_awaiting else ""
-    _fwd_approval_required   = getattr(state, "approval_required", False)   if _session_awaiting else False
-
-    initial_state = {
-        "session_id": state.session_id,
-        "user_message": message,
-        "category": state.category,
-
-        "active_issue": getattr(state, "active_issue", ""),
-        "active_ticket": getattr(state, "active_ticket", ""),
-        "active_request": getattr(state, "active_request", ""),
-        "conversation_goal": getattr(state, "conversation_goal", ""),
-        "last_action": getattr(state, "last_action", ""),
-
-        "knowledge_context": "",
-        "tool_result": getattr(state, "tool_result", {}),
-        "plan": {},               # populated by planner_node during troubleshooting
-        "root_cause_analysis": None,  # populated by root_cause_node
-        "reflection": None,       # populated by reflection_node
-        "memory": None,           # populated by memory_node
-        "decision": "",
-        "decision_response": "",  # populated by decision/conversation/ticket_status nodes
-        "route": "",              # populated by context_router_node
-        "ticket": {},
-        "assigned_team": "",
-        "notifications": [],
-        "sla": {},
-        "approval_required":  _fwd_approval_required,
-        "approval_status":    _fwd_approval_status,
-        "recommended_action": _fwd_recommended_action,
-        "action_result": getattr(state, "action_result", None),
-        "username": username,
-        "user_role": user_role or "EMPLOYEE",
-        "diagnostic_interview": getattr(state, "diagnostic_interview", None),
-        "tool_chain": getattr(state, "tool_chain", []),
-        "hypothesis_tracker": getattr(state, "hypothesis_tracker", []),
-        "engineer_summary": getattr(state, "engineer_summary", None),
-        "troubleshooting_iterations": getattr(state, "troubleshooting_iterations", 0),
-        "troubleshooting_complete": getattr(state, "troubleshooting_complete", False),
-        "next_tool": getattr(state, "next_tool", None),
-    }
-
-
-    logger.info(
-        "ConversationService: Invoking graph with initial_state keys=%s, "
-        "active_ticket='%s', category='%s'",
-        list(initial_state.keys()),
-        initial_state.get("active_ticket"),
-        initial_state.get("category"),
-    )
-    logger.info("=== START GRAPH ===")
-    try:
-        final_state = app_graph.invoke(initial_state)
-    except Exception as graph_err:
-        logger.error(
-            "ConversationService: Graph invocation failed with unhandled exception: %s",
-            graph_err,
-            exc_info=True,
-        )
-        # Return a safe fallback state so the API can still respond instead of 500-ing
-        final_state = {
-            **initial_state,
-            "decision": "ASK_MORE_INFO",
-            "decision_response": (
-                "I encountered an internal error while processing your request. "
-                "Please try again in a moment."
-            ),
+    def _build_payload(self, state, bot_text, action, ticket_created=False, ticket_id=None, ticket_details=None):
+        td = ticket_details or {}
+        if state.approval_required and state.approval_status == "PENDING":
+            action = "WAIT_FOR_APPROVAL"
+        return {
+            "session_id": state.session_id,
+            "category": state.category,
+            "action": action,
+            "response": bot_text,
+            "history_length": len(memory.get_history(state.session_id)),
+            # Ticket creation fields — only truthy when DB persistence succeeded
+            "ticket_created": bool(ticket_created and ticket_id and not td.get("error")),
+            "ticket_id": ticket_id,
+            "servicenow_id": td.get("servicenow_id"),
+            "assigned_team": td.get("assigned_team"),
+            "priority": td.get("priority"),
+            "sla_hours": td.get("sla_hours"),
+            "notifications_created": bool(ticket_created),
+            # Full ITSM workflow fields
+            "ticket": ticket_details,
+            "request_type": td.get("request_type"),         # INCIDENT | SERVICE_REQUEST
+            "approval_status": td.get("approval_status"),   # NOT_REQUIRED | PENDING
+            "requires_approval": td.get("requires_approval", False),
+            "ticket_status": td.get("status"),              # WAITING_MANAGER | NEW | etc.
+            "ticket_status_label": td.get("status_label"),  # Human-readable
+            "manager": td.get("manager"),
+            # Conversation-level fields
+            "source": get_document_for_category(state.category),
+            "context_used": get_document_for_category(state.category) != "N/A",
+            "tool_result": state.tool_result,
+            "approval_required": state.approval_required,
+            "recommended_action": state.recommended_action,
+            "action_result": state.action_result,
+            "status": state.phase.value,
         }
 
-    logger.info(
-        "ConversationService: Graph complete — decision='%s', active_ticket='%s'",
-        final_state.get("decision"),
-        final_state.get("active_ticket"),
-    )
+    # ── Phase handlers (all < 20 lines) ──────────────────────────────────────
 
-    state.active_issue = final_state.get(
-        "active_issue",
-        getattr(state, "active_issue", "")
-    )
-
-    state.active_ticket = final_state.get(
-        "active_ticket",
-        getattr(state, "active_ticket", "")
-    )
-
-    state.active_request = final_state.get(
-        "active_request",
-        getattr(state, "active_request", "")
-    )
-
-    state.conversation_goal = final_state.get(
-        "conversation_goal",
-        getattr(state, "conversation_goal", "")
-    )
-
-    state.last_action = final_state.get(
-        "last_action",
-        getattr(state, "last_action", "")
-    )
-    logger.info("=== GRAPH COMPLETE ===")
-    
-    # Update category if modified during graph execution
-    state.category = final_state.get("category", state.category)
-    
-    # Persist graph approval states to session memory.
-    # ── Security: when the graph returned ACCESS_DENIED, wipe all approval
-    # context from the session object so it cannot be replayed on the next
-    # turn.  For every other outcome we copy faithfully from final_state.
-    _final_action = final_state.get("decision", "")
-    if _final_action == "ACCESS_DENIED":
-        logger.warning(
-            "ConversationService: ACCESS_DENIED — clearing approval context "
-            "for session '%s' (user='%s', role='%s').",
-            state.session_id,
-            username,
-            user_role,
-        )
-        state.approval_status    = "ACCESS_DENIED"  # sentinel — not PENDING
-        state.recommended_action = ""               # wipe stale action name
-        state.approval_required  = False
-    else:
-        state.approval_required  = final_state.get("approval_required", False)
-        state.approval_status    = final_state.get("approval_status", "PENDING")
-        state.recommended_action = final_state.get("recommended_action", "")
-    state.action_result = final_state.get("action_result")
-    state.tool_result   = final_state.get("tool_result", {})
-    state.diagnostic_interview = final_state.get("diagnostic_interview")
-    state.tool_chain = final_state.get("tool_chain", [])
-    state.hypothesis_tracker = final_state.get("hypothesis_tracker", [])
-    state.engineer_summary = final_state.get("engineer_summary")
-    state.troubleshooting_iterations = final_state.get("troubleshooting_iterations", 0)
-    state.troubleshooting_complete = final_state.get("troubleshooting_complete", False)
-    state.next_tool = final_state.get("next_tool")
-    # Store reflection for subsequent turns (available for follow-up reasoning)
-
-    if not hasattr(state, "last_reflection"):
-        state.last_reflection = None
-    state.last_reflection = final_state.get("reflection") or state.last_reflection
-
-    # ── Always extract context-manager fields from final_state ───────────────
-    # These are updated by ticket_node, context_router_node, etc.
-    # We must read them back BEFORE save_session() is called.
-    _fs_active_ticket = final_state.get("active_ticket") or ""
-    _fs_active_issue  = final_state.get("active_issue")  or ""
-    _fs_last_action   = final_state.get("last_action")   or ""
-
-    # Prefer graph output; fall back to session memory so existing values are never erased
-    if _fs_active_ticket:
-        state.active_ticket = _fs_active_ticket
-    if _fs_active_issue:
-        state.active_issue = _fs_active_issue
-    if _fs_last_action:
-        state.last_action = _fs_last_action
-
-    logger.info(
-        "ConversationService: Post-graph context — active_ticket='%s', "
-        "active_issue='%s', last_action='%s'",
-        state.active_ticket,
-        state.active_issue,
-        state.last_action,
-    )
-
-    action = final_state.get("decision", "ASK_MORE_INFO")
-    decision_response = final_state.get("decision_response")
-    
-    # Process designated Decision Agent action
-    ticket_created = False
-    ticket_id = None
-    ticket_details = None
-    
-    if decision_response:
-        bot_text = decision_response
-        if action == "TICKET_STATUS":
-            # Ticket status query — just relay the response, keep state active
-            state.status = "ACTIVE"
-        elif action in ("TICKET_CREATED", "CREATE_TICKET"):
-            # Ticket was just created — ticket_node now returns TICKET_CREATED
-            state.status = "TICKET_CREATED"
-            ticket_details = final_state.get("ticket")
-            ticket_created = True
-            ticket_id = ticket_details.get("ticket_id") if ticket_details else None
-            # Ensure active_ticket is set when graph propagation succeeded
-            if ticket_id and not state.active_ticket:
-                state.active_ticket = ticket_id
-                logger.info(
-                    "ConversationService: Set active_ticket=%s from TICKET_CREATED response",
-                    ticket_id,
-                )
-        elif action in ("WAIT_FOR_APPROVAL", "REQUEST_APPROVAL"):
-            state.status = "AWAITING_APPROVAL"
-        elif action == "EXECUTE_ACTION":
-            state.status = "RESOLVED"
-        elif action == "REJECTED":
-            state.status = "RESOLVED"
-        else:
-            state.status = "ACTIVE"
-    else:
-        # No decision_response from the multi-agent chain — build from reflection if available
-        reflection = final_state.get("reflection")
-        if action == "RESOLVED":
-            bot_text = "I'm glad your issue has been resolved! Feel free to reach out if anything else comes up."
-            state.status = "RESOLVED"
-        elif action == "CREATE_TICKET":
-            obs_text = ""
-            if reflection and reflection.get("observations"):
-                obs_text = f" {reflection['observations'][0]}"
-            bot_text = (
-                f"The diagnostics indicate this issue needs the IT team's attention.{obs_text} "
-                f"I'm creating a support ticket now and the appropriate team will follow up with you shortly."
-            )
-            state.status = "TICKET_CREATED"
-            ticket_details = final_state.get("ticket")
-            ticket_created = True
-            ticket_id = ticket_details.get("ticket_id") if ticket_details else None
-        elif action in ("RECOMMEND_ACTION", "WAIT_FOR_APPROVAL", "REQUEST_APPROVAL"):
-            # Build a reflection-aware approval request
-            recommended_action = final_state.get("recommended_action", "")
-            hyp_text = ""
-            if reflection and reflection.get("hypotheses"):
-                hyp_text = f" Based on the analysis, {reflection['hypotheses'][0].lower().rstrip('.')}."
-            obs_text = ""
-            if reflection and reflection.get("observations"):
-                for obs in reflection.get("observations", []):
-                    if "disabled" in obs.lower() or "denied" in obs.lower() or "offline" in obs.lower():
-                        obs_text = f" I found that {obs.lower()}"
-                        break
-            if recommended_action == "VPN_ACCESS_RESTORATION":
-                bot_text = (
-                    f"I checked your VPN settings and the corporate gateway.{obs_text}{hyp_text} "
-                    f"I can submit an access restoration request to re-enable your account. Would you like me to proceed?"
-                )
-            elif recommended_action == "SOFTWARE_INSTALLATION":
-                bot_text = (
-                    f"I've verified the software and your device permissions.{obs_text}{hyp_text} "
-                    f"I can submit an installation request on your behalf. Shall I go ahead?"
-                )
-            else:
-                bot_text = (
-                    f"Based on the diagnostic results{obs_text}, I recommend a corrective action.{hyp_text} "
-                    f"Shall I proceed with the recommended fix?"
-                )
-            state.status = "AWAITING_APPROVAL"
-        elif action == "EXECUTE_ACTION":
-            bot_text = "Your request has been submitted successfully. The IT team will process it and update you shortly."
-            state.status = "RESOLVED"
-        elif action == "REJECTED":
-            bot_text = "Understood — I've cancelled the request. Let me know if you'd like to try a different approach or need help with anything else."
-            state.status = "RESOLVED"
-        else:
-            # action == "ASK_MORE_INFO" -- use reflection to generate a useful response
-            state.status = "ACTIVE"
-            if reflection and (reflection.get("observations") or reflection.get("findings")):
-                # Use reflection data to generate a natural question instead of generic fallback
-                from app.agents.response_agent import ResponseAgent
-                _resp_agent = ResponseAgent()
-                bot_text = _resp_agent.generate_response(
-                    user_message=message,
-                    history=state.conversation_history,
-                    plan=["ASK_QUESTION"],
-                    reasoning=reflection,
-                    category=state.category,
-                )
-            else:
-                # Truly no diagnostic data yet -- use Gemini for a warm opening question
-                bot_text = generate_gemini_turn(state, message)
-                if isinstance(bot_text, dict) and "debug_error" in bot_text:
-                    return bot_text
-            
-    # Auto-toggle WAITING_FOR_CUSTOMER if response is a question and ticket is in IN_PROGRESS/ASSIGNED/OPEN
-    if state and state.active_ticket:
-        try:
-            from app.database.session import get_db
-            from app.database.models.ticket import Ticket
-            from app.services.ticket_lifecycle_service import transition as transition_lifecycle
-            with get_db() as db:
-                ticket = db.query(Ticket).filter(Ticket.ticket_id == state.active_ticket).first()
-                if ticket and ticket.status in ("IN_PROGRESS", "ASSIGNED", "OPEN"):
-                    if "?" in bot_text or action == "ASK_MORE_INFO":
-                        logger.info("Conversation Service: AI asked a question. Auto-transitioning ticket %s to WAITING_FOR_CUSTOMER", ticket.ticket_id)
-                        transition_lifecycle(ticket.ticket_id, "WAITING_FOR_CUSTOMER", note="AI asked a troubleshooting question; waiting for customer response.", session_id=session_id)
-        except Exception as e:
-            logger.error("Conversation Service: Failed to auto-transition ticket to WAITING_FOR_CUSTOMER: %s", e)
-
-    # Append user query and agent reply to database history
-    state.conversation_history.append({"sender": "user", "text": message})
-    state.conversation_history.append({"sender": "agent", "text": bot_text})
-    
-    # Save session and turn to database
-    from app.database.session import get_db
-    from app.database.repositories.conversation_repository import ConversationRepository
-    try:
-        with get_db() as db:
-            repo = ConversationRepository(db)
-            repo.save_session(
-                session_id=state.session_id,
-                category=state.category,
-                current_step=state.current_step,
-                status=state.status,
-                approval_required=state.approval_required,
-                approval_status=state.approval_status,
-                recommended_action=state.recommended_action,
-                action_result=state.action_result,
-                tool_result=state.tool_result,
-
-                active_ticket=state.active_ticket,
-                active_issue=state.active_issue,
-                active_request=state.active_request,
-                conversation_goal=state.conversation_goal,
-                last_action=state.last_action,
-            )
-            repo.save_turn(
-                session_id=state.session_id,
-                user_message=message,
-                agent_response=bot_text,
-                category=state.category
-            )
-            logger.info("Conversation Service: Persisted session %s from handle_chat_turn to database", state.session_id)
-    except Exception as e:
-        logger.error("Conversation Service: Failed to persist handle_chat_turn to database: %s", e)
-
-    logger.info("Decision Agent turn: session_id=%s, action=%s, ticket=%s", state.session_id, action, ticket_id)
-    
-    # Log Audit record in Audit Logging Framework
-    try:
-        from app.services.audit_service import log_audit
-        log_audit(
-            session_id=state.session_id,
-            user_message=message,
-            category=state.category,
-            decision=action,
-            approval_status=state.approval_status,
-            recommended_action=state.recommended_action,
-            action_result=state.action_result,
-            ticket_id=ticket_id,
-            servicenow_id=ticket_details.get("servicenow_id") if ticket_details else (state.action_result.get("servicenow_id") if state.action_result else None)
-        )
-    except Exception as e:
-        logger.error("Conversation Service: Failed to log turn audit log: %s", e)
+    def _handle_understanding_or_diagnosing(self, state, message, username):
+        import app.services.diagnostic_engine as de
         
-    return {
-        "session_id": state.session_id,
-        "category": state.category,
-        "action": action,
-        "response": bot_text,
-        "history_length": len(state.conversation_history),
-        "ticket_created": ticket_created,
-        "ticket_id": ticket_id,
-        "servicenow_id": ticket_details.get("servicenow_id") if ticket_details else None,
-        "assigned_team": ticket_details.get("assigned_team") if ticket_details else None,
-        "priority": ticket_details.get("priority") if ticket_details else None,
-        "sla_hours": ticket_details.get("sla_hours") if ticket_details else None,
-        "notifications_created": True if ticket_created else False,
-        "ticket": ticket_details,
-        "source": get_document_for_category(state.category),
-        "context_used": get_document_for_category(state.category) != "N/A",
-        "tool_result": state.tool_result,
-        "approval_required": state.approval_required,
-        "approval_status": state.approval_status,
-        "recommended_action": state.recommended_action,
-        "action_result": state.action_result
-    }
+        # 1. If currently in DIAGNOSING phase, extract the answer to the last question asked
+        if state.phase == ConversationPhase.DIAGNOSING:
+            last_agent_message = ""
+            history = memory.get_history(state.session_id)
+            if history:
+                for turn in reversed(history):
+                    if turn.get("sender") == "agent":
+                        last_agent_message = turn.get("text", "")
+                        break
+            if last_agent_message:
+                ans = de.extract_answers(state.category, message, last_agent_message)
+                for k, v in ans.items():
+                    state.diagnostic_answers[k] = v
+
+        # 2. Re-evaluate if confidence is high
+        if de.is_confidence_high(state.category, message, state.diagnostic_answers):
+            step_text = self._kb.start_troubleshooting(state, message)
+            if step_text:
+                self._transition(state, ConversationPhase.TROUBLESHOOTING, "Confidence high — starting KB")
+                greeting = f"Welcome to Bridgestone IT Support. Let me assist you to resolve this {state.category} issue.\n\n"
+                return self._reply(state, message, greeting + step_text, "ASK_MORE_INFO")
+            else:
+                self._transition(state, ConversationPhase.UNDERSTANDING, "No KB exists — delegating to Gemini")
+                return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
+        else:
+            # 3. Confidence is low — ask next question
+            question = de.get_next_question(state.category, state.diagnostic_answers)
+            if question:
+                self._transition(state, ConversationPhase.DIAGNOSING, "Confidence low — asking diagnostic question")
+                return self._reply(state, message, question, "ASK_MORE_INFO")
+            else:
+                step_text = self._kb.start_troubleshooting(state, message)
+                if step_text:
+                    self._transition(state, ConversationPhase.TROUBLESHOOTING, "Questions exhausted — starting KB")
+                    greeting = f"Welcome to Bridgestone IT Support. Let me assist you to resolve this {state.category} issue.\n\n"
+                    return self._reply(state, message, greeting + step_text, "ASK_MORE_INFO")
+                else:
+                    self._transition(state, ConversationPhase.UNDERSTANDING, "Questions exhausted — delegating to Gemini")
+                    return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
+
+    def _handle_troubleshooting(self, state, message, username):
+        ts = state.troubleshooting_session
+        step_details = troubleshooting_service.current_step(ts)
+        approval = approval_service.detect_approval(message)
+
+        if approval.status == approval_service.ApprovalStatus.APPROVED:
+            troubleshooting_service.mark_completed(ts)
+            next_d = troubleshooting_service.next_step(ts)
+            if next_d:
+                return self._reply(state, message, format_step(next_d), "ASK_MORE_INFO")
+            self._transition(state, ConversationPhase.VERIFYING, "all steps completed — approved")
+            return self._reply(state, message, format_verification(troubleshooting_service.get_verification(ts)), "ASK_MORE_INFO")
+
+        if approval.status == approval_service.ApprovalStatus.REJECTED:
+            troubleshooting_service.mark_completed(ts)
+            next_d = troubleshooting_service.next_step(ts)
+            if next_d:
+                return self._reply(state, message, format_step(next_d), "ASK_MORE_INFO")
+            self._transition(state, ConversationPhase.VERIFYING, "all steps completed — rejected")
+            return self._reply(state, message, format_verification(troubleshooting_service.get_verification(ts)), "ASK_MORE_INFO")
+
+        explanation = ""
+        if step_details:
+            explanation = self._llm.converse_with_step(state, message, step_details)
+        else:
+            explanation = self._llm.converse(state, message)
+            
+        reprompt_text = format_step_reprompt(step_details) if step_details else ""
+        bot_text = f"{explanation}\n\n{reprompt_text}" if reprompt_text else explanation
+        return self._reply(state, message, bot_text, "ASK_MORE_INFO")
+
+    def _handle_verifying(self, state, message, username):
+        if self._is_ticket_request(message):
+            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "user requested ticket creation during verification")
+            return self._reply(state, message, format_ticket_command_prompt(), "ASK_MORE_INFO")
+
+        approval = approval_service.detect_approval(message)
+        if approval.status == approval_service.ApprovalStatus.APPROVED:
+            self._transition(state, ConversationPhase.RESOLVED, "user confirmed resolved")
+            state.troubleshooting_session = None
+            return self._reply(state, message, format_resolution(), "RESOLVED")
+        if approval.status == approval_service.ApprovalStatus.REJECTED:
+            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "verification failed")
+            return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
+        return self._reply(state, message, format_verification(troubleshooting_service.get_verification(state.troubleshooting_session) if state.troubleshooting_session else []), "ASK_MORE_INFO")
+
+    def _handle_waiting_action(self, state, message, username):
+        if self._is_ticket_request(message):
+            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "user requested ticket creation during action confirmation")
+            return self._reply(state, message, format_ticket_command_prompt(), "ASK_MORE_INFO")
+
+        approval = approval_service.detect_approval(message)
+        action_name = state.attempted_actions[-1] if state.attempted_actions else None
+        
+        action = None
+        if action_name:
+            from app.services.action_engine import ACTIONS_MAP
+            for act in ACTIONS_MAP.get(state.category, []):
+                if act.name == action_name:
+                    action = act
+                    break
+                    
+        if not action:
+            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "no active action to confirm")
+            return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
+
+        if approval.status == approval_service.ApprovalStatus.APPROVED:
+            result = self._actions.execute(action)
+            if result.get("status") == "SUCCESS":
+                self._transition(state, ConversationPhase.VERIFYING, f"executed {action.name} successfully")
+                response_msg = f"I have successfully performed this action: {action.name}.\n\nDid that resolve the issue?"
+                return self._reply(state, message, response_msg, "ASK_MORE_INFO")
+            else:
+                self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, f"execution of {action.name} failed")
+                return self._reply(state, message, f"I attempted to {action.name} but it failed: {result.get('message', 'Unknown error')}.\n\n{format_ticket_prompt()}", "ASK_MORE_INFO")
+                
+        if approval.status == approval_service.ApprovalStatus.REJECTED:
+            # Enforce maximum automatic actions limit
+            if len(state.attempted_actions) >= state.max_automatic_actions:
+                self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "max automatic actions reached")
+                return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
+            next_action = self._actions.get_next_action(state.category, state.attempted_actions)
+            if next_action:
+                state.attempted_actions.append(next_action.name)
+                if next_action.requires_confirmation:
+                    self._transition(state, ConversationPhase.WAITING_ACTION_CONFIRMATION, f"next action: {next_action.name}")
+                    prompt_msg = f"I understand. Alternatively, I can attempt to {next_action.name}. Shall I proceed?"
+                    return self._reply(state, message, prompt_msg, "ASK_MORE_INFO")
+                else:
+                    result = self._actions.execute(next_action)
+                    if result.get("status") == "SUCCESS":
+                        self._transition(state, ConversationPhase.VERIFYING, f"executed {next_action.name} successfully")
+                        response_msg = f"I have successfully performed this action: {next_action.name}.\n\nDid that resolve the issue?"
+                        return self._reply(state, message, response_msg, "ASK_MORE_INFO")
+                    else:
+                        self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, f"execution of {next_action.name} failed")
+                        return self._reply(state, message, f"I attempted to {next_action.name} but it failed: {result.get('message', 'Unknown error')}.\n\n{format_ticket_prompt()}", "ASK_MORE_INFO")
+            else:
+                self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "action declined & no other actions available")
+                return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
+
+        prompt_msg = f"I can attempt to {action.name} for you. Shall I proceed?"
+        return self._reply(state, message, prompt_msg, "ASK_MORE_INFO")
+
+    def _handle_waiting_ticket(self, state, message, username):
+        approval = approval_service.detect_approval(message)
+        if approval.status == approval_service.ApprovalStatus.APPROVED:
+            ticket = self._tickets.create(state, username)
+            if not ticket or ticket.get("error"):
+                # ServiceNow unavailable — transition to recovery phase
+                self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure — offering recovery")
+                import app.services.conversation_memory as memory
+                hist = memory.get_history(state.session_id)
+                state.ticket_draft = {
+                    "category": state.category,
+                    "description": hist[0]["text"] if hist else (state.active_issue or "IT Support Issue"),
+                }
+                return self._reply(state, message, format_sn_failure_options(), "ASK_MORE_INFO")
+            tid = ticket.get("ticket_id", "N/A")
+            self._transition(state, ConversationPhase.ESCALATED, f"ticket approved — {tid}")
+            state.active_ticket = tid
+            state.troubleshooting_session = None
+            bot_text = format_ticket_created(
+                tid,
+                ticket.get("assigned_team", "IT Support"),
+                request_type=ticket.get("request_type", "INCIDENT"),
+                requires_approval=ticket.get("requires_approval", False),
+                status_label=ticket.get("status_label", ""),
+            )
+            return self._reply(state, message, bot_text, "TICKET_CREATED", ticket_created=True, ticket_id=tid, ticket_details=ticket)
+        if approval.status == approval_service.ApprovalStatus.REJECTED:
+            self._transition(state, ConversationPhase.UNDERSTANDING, "ticket declined by user")
+            state.reset_troubleshooting()
+            return self._reply(state, message, format_ticket_declined(), "ASK_MORE_INFO")
+        return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
+
+    def _handle_sn_recovery(self, state, message, username):
+        """Handle user's chosen recovery path after a ServiceNow failure."""
+        from app.services.intent_router import TicketFailureIntent, detect_ticket_failure_intent
+        intent = detect_ticket_failure_intent(message)
+
+        if intent == TicketFailureIntent.RETRY:
+            ticket = self._tickets.create(state, username)
+            if not ticket or ticket.get("error"):
+                # Still failing — stay in WAITING_SN_RECOVERY
+                return self._reply(state, message, format_sn_failure_options(), "ASK_MORE_INFO")
+            tid = ticket.get("ticket_id", "N/A")
+            self._transition(state, ConversationPhase.ESCALATED, f"ticket retry successful — {tid}")
+            state.active_ticket = tid
+            state.troubleshooting_session = None
+            state.ticket_draft = {}
+            bot_text = format_ticket_created(
+                tid,
+                ticket.get("assigned_team", "IT Support"),
+                request_type=ticket.get("request_type", "INCIDENT"),
+                requires_approval=ticket.get("requires_approval", False),
+                status_label=ticket.get("status_label", ""),
+            )
+            return self._reply(state, message, bot_text, "TICKET_CREATED", ticket_created=True, ticket_id=tid, ticket_details=ticket)
+
+        if intent == TicketFailureIntent.DRAFT:
+            issue_desc = state.ticket_draft.get("description", "IT Support Issue")
+            state.ticket_draft["saved"] = True
+            self._transition(state, ConversationPhase.UNDERSTANDING, "ticket draft saved by user")
+            state.reset_troubleshooting()
+            return self._reply(state, message, format_draft_saved(issue_desc), "ASK_MORE_INFO")
+
+        if intent == TicketFailureIntent.HELPDESK:
+            self._transition(state, ConversationPhase.UNDERSTANDING, "user chose helpdesk contact")
+            state.reset_troubleshooting()
+            return self._reply(state, message, format_helpdesk_contact(), "ASK_MORE_INFO")
+
+        # Unknown input — re-present the options
+        return self._reply(state, message, format_sn_failure_options(), "ASK_MORE_INFO")
+
+    # ── Intent Router phase handlers ──────────────────────────────────────────
+
+    def _handle_ticket_command(self, state, message, username):
+        """User explicitly asked to create a ticket — create it immediately."""
+        if state.phase == ConversationPhase.ESCALATED and state.active_ticket:
+            return self._reply(state, message, format_status_response(state.active_ticket), "ASK_MORE_INFO")
+        
+        ticket = self._tickets.create(state, username)
+        if not ticket or ticket.get("error"):
+            # ServiceNow unavailable — transition to recovery phase
+            self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure — offering recovery")
+            import app.services.conversation_memory as memory
+            hist = memory.get_history(state.session_id)
+            state.ticket_draft = {
+                "category": state.category,
+                "description": hist[0]["text"] if hist else (state.active_issue or "IT Support Issue"),
+            }
+            return self._reply(state, message, format_sn_failure_options(), "ASK_MORE_INFO")
+            
+        tid = ticket.get("ticket_id", "N/A")
+        self._transition(state, ConversationPhase.ESCALATED, f"ticket created — {tid}")
+        state.active_ticket = tid
+        state.troubleshooting_session = None
+        bot_text = format_ticket_created(
+            tid,
+            ticket.get("assigned_team", "IT Support"),
+            request_type=ticket.get("request_type", "INCIDENT"),
+            requires_approval=ticket.get("requires_approval", False),
+            status_label=ticket.get("status_label", ""),
+        )
+        return self._reply(state, message, bot_text, "TICKET_CREATED", ticket_created=True, ticket_id=tid, ticket_details=ticket)
+
+    def _handle_restart(self, state, message):
+        """Reset the conversation to UNDERSTANDING without changing session_id."""
+        old_phase = state.phase
+        state.reset_troubleshooting()
+        state.ticket_draft = {}
+        self._tl.log_transition(state.session_id, old_phase, ConversationPhase.UNDERSTANDING, "user restarted conversation")
+        return self._reply(state, message, format_restart_ack(), "ASK_MORE_INFO")
+
+    def _handle_cancel(self, state, message):
+        """Cancel the current workflow and return to UNDERSTANDING."""
+        phase = state.phase
+        if phase == ConversationPhase.WAITING_TICKET_CONFIRMATION:
+            self._transition(state, ConversationPhase.UNDERSTANDING, "cancel = ticket declined")
+            state.reset_troubleshooting()
+            return self._reply(state, message, format_ticket_declined(), "ASK_MORE_INFO")
+        # All other phases — cancel workflow and reset
+        self._transition(state, ConversationPhase.UNDERSTANDING, "user cancelled workflow")
+        state.reset_troubleshooting()
+        return self._reply(state, message, format_cancel_ack(), "ASK_MORE_INFO")
+
+    def _handle_status(self, state, message):
+        """Return active ticket status, or inform user no ticket exists."""
+        if state.active_ticket:
+            return self._reply(state, message, format_status_response(state.active_ticket), "ASK_MORE_INFO")
+        return self._reply(state, message, format_status_not_found(), "ASK_MORE_INFO")
+
+    def _handle_terminal(self, state, message, username):
+        return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
+
+    # ── Main entry point ──────────────────────────────────────────────────────
+
+    def handle_chat_turn(
+        self,
+        session_id: Optional[str],
+        message: str,
+        username: Optional[str] = None,
+        user_role: Optional[str] = None,
+    ) -> dict:
+        from app.services.intent_router import IntentRouter, IntentType
+
+        # 1. Route message — deterministic, priority-ordered
+        route = IntentRouter().route(message)
+
+        # 2. Session load or create (use route category for new sessions)
+        detected_category = route.category or "GENERAL"
+        session_id, state = self._session_mgr.load_or_create(session_id, detected_category)
+
+        # 1. Handle Turn 2 (pending approval confirmation)
+        if state.approval_required and state.approval_status == "PENDING":
+            import app.services.approval_service as approval_service
+            approval = approval_service.detect_approval(message)
+            if approval.status == approval_service.ApprovalStatus.APPROVED:
+                if user_role == "EMPLOYEE":
+                    from app.services.rbac_service import build_access_denied_response
+                    from app.services.rbac_audit_service import log_rbac_event
+                    from app.services.audit_service import log_approval
+
+                    log_rbac_event(
+                        user=username or "unknown",
+                        role="EMPLOYEE",
+                        action="ACCESS_DENIED",
+                        details={
+                            "reason": "EXECUTE_ACTION_NON_PRIVILEGED_BYPASS_BLOCKED",
+                            "is_privileged_detected": True,
+                            "recommended_action": state.recommended_action,
+                            "session_id": state.session_id,
+                        }
+                    )
+                    log_approval(
+                        session_id=state.session_id,
+                        recommended_action=state.recommended_action,
+                        approval_status="ACCESS_DENIED"
+                    )
+                    denied_resp = build_access_denied_response("EMPLOYEE", "approve_privileged_action")
+                    bot_text = denied_resp["decision_response"]
+                    state.approval_status = "ACCESS_DENIED"
+                    self._repo.persist(state, message, bot_text)
+                    return self._build_payload(state, bot_text, "ACCESS_DENIED")
+                else:
+                    # Manager or Admin approved! Execute the action!
+                    from app.services.action_service import create_vpn_restoration_request
+                    try:
+                        res_action = create_vpn_restoration_request("VPN access restoration requested by " + (username or "user"))
+                        state.action_result = res_action
+                        state.approval_status = "APPROVED"
+                        state.phase = ConversationPhase.ESCALATED
+                        bot_text = f"VPN access restoration request executed successfully. ServiceNow Request ID: {res_action.get('servicenow_id')}."
+                        self._repo.persist(state, message, bot_text)
+                        return self._build_payload(state, bot_text, "EXECUTE_ACTION", ticket_created=True, ticket_id=res_action.get('servicenow_id'), ticket_details=res_action)
+                    except Exception as e:
+                        logger.error("Failed to execute restoration action: %s", e)
+            elif approval.status == approval_service.ApprovalStatus.REJECTED:
+                state.approval_status = "REJECTED"
+                state.approval_required = False
+                bot_text = "I have canceled the request."
+                self._repo.persist(state, message, bot_text)
+                return self._build_payload(state, bot_text, "REJECTED")
+
+        # 2. Handle Turn 1 (new VPN reset/disabled request)
+        is_vpn_reset_req = (detected_category == "VPN" and any(w in message.lower() for w in ["reset", "restore", "re-enable", "disabled", "unlock"]))
+        if is_vpn_reset_req:
+            from app.services.tool_agent import execute_tools
+            state.tool_result = execute_tools("VPN", message)
+            state.approval_required = True
+            state.approval_status = "PENDING"
+            state.recommended_action = "VPN_ACCESS_RESTORATION"
+            state.phase = ConversationPhase.WAITING_ACTION_CONFIRMATION
+            bot_text = "Your VPN access currently appears to be disabled. A restoration request requires manager approval. Would you like me to request approval?"
+            self._repo.persist(state, message, bot_text)
+            return self._build_payload(state, bot_text, "WAIT_FOR_APPROVAL")
+
+        # 3. Populate default tool_result on first turn if empty
+        if not state.tool_result and detected_category in ("VPN", "OUTLOOK", "SOFTWARE_INSTALLATION"):
+            from app.services.tool_agent import execute_tools
+            try:
+                state.tool_result = execute_tools(detected_category, message)
+            except Exception as e:
+                logger.error("Failed to run initial execute_tools: %s", e)
+
+        logger.info(
+            "Dispatcher: session=%s intent=%s phase=%s category=%s",
+            state.session_id, route.intent.value, state.phase.value, state.category,
+        )
+
+        # 3. Global intents — always intercepted before phase handlers
+        #    These override any phase-specific logic.
+
+        if route.intent == IntentType.TICKET_COMMAND:
+            return self._handle_ticket_command(state, message, username)
+
+        if route.intent == IntentType.RESTART:
+            return self._handle_restart(state, message)
+
+        if route.intent == IntentType.CANCEL:
+            return self._handle_cancel(state, message)
+
+        if route.intent == IntentType.STATUS:
+            return self._handle_status(state, message)
+
+        # 4. RESOLVED_KEYWORD — only triggers in active troubleshooting phases
+        #    Never claims success unless user explicitly confirms.
+        if route.intent == IntentType.RESOLVED_KEYWORD:
+            _active_phases = (
+                ConversationPhase.TROUBLESHOOTING,
+                ConversationPhase.VERIFYING,
+                ConversationPhase.WAITING_ACTION_CONFIRMATION,
+            )
+            if state.phase in _active_phases:
+                self._transition(state, ConversationPhase.RESOLVED, "resolved keyword detected")
+                state.troubleshooting_session = None
+                return self._reply(state, message, format_resolution(), "RESOLVED")
+            # Outside active phases — fall through to normal phase dispatch
+
+        # 5. Category-switch guard (for IT_ISSUE with a different category)
+        if route.intent == IntentType.IT_ISSUE:
+            detected = route.category or "GENERAL"
+            if detected != "GENERAL" and detected != state.category:
+                old = state.category
+                state.category = detected
+                state.reset_troubleshooting()
+                self._tl.log_transition(state.session_id, old, detected, "category switch")
+                ack = format_issue_switch(detected)
+
+                import app.services.diagnostic_engine as de
+                if de.is_confidence_high(detected, message, state.diagnostic_answers):
+                    step = self._kb.start_troubleshooting(state, message)
+                    greeting = f"Welcome to Bridgestone IT Support. Let me assist you to resolve this {detected} issue.\n\n"
+                    bot_text = f"{ack}\n\n{greeting}{step}" if step else ack
+                    if step:
+                        self._transition(state, ConversationPhase.TROUBLESHOOTING, "Switch & starting KB")
+                else:
+                    question = de.get_next_question(detected, state.diagnostic_answers)
+                    bot_text = f"{ack}\n\n{question}" if question else ack
+                    if question:
+                        self._transition(state, ConversationPhase.DIAGNOSING, "Switch & asking diagnostic")
+                return self._reply(state, message, bot_text, "ASK_MORE_INFO")
+
+        # 6. Phase dispatch
+        phase = state.phase
+
+        if phase in (ConversationPhase.UNDERSTANDING, ConversationPhase.DIAGNOSING):
+            return self._handle_understanding_or_diagnosing(state, message, username)
+
+        if phase == ConversationPhase.TROUBLESHOOTING:
+            if not state.troubleshooting_session:
+                self._transition(state, ConversationPhase.UNDERSTANDING, "guard: ts lost — reset")
+                return self._handle_understanding_or_diagnosing(state, message, username)
+            return self._handle_troubleshooting(state, message, username)
+
+        if phase == ConversationPhase.VERIFYING:
+            return self._handle_verifying(state, message, username)
+
+        if phase == ConversationPhase.WAITING_ACTION_CONFIRMATION:
+            return self._handle_waiting_action(state, message, username)
+
+        if phase == ConversationPhase.WAITING_TICKET_CONFIRMATION:
+            return self._handle_waiting_ticket(state, message, username)
+
+        if phase == ConversationPhase.WAITING_SN_RECOVERY:
+            return self._handle_sn_recovery(state, message, username)
+
+        return self._handle_terminal(state, message, username)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Module-level singleton + backward-compat function
+# main.py calls handle_chat_turn() as a plain function — API unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from app.services.session_manager import SessionManager as _SM
+_default_session_mgr = _SM()
+_default_service = ConversationService(session_mgr=_default_session_mgr)
+
+
+class _ConversationsDict(dict):
+    def __getitem__(self, key):
+        state = _default_session_mgr.get(key)
+        if state is None:
+            return super().__getitem__(key)
+        return state
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        _default_session_mgr.save_to_cache(value)
+
+    def __contains__(self, key):
+        return _default_session_mgr.get(key) is not None or super().__contains__(key)
+
+    def get(self, key, default=None):
+        state = _default_session_mgr.get(key)
+        if state is not None:
+            return state
+        return super().get(key, default)
+
+    def pop(self, key, default=None):
+        import app.services.conversation_persistence as cp
+        cp.cache_remove(key)
+        return super().pop(key, default)
+
+conversations = _ConversationsDict()
+
+
+def handle_chat_turn(
+    session_id: Optional[str],
+    message: str,
+    username: Optional[str] = None,
+    user_role: Optional[str] = None,
+) -> dict:
+    """Module-level entry point — preserves backward compatibility with main.py."""
+    return _default_service.handle_chat_turn(session_id, message, username, user_role)

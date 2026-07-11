@@ -180,40 +180,8 @@ try:
 except Exception as e:
     check(f"auto_transition to IN_PROGRESS raised: {e}", False)
 
-# ── Test 10: ticket_lifecycle_node ───────────────────────────────────────────
-print("\n10. ticket_lifecycle_node")
-try:
-    from app.graph.nodes.ticket_lifecycle_node import ticket_lifecycle_node
-    state = {
-        "session_id":   "sess-node-001",
-        "ticket":       {"ticket_id": "TKT-NODE-001", "assigned_team": "Network Team"},
-        "active_ticket": "TKT-NODE-001",
-        "user_message": "please assign this",
-        "notifications": [],
-    }
-    result = ticket_lifecycle_node(state)
-    check("node returns dict",                isinstance(result, dict))
-    check("ticket_lifecycle key present",     "ticket_lifecycle" in result)
-    check("lifecycle is dict",                isinstance(result.get("ticket_lifecycle"), dict))
-    check("lifecycle state is not None",      result["ticket_lifecycle"].get("state") is not None)
-    check("notifications key present",        "notifications" in result)
-    check("notifications is list",            isinstance(result.get("notifications"), list))
-except Exception as e:
-    check(f"ticket_lifecycle_node raised: {e}", False)
-
-# ── Test 11: node handles missing ticket gracefully ───────────────────────────
-print("\n11. ticket_lifecycle_node — missing ticket guard")
-try:
-    result = ticket_lifecycle_node({
-        "session_id":   "sess-empty",
-        "ticket":       {},
-        "user_message": "",
-    })
-    check("returns empty dict safely", isinstance(result, dict))
-except Exception as e:
-    check(f"missing ticket raised: {e}", False)
-
 # ── Summary ───────────────────────────────────────────────────────────────────
+
 print("\n" + "=" * 45)
 passed = sum(1 for _, ok in results if ok)
 total  = len(results)

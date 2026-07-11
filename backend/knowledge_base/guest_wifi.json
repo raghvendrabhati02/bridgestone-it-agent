@@ -1,0 +1,108 @@
+{
+    "article_id": "KB0003",
+    "title": "Guest Wi-Fi Connection Guide",
+    "category": "GUEST_WIFI",
+    "version": "1.0",
+    "source": "Bridgestone IT Knowledge Base",
+    "keywords": [
+        "guest wifi",
+        "wifi",
+        "internet",
+        "wireless",
+        "bsguest",
+        "bs-guest",
+        "guest network",
+        "wifi login"
+    ],
+    "problem": "Employee or guest cannot connect to the Bridgestone Guest Wi-Fi network.",
+    "symptoms": [
+        "Cannot connect to Wi-Fi",
+        "Login page not opening",
+        "Authentication failed",
+        "Connected but no internet",
+        "Unable to browse internet"
+    ],
+    "prerequisites": [
+        "Wi-Fi adapter enabled.",
+        "Guest Wi-Fi credentials received from the Network Team.",
+        "Device within Wi-Fi coverage."
+    ],
+    "troubleshooting_steps": [
+        {
+            "step": 1,
+            "title": "Select Guest Wi-Fi",
+            "instruction": "Open available Wi-Fi networks and connect to BS-Guest (Chakan) or BSGUEST (Kheda).",
+            "image": "wifi_step1.png",
+            "caption": "Available Wi-Fi Networks"
+        },
+        {
+            "step": 2,
+            "title": "Open Login Portal",
+            "instruction": "If the login page does not open automatically, open a web browser and navigate to any website to trigger the captive portal.",
+            "image": "wifi_step2.png",
+            "caption": "Guest Wi-Fi Portal"
+        },
+        {
+            "step": 3,
+            "title": "Enter Credentials",
+            "instruction": "Enter the User ID and Password provided by the Network Team.",
+            "image": "wifi_step3.png",
+            "caption": "Authentication Page"
+        },
+        {
+            "step": 4,
+            "title": "Verify Internet Access",
+            "instruction": "After successful login, verify internet connectivity by opening a website.",
+            "image": "wifi_step4.png",
+            "caption": "Internet Connected"
+        }
+    ],
+    "verification": [
+        "Wi-Fi status shows Connected.",
+        "Internet websites open successfully."
+    ],
+    "common_errors": [
+        {
+            "error": "Portal not opening",
+            "resolution": "Open a browser and visit any HTTP website to trigger the login page."
+        },
+        {
+            "error": "Invalid Credentials",
+            "resolution": "Verify the credentials received from the Network Team."
+        },
+        {
+            "error": "Connected without Internet",
+            "resolution": "Disconnect and reconnect to the Guest Wi-Fi network."
+        }
+    ],
+    "escalation": {
+        "after_attempts": 2,
+        "team": "Network Team",
+        "condition": "Escalate if login portal or authentication continues to fail."
+    },
+    "screenshots": [
+        {
+            "step": 1,
+            "image": "wifi_step1.png",
+            "caption": "Select Guest Wi-Fi"
+        },
+        {
+            "step": 3,
+            "image": "wifi_step3.png",
+            "caption": "Login Portal"
+        }
+    ],
+    "faq": [
+        {
+            "question": "Which Wi-Fi should I connect to?",
+            "answer": "Use BS-Guest at Chakan or BSGUEST at Kheda."
+        },
+        {
+            "question": "Who provides the login credentials?",
+            "answer": "The Bridgestone Network Team."
+        }
+    ],
+    "related_articles": [
+        "KB0002"
+    ]
+}

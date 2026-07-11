@@ -1,0 +1,121 @@
+{
+    "article_id": "KB0006",
+    "title": "Microsoft Outlook Troubleshooting Guide",
+    "category": "OUTLOOK",
+    "version": "1.0",
+    "source": "Bridgestone Enterprise IT Support",
+    "keywords": [
+        "outlook",
+        "email",
+        "mail",
+        "exchange",
+        "outlook not opening",
+        "cannot send mail",
+        "cannot receive mail",
+        "outlook stuck",
+        "mailbox"
+    ],
+    "problem": "Employee is unable to use Microsoft Outlook normally.",
+    "symptoms": [
+        "Outlook won't open",
+        "Emails not sending",
+        "Emails not receiving",
+        "Outlook keeps loading",
+        "Disconnected from Exchange",
+        "Searching folders forever",
+        "Outlook freezes"
+    ],
+    "prerequisites": [
+        "Internet or VPN connection available.",
+        "Corporate account configured.",
+        "Outlook installed."
+    ],
+    "troubleshooting_steps": [
+        {
+            "step": 1,
+            "title": "Check Internet Connection",
+            "instruction": "Verify that internet or VPN connectivity is available.",
+            "image": "outlook_step1.png",
+            "caption": "Internet Connection"
+        },
+        {
+            "step": 2,
+            "title": "Restart Outlook",
+            "instruction": "Close Outlook completely and reopen it.",
+            "image": "outlook_step2.png",
+            "caption": "Restart Outlook"
+        },
+        {
+            "step": 3,
+            "title": "Verify Account Status",
+            "instruction": "Confirm that the correct Outlook profile is selected and connected.",
+            "image": "outlook_step3.png",
+            "caption": "Account Settings"
+        },
+        {
+            "step": 4,
+            "title": "Send Test Email",
+            "instruction": "Send a test email to yourself and verify delivery.",
+            "image": "outlook_step4.png",
+            "caption": "Test Email"
+        },
+        {
+            "step": 5,
+            "title": "Restart Computer",
+            "instruction": "Restart Windows if Outlook continues to freeze.",
+            "image": "outlook_step5.png",
+            "caption": "Restart Computer"
+        }
+    ],
+    "verification": [
+        "Outlook opens successfully.",
+        "Emails send successfully.",
+        "Emails are received.",
+        "Mailbox synchronizes correctly."
+    ],
+    "common_errors": [
+        {
+            "error": "Disconnected",
+            "resolution": "Reconnect to VPN or internet."
+        },
+        {
+            "error": "Cannot connect to Exchange",
+            "resolution": "Restart Outlook and verify VPN."
+        },
+        {
+            "error": "Outlook freezes",
+            "resolution": "Restart Outlook and Windows."
+        }
+    ],
+    "escalation": {
+        "after_attempts": 3,
+        "team": "Messaging Team",
+        "condition": "Escalate if Outlook still cannot connect after troubleshooting."
+    },
+    "screenshots": [
+        {
+            "step": 2,
+            "image": "outlook_step2.png",
+            "caption": "Restart Outlook"
+        },
+        {
+            "step": 4,
+            "image": "outlook_step4.png",
+            "caption": "Send Test Email"
+        }
+    ],
+    "faq": [
+        {
+            "question": "Can Outlook work without VPN?",
+            "answer": "Only if the organization allows internet-based Exchange access."
+        },
+        {
+            "question": "Should I recreate my Outlook profile?",
+            "answer": "Only after guidance from the IT team."
+        }
+    ],
+    "related_articles": [
+        "KB0004",
+        "KB0002"
+    ]
+}

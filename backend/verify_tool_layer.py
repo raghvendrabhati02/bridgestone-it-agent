@@ -1,6 +1,11 @@
 import requests
 import time
 import sys
+import io
+
+# Windows: wrap stdout to handle Unicode emoji from backend responses
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 def run_tests():
     print("Connecting to running FastAPI backend on http://127.0.0.1:8000...")

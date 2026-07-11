@@ -1,0 +1,124 @@
+{
+    "article_id": "KB0009",
+    "title": "Corporate Device Health Check Guide",
+    "category": "DEVICE_HEALTH",
+    "version": "1.0",
+    "source": "Bridgestone Enterprise IT Support",
+    "keywords": [
+        "device health",
+        "computer slow",
+        "laptop slow",
+        "pc health",
+        "cpu usage",
+        "memory usage",
+        "disk usage",
+        "device performance",
+        "system health",
+        "windows performance"
+    ],
+    "problem": "Employee reports that the corporate device is slow, unstable, or not functioning normally.",
+    "symptoms": [
+        "Computer running slowly",
+        "High CPU usage",
+        "High memory usage",
+        "Disk full",
+        "Applications freezing",
+        "Blue screen",
+        "Unexpected restart",
+        "System lag"
+    ],
+    "prerequisites": [
+        "User is logged into Windows.",
+        "Power adapter is connected if using a laptop.",
+        "Corporate antivirus is installed."
+    ],
+    "troubleshooting_steps": [
+        {
+            "step": 1,
+            "title": "Restart the Device",
+            "instruction": "Restart the computer and verify whether performance improves.",
+            "image": "device_step1.png",
+            "caption": "Restart Windows"
+        },
+        {
+            "step": 2,
+            "title": "Check CPU and Memory Usage",
+            "instruction": "Open Task Manager and review CPU, Memory and Disk utilization.",
+            "image": "device_step2.png",
+            "caption": "Task Manager"
+        },
+        {
+            "step": 3,
+            "title": "Check Disk Space",
+            "instruction": "Ensure the system drive has at least 15–20% free space.",
+            "image": "device_step3.png",
+            "caption": "Disk Space"
+        },
+        {
+            "step": 4,
+            "title": "Run Device Health Scan",
+            "instruction": "Run the corporate device health diagnostic or Device Agent scan.",
+            "image": "device_step4.png",
+            "caption": "Device Health Scan"
+        },
+        {
+            "step": 5,
+            "title": "Verify Performance",
+            "instruction": "Open common business applications and confirm that the system responds normally.",
+            "image": "device_step5.png",
+            "caption": "Performance Verification"
+        }
+    ],
+    "verification": [
+        "CPU usage returns to normal.",
+        "Memory utilization is stable.",
+        "Applications open successfully.",
+        "No system errors are reported.",
+        "Device performance is acceptable."
+    ],
+    "common_errors": [
+        {
+            "error": "High CPU Usage",
+            "resolution": "Identify the consuming process in Task Manager and close unnecessary applications."
+        },
+        {
+            "error": "Low Disk Space",
+            "resolution": "Remove unnecessary files or contact IT for storage assistance."
+        },
+        {
+            "error": "System Freezing",
+            "resolution": "Restart the device and perform a health scan."
+        }
+    ],
+    "escalation": {
+        "after_attempts": 3,
+        "team": "Desktop Support",
+        "condition": "Escalate if performance remains poor after troubleshooting or hardware diagnostics report failures."
+    },
+    "screenshots": [
+        {
+            "step": 2,
+            "image": "device_step2.png",
+            "caption": "Task Manager"
+        },
+        {
+            "step": 4,
+            "image": "device_step4.png",
+            "caption": "Device Health Scan"
+        }
+    ],
+    "faq": [
+        {
+            "question": "Why is my laptop suddenly slow?",
+            "answer": "High CPU, insufficient memory, low disk space, or background applications are common causes."
+        },
+        {
+            "question": "Should I restart my computer first?",
+            "answer": "Yes. Restarting often resolves temporary performance issues."
+        }
+    ],
+    "related_articles": [
+        "KB0008",
+        "KB0007"
+    ]
+}

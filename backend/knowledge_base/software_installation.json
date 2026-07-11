@@ -1,0 +1,119 @@
+{
+    "article_id": "KB0008",
+    "title": "Corporate Software Installation Guide",
+    "category": "SOFTWARE_INSTALLATION",
+    "version": "1.0",
+    "source": "Bridgestone Enterprise IT Support",
+    "keywords": [
+        "install software",
+        "software request",
+        "application",
+        "install",
+        "vs code",
+        "chrome",
+        "python",
+        "7zip",
+        "software center",
+        "application request"
+    ],
+    "problem": "Employee requires installation of approved software on a corporate device.",
+    "symptoms": [
+        "Software not installed",
+        "Installation failed",
+        "Need new application",
+        "Permission denied",
+        "Administrator rights required"
+    ],
+    "prerequisites": [
+        "The device is a company-managed computer.",
+        "The requested software is approved by IT.",
+        "The employee has a valid business requirement."
+    ],
+    "troubleshooting_steps": [
+        {
+            "step": 1,
+            "title": "Identify Required Software",
+            "instruction": "Confirm the exact software name, version, and business purpose.",
+            "image": "software_step1.png",
+            "caption": "Software Information"
+        },
+        {
+            "step": 2,
+            "title": "Check Existing Installation",
+            "instruction": "Verify whether the application is already installed using the Start Menu or Installed Apps.",
+            "image": "software_step2.png",
+            "caption": "Installed Applications"
+        },
+        {
+            "step": 3,
+            "title": "Install Approved Software",
+            "instruction": "Install the software using the organization's approved deployment process or Software Center.",
+            "image": "software_step3.png",
+            "caption": "Software Installation"
+        },
+        {
+            "step": 4,
+            "title": "Restart if Required",
+            "instruction": "Restart the computer if prompted after installation.",
+            "image": "software_step4.png",
+            "caption": "Restart Computer"
+        },
+        {
+            "step": 5,
+            "title": "Verify Installation",
+            "instruction": "Launch the application and verify it opens without errors.",
+            "image": "software_step5.png",
+            "caption": "Application Verification"
+        }
+    ],
+    "verification": [
+        "Software launches successfully.",
+        "Required features are available.",
+        "No installation errors are displayed."
+    ],
+    "common_errors": [
+        {
+            "error": "Administrator Rights Required",
+            "resolution": "Submit an installation request through IT Support."
+        },
+        {
+            "error": "Installation Failed",
+            "resolution": "Restart the device and retry using the approved installer."
+        },
+        {
+            "error": "Software Not Approved",
+            "resolution": "Request approval from the relevant business owner before installation."
+        }
+    ],
+    "escalation": {
+        "after_attempts": 2,
+        "team": "Desktop Support",
+        "condition": "Escalate if installation repeatedly fails or administrator intervention is required."
+    },
+    "screenshots": [
+        {
+            "step": 2,
+            "image": "software_step2.png",
+            "caption": "Installed Apps"
+        },
+        {
+            "step": 3,
+            "image": "software_step3.png",
+            "caption": "Software Installation Wizard"
+        }
+    ],
+    "faq": [
+        {
+            "question": "Can I install software myself?",
+            "answer": "Only approved software may be installed, following company policy."
+        },
+        {
+            "question": "How long does software installation take?",
+            "answer": "Most approved applications are installed within a few minutes, though larger packages may take longer."
+        }
+    ],
+    "related_articles": [
+        "KB0005",
+        "KB0009"
+    ]
+}

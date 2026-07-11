@@ -1,11 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { 
-  Search, Sliders, ChevronDown, CheckCircle2, Clock, Shield, AlertTriangle, 
-  HelpCircle, ChevronRight, X, ArrowUpRight, BarChart3, Filter, Table, List
-} from "lucide-react";
+import { motion } from "framer-motion";
+import { Sliders, Table as TableIcon, List, FileText } from "lucide-react";
+import {
+  SearchInput,
+  Table,
+  TableHeader,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+  StatusPill,
+  PriorityPill,
+  RequestTypePill
+} from "./shared/UIComponents";
 
 interface Ticket {
   ticket_id: string;
@@ -20,6 +29,8 @@ interface Ticket {
   servicenow_id?: string;
   sla_state?: string;
   sla_breached?: boolean;
+  request_type?: string;
+  approval_status?: string;
 }
 
 interface IncidentViewProps {
@@ -35,179 +46,219 @@ interface IncidentViewProps {
   calculateSLACountdown: (t: Ticket) => string;
 }
 
+function getAIConfidence(ticketId: string): string {
+  let sum = 0;
+  for (let i = 0; i < ticketId.length; i++) sum += ticketId.charCodeAt(i);
+  return 85 + (sum % 14) + "%";
+}
+
 export default function IncidentView({
-  tickets,
   filteredTickets,
   searchQuery,
   setSearchQuery,
   handleTicketClick,
-  statusBadgeClass,
   slaBadgeClass,
   slaStateLabel,
-  priorityColor,
   calculateSLACountdown
 }: IncidentViewProps) {
   const [viewMode, setViewMode] = useState<"cards" | "table">("table");
-  
-  const getAIConfidence = (ticketId: string) => {
-    let sum = 0;
-    for(let i=0; i<ticketId.length; i++) sum += ticketId.charCodeAt(i);
-    return 85 + (sum % 14) + "%";
-  };
+
+  const renderCardsList = () => (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {filteredTickets.length === 0 ? (
+        <div className="col-span-full flex flex-col items-center justify-center gap-3 py-16 text-center">
+          <div className="w-12 h-12 rounded-xl bg-[#F1F5F9] border border-[#E2E8F0] flex items-center justify-center">
+            <FileText className="w-5 h-5 text-[#94A3B8]" aria-hidden />
+          </div>
+          <p className="text-sm font-semibold text-[#1E293B]">No tickets found</p>
+          <p className="text-xs text-[#64748B]">
+            {searchQuery ? "Try adjusting your search query." : "Submit a support request to get started."}
+          </p>
+        </div>
+      ) : (
+        filteredTickets.map(t => (
+          <motion.div
+            key={t.ticket_id}
+            whileHover={{ y: -2, boxShadow: "0 8px 24px rgba(0,0,0,0.04)" }}
+            onClick={() => handleTicketClick(t.ticket_id)}
+            className="bg-white border border-[#E2E8F0] rounded-2xl p-4 cursor-pointer flex flex-col justify-between min-h-[160px] transition-all hover:border-[#CBD5E1] shadow-xs"
+          >
+            <div>
+              <div className="flex justify-between items-start gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-mono text-[#475569] bg-[#F8FAFC] px-2 py-0.5 rounded font-bold border border-[#E2E8F0]">
+                    {t.ticket_id}
+                  </span>
+                  {t.request_type && (
+                    <RequestTypePill type={t.request_type} />
+                  )}
+                </div>
+                <StatusPill status={t.status} />
+              </div>
+              <p className="text-xs font-semibold text-[#1E293B] mt-2.5 line-clamp-2 leading-tight uppercase tracking-wider">
+                {t.issue_description || "No description provided"}
+              </p>
+            </div>
+
+            <div className="pt-3 border-t border-[#F1F5F9] flex items-center justify-between text-[11px] font-bold uppercase tracking-wider mt-3">
+              <div>
+                <span className="text-[#94A3B8] block">
+                  Priority: <PriorityPill priority={t.priority || "MEDIUM"} className="ml-1" />
+                </span>
+                <span className="text-[#94A3B8] block mt-1">
+                  Team: <strong className="text-[#1E293B]">{t.assigned_team}</strong>
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-[#94A3B8] block">
+                  AI: <strong className="text-[#E30613]">{getAIConfidence(t.ticket_id)}</strong>
+                </span>
+                <span className="text-[#94A3B8] block mt-1">
+                  SLA: <span className={`${slaBadgeClass(t.sla_state)} ml-1`}>{calculateSLACountdown(t)}</span>
+                </span>
+              </div>
+            </div>
+          </motion.div>
+        ))
+      )}
+    </div>
+  );
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-gray-200">
+    <div className="p-6 space-y-5 font-sans">
+      {/* Page Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-            <Sliders className="w-5 h-5 text-brand-red" />
-            Support Incident Registry
+          <h1 className="flex items-center gap-2 text-xs font-black text-[#0F172A] uppercase tracking-wider">
+            <Sliders className="w-4 h-4 text-[#E30613]" aria-hidden />
+            My Support Tickets
           </h1>
-          <p className="text-xs text-gray-500 mt-1">
-            Manage, route, and inspect tickets tracked across internal databases and ServiceNow.
+          <p className="text-[10px] text-[#64748B] font-bold uppercase mt-1 tracking-wider">
+            Track, inspect, and manage your IT support requests.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="relative flex items-center bg-white border border-gray-200 rounded-lg px-3 py-1.5 w-60 shadow-sm">
-            <Search className="w-3.5 h-3.5 text-gray-400 mr-2" />
-            <input 
-              type="text" 
-              placeholder="Filter ticket ID, team, status..."
+        {/* Toolbar */}
+        <div className="flex items-center gap-2.5">
+          {/* Search */}
+          <div className="w-56">
+            <SearchInput
+              placeholder="Search tickets…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-transparent border-none outline-none text-xs text-gray-700 w-full"
+              aria-label="Filter tickets"
             />
           </div>
 
-          <div className="flex items-center bg-gray-100 border border-gray-200 rounded-lg p-0.5 shadow-sm text-xs font-semibold text-gray-600">
+          {/* View toggle */}
+          <div className="flex items-center bg-[#F1F5F9] border border-[#E2E8F0] rounded-xl p-0.5 gap-0.5">
             <button
               onClick={() => setViewMode("table")}
-              className={`p-1.5 rounded transition-all cursor-pointer ${
-                viewMode === "table" ? "bg-white text-gray-800 shadow-sm border border-gray-200" : "hover:text-gray-955"
+              className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                viewMode === "table"
+                  ? "bg-white text-[#1E293B] shadow-xs border border-[#E2E8F0]"
+                  : "text-[#94A3B8] hover:text-[#475569]"
               }`}
-              title="Table View"
+              title="Table view"
+              aria-pressed={viewMode === "table"}
             >
-              <Table className="w-3.5 h-3.5" />
+              <TableIcon className="w-3.5 h-3.5" aria-hidden />
             </button>
             <button
               onClick={() => setViewMode("cards")}
-              className={`p-1.5 rounded transition-all cursor-pointer ${
-                viewMode === "cards" ? "bg-white text-gray-800 shadow-sm border border-gray-200" : "hover:text-gray-955"
+              className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                viewMode === "cards"
+                  ? "bg-white text-[#1E293B] shadow-xs border border-[#E2E8F0]"
+                  : "text-[#94A3B8] hover:text-[#475569]"
               }`}
-              title="Cards Grid"
+              title="Card view"
+              aria-pressed={viewMode === "cards"}
             >
-              <List className="w-3.5 h-3.5" />
+              <List className="w-3.5 h-3.5" aria-hidden />
             </button>
           </div>
         </div>
       </div>
 
-      {viewMode === "cards" ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filteredTickets.map(t => (
-            <motion.div
-              key={t.ticket_id}
-              whileHover={{ y: -2 }}
-              onClick={() => handleTicketClick(t.ticket_id)}
-              className="card p-5 cursor-pointer flex flex-col justify-between h-48 bg-white border border-gray-250"
-            >
-              <div>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded font-bold">
-                      {t.ticket_id}
-                    </span>
-                    {t.servicenow_id && (
-                      <span className="text-[9px] font-mono text-amber-600 bg-amber-50 border border-amber-100 px-2.5 py-0.5 rounded font-bold ml-2">
-                        {t.servicenow_id}
-                      </span>
-                    )}
-                  </div>
-                  <span className={statusBadgeClass(t.status)}>{t.status}</span>
-                </div>
-                <h4 className="text-xs font-bold text-gray-850 mt-3 line-clamp-2 leading-tight">
-                  {t.issue_description || "No description provided"}
-                </h4>
-              </div>
+      {/* Content area */}
+      <div className="md:hidden">
+        {/* Always cards on mobile */}
+        {renderCardsList()}
+      </div>
 
-              <div className="pt-3 border-t border-gray-105 flex items-center justify-between text-[10.5px]">
-                <div>
-                  <span className="text-gray-400 font-semibold block">Priority: <strong className={`font-bold ${priorityColor(t.priority)}`}>{t.priority || "MEDIUM"}</strong></span>
-                  <span className="text-gray-400 font-medium block mt-0.5">Team: <strong className="text-gray-700 font-bold">{t.assigned_team}</strong></span>
-                </div>
-                <div className="text-right">
-                  <span className="text-gray-400 block font-semibold">AI Conf: <strong className="text-brand-red font-bold">{getAIConfidence(t.ticket_id)}</strong></span>
-                  <span className="text-gray-400 font-medium block mt-0.5">SLA: <strong className="text-green-605 font-mono font-bold">{calculateSLACountdown(t)}</strong></span>
-                </div>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-      ) : (
-        <div className="enterprise-table-container shadow-sm border border-gray-200">
-          <table className="enterprise-table">
-            <thead>
-              <tr>
-                <th>Ticket ID</th>
-                <th>Description</th>
-                <th>Priority</th>
-                <th>Status</th>
-                <th>AI Confidence</th>
-                <th>Assigned Team</th>
-                <th>SLA Countdown</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredTickets.map(t => (
-                <tr key={t.ticket_id}>
-                  <td className="font-mono font-bold text-brand-red text-xs">
-                    {t.ticket_id}
-                  </td>
-                  <td className="font-medium text-gray-800 font-bold" title={t.issue_description}>
-                    {t.issue_description || "N/A"}
-                  </td>
-                  <td>
-                    <span className={`font-bold ${priorityColor(t.priority)}`}>
-                      {t.priority || "MEDIUM"}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={statusBadgeClass(t.status)}>
-                      {t.status}
-                    </span>
-                  </td>
-                  <td className="font-mono font-bold text-gray-650">
-                    {getAIConfidence(t.ticket_id)}
-                  </td>
-                  <td className="font-semibold text-gray-700">
-                    {t.assigned_team}
-                  </td>
-                  <td className="font-mono font-bold text-green-600">
-                    {calculateSLACountdown(t)}
-                  </td>
-                  <td>
-                    <button
-                      onClick={() => handleTicketClick(t.ticket_id)}
-                      className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 border border-gray-250 text-gray-700 text-[10.5px] font-bold rounded-lg cursor-pointer transition-colors font-semibold"
-                    >
-                      Details
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {filteredTickets.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="text-center py-8 text-xs text-gray-450 italic">
-                    No active support incidents found matching search criteria.
-                  </td>
-                </tr>
+      <div className="hidden md:block">
+        {/* Toggleable on tablet/desktop */}
+        {viewMode === "cards" ? (
+          renderCardsList()
+        ) : (
+          /* Table view */
+          <Table>
+            <TableHeader>
+              <TableRow>
+                {["Ticket ID", "Type", "Description", "Priority", "Status", "AI Conf.", "Team", "SLA", ""].map(h => (
+                  <TableHead key={h}>
+                    {h}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredTickets.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={9} className="py-14 text-center">
+                    <div className="flex flex-col items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-xl bg-[#F1F5F9] flex items-center justify-center">
+                        <FileText className="w-4.5 h-4.5 text-[#94A3B8]" aria-hidden />
+                      </div>
+                      <p className="text-sm font-semibold text-[#1E293B]">No tickets found</p>
+                      <p className="text-xs text-[#64748B]">
+                        {searchQuery ? "Try adjusting your search query." : "Your tickets will appear here."}
+                      </p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredTickets.map((t) => (
+                  <TableRow key={t.ticket_id}>
+                    <TableCell className="font-mono font-bold text-[#E30613]">
+                      {t.ticket_id}
+                    </TableCell>
+                    <TableCell>
+                      <RequestTypePill type={t.request_type || "INCIDENT"} />
+                    </TableCell>
+                    <TableCell className="text-[#1E293B] font-semibold max-w-[220px] truncate" title={t.issue_description}>
+                      {t.issue_description || "N/A"}
+                    </TableCell>
+                    <TableCell>
+                      <PriorityPill priority={t.priority || "MEDIUM"} />
+                    </TableCell>
+                    <TableCell>
+                      <StatusPill status={t.status} />
+                    </TableCell>
+                    <TableCell className="font-mono font-semibold text-[#475569]">
+                      {getAIConfidence(t.ticket_id)}
+                    </TableCell>
+                    <TableCell className="text-[#475569]">
+                      {t.assigned_team}
+                    </TableCell>
+                    <TableCell className="font-mono font-bold text-[#16A34A]">
+                      {calculateSLACountdown(t)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <button
+                        onClick={() => handleTicketClick(t.ticket_id)}
+                        className="px-3 py-1.5 bg-white hover:bg-[#F8FAFC] border border-[#E2E8F0] hover:border-[#CBD5E1] text-[#475569] text-[10.5px] font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-all shadow-xs"
+                      >
+                        Details
+                      </button>
+                    </TableCell>
+                  </TableRow>
+                ))
               )}
-            </tbody>
-          </table>
-        </div>
-      )}
+            </TableBody>
+          </Table>
+        )}
+      </div>
     </div>
   );
 }
