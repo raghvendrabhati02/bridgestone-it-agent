@@ -2,7 +2,7 @@
     "article_id": "KB0005",
     "title": "IT Asset Allocation and Handover Process",
     "category": "IT_ASSET_ALLOCATION",
-    "version": "1.1",
+    "version": "1.0",
     "source": "Bridgestone IT Knowledge Base",
     "keywords": [
         "laptop",
@@ -127,6 +127,5 @@
     "related_articles": [
         "KB0006",
         "KB0008"
-    ],
-    "status": "published"
+    ]
 }
