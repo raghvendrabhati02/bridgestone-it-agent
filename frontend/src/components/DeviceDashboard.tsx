@@ -57,10 +57,9 @@ interface ExecutionRecord {
 interface DeviceDashboardProps {
   user: any;
   token: string | null;
-  apiBaseUrl: string;
 }
 
-export default function DeviceDashboard({ user, token, apiBaseUrl }: DeviceDashboardProps) {
+export default function DeviceDashboard({ user, token }: DeviceDashboardProps) {
   // --- State Variables ---
   const [devices, setDevices] = useState<Device[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -132,7 +131,7 @@ export default function DeviceDashboard({ user, token, apiBaseUrl }: DeviceDashb
         sort_order: sortOrder
       });
 
-      const res = await apiFetch(`${apiBaseUrl}/api/devices?${params.toString()}`, {
+      const res = await apiFetch(`/api/devices?${params.toString()}`, {
         headers: getHeaders()
       });
 
@@ -150,7 +149,7 @@ export default function DeviceDashboard({ user, token, apiBaseUrl }: DeviceDashb
     } finally {
       setIsLoading(false);
     }
-  }, [page, limit, search, statusFilter, deptFilter, osFilter, versionFilter, sortBy, sortOrder, apiBaseUrl, getHeaders]);
+  }, [page, limit, search, statusFilter, deptFilter, osFilter, versionFilter, sortBy, sortOrder, getHeaders]);
 
   // Load devices list when filter/query dependencies change
   useEffect(() => {
@@ -161,7 +160,7 @@ export default function DeviceDashboard({ user, token, apiBaseUrl }: DeviceDashb
   const loadDeviceExtraDetails = async (devId: string) => {
     try {
       // 1. Fetch History
-      const histRes = await apiFetch(`${apiBaseUrl}/api/devices/${devId}/history`, {
+      const histRes = await apiFetch(`/api/devices/${devId}/history`, {
         headers: getHeaders()
       });
       if (histRes.ok) {
@@ -170,7 +169,7 @@ export default function DeviceDashboard({ user, token, apiBaseUrl }: DeviceDashb
       }
 
       // 2. Fetch Health Diagnostics
-      const healthRes = await apiFetch(`${apiBaseUrl}/api/devices/${devId}/health`, {
+      const healthRes = await apiFetch(`/api/devices/${devId}/health`, {
         headers: getHeaders()
       });
       if (healthRes.ok) {
@@ -200,7 +199,7 @@ export default function DeviceDashboard({ user, token, apiBaseUrl }: DeviceDashb
     if (event) event.stopPropagation();
     setIsRefreshing(devId);
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/devices/${devId}/refresh`, {
+      const res = await apiFetch(`/api/devices/${devId}/refresh`, {
         method: "POST",
         headers: getHeaders()
       });
@@ -229,8 +228,7 @@ export default function DeviceDashboard({ user, token, apiBaseUrl }: DeviceDashb
   const handleRestartAgent = async (devId: string, hostname: string) => {
     setIsActionExecuting(true);
     try {
-      const restartActionUrl = `${apiBaseUrl}/api/devices/${devId}/refresh`;
-      await fetch(restartActionUrl, {
+      await apiFetch(`/api/devices/${devId}/refresh`, {
         method: "POST",
         headers: getHeaders()
       });

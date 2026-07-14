@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity, Settings, Sparkles, AlertCircle, WifiOff
 } from "lucide-react";
-import { API_BASE_URL, NetworkError, apiFetch, HttpError } from "@/lib/apiClient";
+import { NetworkError, apiFetch, HttpError } from "@/lib/apiClient";
 
 // ── Existing modular components (unchanged) ───────────────────
 import AiAssistant from "@/components/AiAssistant";
@@ -167,7 +167,7 @@ export default function Home() {
     };
 
     window.addEventListener("popstate", handlePopState);
-    
+
     // Initial check on mount/login
     handlePopState();
 
@@ -257,7 +257,7 @@ export default function Home() {
       }
     }, 15000);
     return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // ── Auth fetch wrapper (token refresh + offline detection) ────
@@ -273,7 +273,7 @@ export default function Home() {
       const currentRefreshToken = refreshToken || localStorage.getItem("refresh_token");
       if (currentRefreshToken) {
         try {
-          const refreshRes = await apiFetch(`${API_BASE_URL}/auth/refresh`, {
+          const refreshRes = await apiFetch("/auth/refresh", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ refresh_token: currentRefreshToken }),
@@ -299,7 +299,7 @@ export default function Home() {
     setLoginError("");
     setIsLoggingIn(true);
     try {
-      const res = await apiFetch(`${API_BASE_URL}/auth/login`, {
+      const res = await apiFetch("/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
@@ -332,7 +332,7 @@ export default function Home() {
     if (currentToken) {
       // Best-effort logout — ignore network failures silently
       try {
-        await apiFetch(`${API_BASE_URL}/auth/logout`, {
+        await apiFetch("/auth/logout", {
           method: "POST",
           headers: { Authorization: `Bearer ${currentToken}` },
         });
@@ -357,7 +357,7 @@ export default function Home() {
   // Non-network errors (HTTP errors) are swallowed on polling to avoid noise.
   const fetchTickets = async () => {
     try {
-      const r = await authFetch(`${API_BASE_URL}/tickets`);
+      const r = await authFetch("/tickets");
       if (r.ok) {
         setTickets(await r.json());
         setBackendOnline(true);
@@ -369,7 +369,7 @@ export default function Home() {
   };
   const fetchNotifications = async () => {
     try {
-      const r = await authFetch(`${API_BASE_URL}/notifications`);
+      const r = await authFetch("/notifications");
       if (r.ok) {
         setNotifications(await r.json());
         setBackendOnline(true);
@@ -381,7 +381,7 @@ export default function Home() {
   const fetchSystemStatus = async () => {
     const start = performance.now();
     try {
-      const r = await authFetch(`${API_BASE_URL}/system-status`);
+      const r = await authFetch("/system-status");
       const end = performance.now();
       if (r.ok) {
         const data = await r.json();
@@ -404,7 +404,7 @@ export default function Home() {
     if (textToSend === message) setMessage("");
 
     try {
-      const res = await authFetch(`${API_BASE_URL}/chat`, {
+      const res = await authFetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: textToSend, session_id: sessionId }),
@@ -531,12 +531,12 @@ export default function Home() {
 
         {/* Outer card wrapper */}
         <div className="relative z-10 w-full max-w-4xl bg-slate-950 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col md:flex-row min-h-[500px]">
-          
+
           {/* Left panel: Corporate Identity & Marketing */}
           <div className="w-full md:w-1/2 bg-gradient-to-br from-slate-900 via-slate-950 to-red-950/40 p-10 flex flex-col justify-between relative border-b md:border-b-0 md:border-r border-slate-800">
             {/* Red accent line */}
             <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-red-600 to-red-800" />
-            
+
             {/* Top brand */}
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-red-600/10 border border-red-500/20 flex items-center justify-center shadow-lg">
@@ -568,7 +568,7 @@ export default function Home() {
           {/* Right panel: Form Controls */}
           <div className="w-full md:w-1/2 p-10 flex flex-col justify-center bg-slate-950/80 backdrop-blur-md relative">
             <div className="space-y-6">
-              
+
               {/* Header */}
               <div>
                 <h3 className="text-lg font-bold text-white tracking-tight">Sign In</h3>
@@ -732,14 +732,14 @@ export default function Home() {
           {/* 3. IT ACTIONS — automated task launcher                */}
           {/* ══════════════════════════════════════════════════════ */}
           {activeView === "actions" && (
-            <ActionsView user={user} token={token} apiBaseUrl={API_BASE_URL} />
+            <ActionsView user={user} token={token} />
           )}
 
           {/* ══════════════════════════════════════════════════════ */}
           {/* 4. MY TICKETS — employee ticket tracker                */}
           {/* ══════════════════════════════════════════════════════ */}
           {activeView === "my_tickets" && (
-            <MyTicketsView tickets={tickets} token={token} apiBaseUrl={API_BASE_URL} />
+            <MyTicketsView tickets={tickets} token={token} />
           )}
 
           {/* ══════════════════════════════════════════════════════ */}
@@ -747,7 +747,7 @@ export default function Home() {
           {/* ══════════════════════════════════════════════════════ */}
           {activeView === "itsm_queue" && (
             <div className="h-full">
-              <ITSMQueueView user={user} token={token} apiBaseUrl={API_BASE_URL} />
+              <ITSMQueueView user={user} token={token} />
             </div>
           )}
 
@@ -756,7 +756,7 @@ export default function Home() {
           {/* ══════════════════════════════════════════════════════ */}
           {activeView === "manager_portal" && (
             <div className="h-full">
-              <ManagerPortal user={user} token={token} apiBaseUrl={API_BASE_URL} />
+              <ManagerPortal user={user} token={token} />
             </div>
           )}
 
@@ -792,7 +792,7 @@ export default function Home() {
           {/* ══════════════════════════════════════════════════════ */}
           {activeView === "execution_center" && (
             <div className="h-full">
-              <ExecutionCenter user={user} token={token} apiBaseUrl={API_BASE_URL} />
+              <ExecutionCenter user={user} token={token} />
             </div>
           )}
 
@@ -801,7 +801,7 @@ export default function Home() {
           {/* ══════════════════════════════════════════════════════ */}
           {activeView === "devices" && (
             <div className="h-full">
-              <DeviceDashboard user={user} token={token} apiBaseUrl={API_BASE_URL} />
+              <DeviceDashboard user={user} token={token} />
             </div>
           )}
 
@@ -819,7 +819,7 @@ export default function Home() {
           {/* ══════════════════════════════════════════════════════ */}
           {activeView === "analytics" && (
             <div className="h-full">
-              <AnalyticsView user={user} token={token} apiBaseUrl={API_BASE_URL} />
+              <AnalyticsView user={user} token={token} />
             </div>
           )}
 
@@ -844,42 +844,42 @@ export default function Home() {
                   <span className="section-header block border-b border-gray-100 pb-2 font-bold">
                     API Configurations
                   </span>
-                    <div className="space-y-3.5 text-xs font-bold text-[#475569]">
-                      <div className="space-y-1">
-                        <label className="text-[10px] text-[#64748B] block font-bold uppercase">
-                          Enterprise Device Agent
-                        </label>
-                        <input
-                          type="text"
-                          value={deviceAgentUrl}
-                          onChange={(e) => setDeviceAgentUrl(e.target.value)}
-                          className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 focus:outline-none"
-                        />
-                      </div>
+                  <div className="space-y-3.5 text-xs font-bold text-[#475569]">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-[#64748B] block font-bold uppercase">
+                        Enterprise Device Agent
+                      </label>
+                      <input
+                        type="text"
+                        value={deviceAgentUrl}
+                        onChange={(e) => setDeviceAgentUrl(e.target.value)}
+                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 focus:outline-none"
+                      />
+                    </div>
 
-                      <div className="space-y-1">
-                        <label className="text-[10px] text-[#64748B] block font-bold uppercase">
-                          ServiceNow Integration URL
-                        </label>
-                        <input
-                          type="text"
-                          value={serviceNowSubdomain}
-                          onChange={(e) => setServiceNowSubdomain(e.target.value)}
-                          className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 focus:outline-none"
-                        />
-                      </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-[#64748B] block font-bold uppercase">
+                        ServiceNow Integration URL
+                      </label>
+                      <input
+                        type="text"
+                        value={serviceNowSubdomain}
+                        onChange={(e) => setServiceNowSubdomain(e.target.value)}
+                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 focus:outline-none"
+                      />
+                    </div>
 
-                      <div className="space-y-1">
-                        <label className="text-[10px] text-[#64748B] block font-bold uppercase">
-                          Microsoft Graph Integration Client
-                        </label>
-                        <input
-                          type="text"
-                          value={graphTenantId}
-                          onChange={(e) => setGraphTenantId(e.target.value)}
-                          className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 focus:outline-none"
-                        />
-                      </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-[#64748B] block font-bold uppercase">
+                        Microsoft Graph Integration Client
+                      </label>
+                      <input
+                        type="text"
+                        value={graphTenantId}
+                        onChange={(e) => setGraphTenantId(e.target.value)}
+                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 focus:outline-none"
+                      />
+                    </div>
 
                     <button
                       onClick={() => alert("Credentials updated")}

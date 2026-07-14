@@ -26,12 +26,11 @@ import {
 interface AnalyticsViewProps {
   user: any;
   token: string | null;
-  apiBaseUrl: string;
 }
 
 const COLORS = ["#E30613", "#3B82F6", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#14B8A6"];
 
-export default function AnalyticsView({ user, token, apiBaseUrl }: AnalyticsViewProps) {
+export default function AnalyticsView({ user, token }: AnalyticsViewProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [data, setData] = useState<any>(null);
@@ -63,7 +62,7 @@ export default function AnalyticsView({ user, token, apiBaseUrl }: AnalyticsView
       if (selectedGroup) params.append("assignment_group", selectedGroup);
       if (selectedCategory) params.append("category", selectedCategory);
 
-      const res = await apiFetch(`${apiBaseUrl}/api/analytics/dashboard?${params.toString()}`, {
+      const res = await apiFetch(`/api/analytics/dashboard?${params.toString()}`, {
         headers: getAuthHeaders()
       });
 
@@ -82,7 +81,7 @@ export default function AnalyticsView({ user, token, apiBaseUrl }: AnalyticsView
       setLoading(false);
       setRefreshing(false);
     }
-  }, [apiBaseUrl, getAuthHeaders, timeFilter, startDate, endDate, selectedDept, selectedGroup, selectedCategory]);
+  }, [getAuthHeaders, timeFilter, startDate, endDate, selectedDept, selectedGroup, selectedCategory]);
 
   useEffect(() => {
     fetchAnalytics();

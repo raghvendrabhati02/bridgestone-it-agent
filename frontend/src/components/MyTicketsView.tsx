@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 
 import { apiFetch, NetworkError } from "@/lib/apiClient";
@@ -65,7 +65,6 @@ interface TicketDetail {
 interface MyTicketsViewProps {
   tickets: Ticket[];
   token: string | null;
-  apiBaseUrl: string;
 }
 
 // Helper functions for classes that are still needed for fallback
@@ -123,7 +122,7 @@ function calculateSLACountdown(t: Ticket): string {
   return `${h}h ${m}m`;
 }
 
-export default function MyTicketsView({ tickets, token, apiBaseUrl }: MyTicketsViewProps) {
+export default function MyTicketsView({ tickets, token }: MyTicketsViewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [detailData, setDetailData] = useState<TicketDetail | null>(null);
@@ -141,7 +140,7 @@ export default function MyTicketsView({ tickets, token, apiBaseUrl }: MyTicketsV
   const fetchTicketDetails = async (ticketId: string) => {
     setDetailLoading(true);
     try {
-      const res = await apiFetch(`${apiBaseUrl}/tickets/${ticketId}/details`, {
+      const res = await apiFetch(`/tickets/${ticketId}/details`, {
         headers: {
           "Authorization": `Bearer ${token}`
         }
@@ -168,7 +167,7 @@ export default function MyTicketsView({ tickets, token, apiBaseUrl }: MyTicketsV
     if (!newComment.trim() || !selectedTicketId) return;
     setSubmittingComment(true);
     try {
-      const res = await apiFetch(`${apiBaseUrl}/tickets/${selectedTicketId}/comments`, {
+      const res = await apiFetch(`/tickets/${selectedTicketId}/comments`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

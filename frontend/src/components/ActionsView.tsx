@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 
 import { apiFetch, NetworkError } from "@/lib/apiClient";
@@ -24,7 +24,6 @@ import {
 interface ActionsViewProps {
   user: any;
   token: string | null;
-  apiBaseUrl: string;
 }
 
 interface ActionCardInfo {
@@ -91,7 +90,7 @@ const ACTION_KEYS: Record<string, string> = {
   "SAP Installation": "sap_installation"
 };
 
-export default function ActionsView({ user, token, apiBaseUrl }: ActionsViewProps) {
+export default function ActionsView({ user, token }: ActionsViewProps) {
   const [actions, setActions] = useState<ActionCardInfo[]>([]);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -133,7 +132,7 @@ export default function ActionsView({ user, token, apiBaseUrl }: ActionsViewProp
   // Fetch agent health and system info
   const checkAgentStatus = async () => {
     try {
-      const resHealth = await apiFetch(`${apiBaseUrl}/api/device-agent/health`, { headers: getAuthHeaders() });
+      const resHealth = await apiFetch("/api/device-agent/health", { headers: getAuthHeaders() });
       if (resHealth.ok) {
         const healthData = await resHealth.json();
         if (healthData.success !== false) {
@@ -147,7 +146,7 @@ export default function ActionsView({ user, token, apiBaseUrl }: ActionsViewProp
         setAgentOnline(false);
       }
 
-      const resInfo = await apiFetch(`${apiBaseUrl}/api/device-agent/system-info`, { headers: getAuthHeaders() });
+      const resInfo = await apiFetch("/api/device-agent/system-info", { headers: getAuthHeaders() });
       if (resInfo.ok) {
         const infoData = await resInfo.json();
         if (infoData.success !== false) {
@@ -167,13 +166,13 @@ export default function ActionsView({ user, token, apiBaseUrl }: ActionsViewProp
     try {
       await checkAgentStatus();
 
-      const resList = await apiFetch(`${apiBaseUrl}/api/it-actions/list`, { headers: getAuthHeaders() });
+      const resList = await apiFetch("/api/it-actions/list", { headers: getAuthHeaders() });
       if (resList.ok) {
         const data = await resList.json();
         setActions(data.actions || []);
       }
 
-      const resHist = await apiFetch(`${apiBaseUrl}/api/it-actions/history`, { headers: getAuthHeaders() });
+      const resHist = await apiFetch("/api/it-actions/history", { headers: getAuthHeaders() });
       if (resHist.ok) {
         const data = await resHist.json();
         setHistory(data.history || []);
@@ -184,7 +183,7 @@ export default function ActionsView({ user, token, apiBaseUrl }: ActionsViewProp
     } finally {
       setLoading(false);
     }
-  }, [apiBaseUrl, getAuthHeaders]);
+  }, [getAuthHeaders]);
 
   useEffect(() => {
     loadData();
@@ -198,7 +197,7 @@ export default function ActionsView({ user, token, apiBaseUrl }: ActionsViewProp
     const actionKey = ACTION_KEYS[action.action_name] || "generic_action";
 
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/device-agent/action`, {
+      const res = await apiFetch("/api/device-agent/action", {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 
 import { apiFetch, NetworkError } from "@/lib/apiClient";
@@ -74,14 +74,13 @@ interface Comment {
 interface ManagerPortalProps {
   user: any;
   token: string | null;
-  apiBaseUrl: string;
 }
 
 type SubView = "dashboard" | "pending" | "approved" | "rejected" | "history" | "profile";
 
 const CHART_COLORS = ["#E30613", "#2563EB", "#06B6D4", "#16A34A", "#F59E0B", "#7C3AED"];
 
-export default function ManagerPortal({ user, token, apiBaseUrl }: ManagerPortalProps) {
+export default function ManagerPortal({ user, token }: ManagerPortalProps) {
   // Navigation
   const [subView, setSubView] = useState<SubView>("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -126,7 +125,7 @@ export default function ManagerPortal({ user, token, apiBaseUrl }: ManagerPortal
     else setRefreshing(true);
 
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/itsm/manager-tickets?approval_status=ALL`, {
+      const res = await apiFetch("/api/itsm/manager-tickets?approval_status=ALL", {
         headers: {
           "Authorization": `Bearer ${token}`
         }
@@ -144,7 +143,7 @@ export default function ManagerPortal({ user, token, apiBaseUrl }: ManagerPortal
       setLoading(false);
       setRefreshing(false);
     }
-  }, [token, apiBaseUrl]);
+  }, [token]);
 
   useEffect(() => {
     fetchTickets();
@@ -155,20 +154,22 @@ export default function ManagerPortal({ user, token, apiBaseUrl }: ManagerPortal
     setCommentsLoading(true);
     setTimelineLoading(true);
     try {
-      const timeRes = await apiFetch(`${apiBaseUrl}/api/itsm/tickets/${ticketId}/timeline`, {
+      const timeRes = await apiFetch(`/tickets/${ticketId}/timeline`, {
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (timeRes.ok) {
         const timeData = await timeRes.json();
-        setTimeline(timeData.timeline || []);
+        // Backend returns a plain array
+        setTimeline(Array.isArray(timeData) ? timeData : (timeData.timeline || []));
       }
 
-      const commRes = await apiFetch(`${apiBaseUrl}/api/itsm/tickets/${ticketId}/comments`, {
+      const commRes = await apiFetch(`/tickets/${ticketId}/comments`, {
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (commRes.ok) {
         const commData = await commRes.json();
-        setComments(commData.comments || []);
+        // Backend returns a plain array
+        setComments(Array.isArray(commData) ? commData : (commData.comments || []));
       }
     } catch (e) {
       if (e instanceof NetworkError) return; // silently skip when backend offline
@@ -188,7 +189,7 @@ export default function ManagerPortal({ user, token, apiBaseUrl }: ManagerPortal
   const handlePostComment = async () => {
     if (!newComment.trim() || !selectedTicket) return;
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/itsm/tickets/${selectedTicket.ticket_id}/comments`, {
+      const res = await apiFetch(`/tickets/${selectedTicket.ticket_id}/comments`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${token}`,
@@ -202,12 +203,13 @@ export default function ManagerPortal({ user, token, apiBaseUrl }: ManagerPortal
 
       if (res.ok) {
         setNewComment("");
-        const commRes = await apiFetch(`${apiBaseUrl}/api/itsm/tickets/${selectedTicket.ticket_id}/comments`, {
+        const commRes = await apiFetch(`/tickets/${selectedTicket.ticket_id}/comments`, {
           headers: { "Authorization": `Bearer ${token}` }
         });
         if (commRes.ok) {
           const commData = await commRes.json();
-          setComments(commData.comments || []);
+          // Backend returns a plain array
+          setComments(Array.isArray(commData) ? commData : (commData.comments || []));
         }
       }
     } catch (e) {
@@ -220,14 +222,15 @@ export default function ManagerPortal({ user, token, apiBaseUrl }: ManagerPortal
     if (!selectedTicket) return;
     setActionLoading(true);
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/itsm/manager-tickets/${selectedTicket.ticket_id}/approve`, {
+      const res = await apiFetch(`/tickets/${selectedTicket.ticket_id}/action`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${token}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          reason: actionReason || "Approved via Manager Portal L2 Gateway Integration."
+          action: "manager_approve",
+          note: actionReason || "Approved via Manager Portal L2 Gateway Integration."
         })
       });
 
@@ -255,14 +258,15 @@ export default function ManagerPortal({ user, token, apiBaseUrl }: ManagerPortal
     }
     setActionLoading(true);
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/itsm/manager-tickets/${selectedTicket.ticket_id}/reject`, {
+      const res = await apiFetch(`/tickets/${selectedTicket.ticket_id}/action`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${token}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          reason: actionReason
+          action: "manager_reject",
+          note: actionReason
         })
       });
 

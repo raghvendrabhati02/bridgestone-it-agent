@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useRef } from "react";
 import { apiFetch, NetworkError } from "@/lib/apiClient";
@@ -54,10 +54,9 @@ interface Stats {
 interface ExecutionCenterProps {
   user: any;
   token: string | null;
-  apiBaseUrl: string;
 }
 
-export default function ExecutionCenter({ user, token, apiBaseUrl }: ExecutionCenterProps) {
+export default function ExecutionCenter({ user, token }: ExecutionCenterProps) {
   // --- States ---
   const [executions, setExecutions] = useState<Execution[]>([]);
   const [stats, setStats] = useState<Stats>({
@@ -106,7 +105,7 @@ export default function ExecutionCenter({ user, token, apiBaseUrl }: ExecutionCe
     if (!silent) setIsLoading(true);
     try {
       // 1. Fetch statistics
-      const statsRes = await apiFetch(`${apiBaseUrl}/api/executions/statistics`, {
+      const statsRes = await apiFetch("/api/executions/statistics", {
         headers: getAuthHeaders()
       });
       if (statsRes.ok) {
@@ -131,7 +130,7 @@ export default function ExecutionCenter({ user, token, apiBaseUrl }: ExecutionCe
       if (startDate) queryParams.append("start_date", startDate);
       if (endDate) queryParams.append("end_date", endDate);
 
-      const listRes = await apiFetch(`${apiBaseUrl}/api/executions?${queryParams.toString()}`, {
+      const listRes = await apiFetch(`/api/executions?${queryParams.toString()}`, {
         headers: getAuthHeaders()
       });
       if (listRes.ok) {

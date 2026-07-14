@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/set-state-in-effect, react-hooks/exhaustive-deps, @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/set-state-in-effect, react-hooks/exhaustive-deps, @typescript-eslint/no-unused-vars */
 "use client";
 
 
@@ -100,14 +100,13 @@ interface AdUser {
 interface ITSMQueueViewProps {
   user: any;
   token: string | null;
-  apiBaseUrl: string;
 }
 
 type SubView = "dashboard" | "queue" | "assigned" | "kb" | "employees" | "analytics" | "health" | "settings";
 
 const CHART_COLORS = ["#E30613", "#2563EB", "#06B6D4", "#16A34A", "#F59E0B", "#7C3AED", "#EC4899"];
 
-export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueViewProps) {
+export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
   // SubView Navigation
   const [subView, setSubView] = useState<SubView>("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -177,35 +176,35 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
 
     try {
       // 1. Fetch tickets
-      const resTickets = await apiFetch(`${apiBaseUrl}/tickets`, { headers: getAuthHeaders() });
+      const resTickets = await apiFetch("/tickets", { headers: getAuthHeaders() });
       if (resTickets.ok) {
         const data = await resTickets.json();
         setTickets(data || []);
       }
 
       // 2. Fetch KB Articles
-      const resKb = await apiFetch(`${apiBaseUrl}/api/admin/knowledge/articles`, { headers: getAuthHeaders() });
+      const resKb = await apiFetch("/api/admin/knowledge/articles", { headers: getAuthHeaders() });
       if (resKb.ok) {
         const data = await resKb.json();
         setKbArticles(data || []);
       }
 
       // 3. Fetch Entra ID Employees list
-      const resEmp = await apiFetch(`${apiBaseUrl}/entra/users`, { headers: getAuthHeaders() });
+      const resEmp = await apiFetch("/entra/users", { headers: getAuthHeaders() });
       if (resEmp.ok) {
         const data = await resEmp.json();
         setEmployees(data || []);
       }
 
       // 4. Fetch System Health Status
-      const resHealth = await apiFetch(`${apiBaseUrl}/system-status`, { headers: getAuthHeaders() });
+      const resHealth = await apiFetch("/system-status", { headers: getAuthHeaders() });
       if (resHealth.ok) {
         const data = await resHealth.json();
         setHealthStatus(data || null);
       }
 
       // 5. Fetch Analytics overview metrics
-      const resAnalytics = await apiFetch(`${apiBaseUrl}/api/analytics/overview`, { headers: getAuthHeaders() });
+      const resAnalytics = await apiFetch("/api/analytics/overview", { headers: getAuthHeaders() });
       if (resAnalytics.ok) {
         const data = await resAnalytics.json();
         setAnalyticsOverview(data || null);
@@ -217,7 +216,7 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
       setLoading(false);
       setRefreshing(false);
     }
-  }, [apiBaseUrl, getAuthHeaders]);
+  }, [getAuthHeaders]);
 
   useEffect(() => {
     fetchData();
@@ -227,7 +226,7 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
   const fetchTicketDetails = async (ticketId: string) => {
     setDetailLoading(true);
     try {
-      const res = await apiFetch(`${apiBaseUrl}/tickets/${ticketId}/details`, { headers: getAuthHeaders() });
+      const res = await apiFetch(`/tickets/${ticketId}/details`, { headers: getAuthHeaders() });
       if (res.ok) {
         const data = await res.json();
         setComments(data.comments || []);
@@ -272,7 +271,7 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
         ...overridePayload
       };
 
-      const res = await apiFetch(`${apiBaseUrl}/tickets/${selectedTicket.ticket_id}/action`, {
+      const res = await apiFetch(`/tickets/${selectedTicket.ticket_id}/action`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify(payload)
@@ -300,7 +299,7 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
   const handlePostComment = async () => {
     if (!selectedTicket || !commentText.trim()) return;
     try {
-      const res = await apiFetch(`${apiBaseUrl}/tickets/${selectedTicket.ticket_id}/comments`, {
+      const res = await apiFetch(`/tickets/${selectedTicket.ticket_id}/comments`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -453,12 +452,12 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
     if (!editingArticle) return;
     const isNew = !editingArticle.article_id;
     const url = isNew 
-      ? `${apiBaseUrl}/api/admin/knowledge/articles` 
-      : `${apiBaseUrl}/api/admin/knowledge/articles/${editingArticle.article_id}`;
+      ? "/api/admin/knowledge/articles" 
+      : `/api/admin/knowledge/articles/${editingArticle.article_id}`;
     const method = isNew ? "POST" : "PUT";
 
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: getAuthHeaders(),
         body: JSON.stringify(editingArticle)
@@ -479,7 +478,7 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
 
   const handlePublishArticle = async (id: string) => {
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/admin/knowledge/articles/${id}/publish`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${id}/publish`, {
         method: "POST",
         headers: getAuthHeaders()
       });
@@ -496,7 +495,7 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
 
   const handleArchiveArticle = async (id: string) => {
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/admin/knowledge/articles/${id}/archive`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${id}/archive`, {
         method: "POST",
         headers: getAuthHeaders()
       });
@@ -514,7 +513,7 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
   const handleDeleteArticle = async (id: string) => {
     if (!confirm("Are you sure you want to delete this article?")) return;
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/admin/knowledge/articles/${id}`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${id}`, {
         method: "DELETE",
         headers: getAuthHeaders()
       });
@@ -535,7 +534,7 @@ export default function ITSMQueueView({ user, token, apiBaseUrl }: ITSMQueueView
     formData.append("file", file);
 
     try {
-      const res = await apiFetch(`${apiBaseUrl}/api/admin/knowledge/articles/${articleId}/upload`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${articleId}/upload`, {
         method: "POST",
         headers: { "Authorization": `Bearer ${token}` },
         body: formData

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { API_BASE_URL, apiFetch, NetworkError } from "@/lib/apiClient";
+import { apiFetch, NetworkError } from "@/lib/apiClient";
 import {
   Search, BookOpen, Sparkles, Plus, Edit, Trash2, CheckCircle,
   Archive, History, Upload, Eye, Settings, FileText, ArrowLeft,
@@ -101,7 +101,7 @@ export default function KnowledgeBase() {
   const loadArticles = async () => {
     setLoading(true);
     try {
-      const res = await apiFetch(`${API_BASE_URL}/api/admin/knowledge/articles`, {
+      const res = await apiFetch("/api/admin/knowledge/articles", {
         headers: getHeaders()
       });
       if (res.ok) {
@@ -180,8 +180,8 @@ export default function KnowledgeBase() {
     try {
       const isNew = !editingArticle.article_id;
       const url = isNew 
-        ? `${API_BASE_URL}/api/admin/knowledge/articles`
-        : `${API_BASE_URL}/api/admin/knowledge/articles/${editingArticle.article_id}`;
+        ? "/api/admin/knowledge/articles"
+        : `/api/admin/knowledge/articles/${editingArticle.article_id}`;
       
       const method = isNew ? "POST" : "PUT";
       
@@ -210,7 +210,7 @@ export default function KnowledgeBase() {
   const handlePublish = async (article_id: string) => {
     if (!window.confirm("Publishing will increment the version and activate this SOP. Continue?")) return;
     try {
-      const res = await apiFetch(`${API_BASE_URL}/api/admin/knowledge/articles/${article_id}/publish`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${article_id}/publish`, {
         method: "POST",
         headers: getHeaders()
       });
@@ -227,7 +227,7 @@ export default function KnowledgeBase() {
   const handleArchive = async (article_id: string) => {
     if (!window.confirm("Archiving will remove this SOP from chatbot active matching. Continue?")) return;
     try {
-      const res = await apiFetch(`${API_BASE_URL}/api/admin/knowledge/articles/${article_id}/archive`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${article_id}/archive`, {
         method: "POST",
         headers: getHeaders()
       });
@@ -244,7 +244,7 @@ export default function KnowledgeBase() {
   const handleDelete = async (article_id: string) => {
     if (!window.confirm("Are you sure you want to permanently delete this article? This action cannot be undone.")) return;
     try {
-      const res = await apiFetch(`${API_BASE_URL}/api/admin/knowledge/articles/${article_id}`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${article_id}`, {
         method: "DELETE",
         headers: getHeaders()
       });
@@ -260,7 +260,7 @@ export default function KnowledgeBase() {
   // View Version History
   const loadVersions = async (article_id: string) => {
     try {
-      const res = await apiFetch(`${API_BASE_URL}/api/admin/knowledge/articles/${article_id}/versions`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${article_id}/versions`, {
         headers: getHeaders()
       });
       if (res.ok) {
@@ -276,7 +276,7 @@ export default function KnowledgeBase() {
   // View Version Content
   const loadVersionContent = async (article_id: string, version: string) => {
     try {
-      const res = await apiFetch(`${API_BASE_URL}/api/admin/knowledge/articles/${article_id}/versions/${version}`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${article_id}/versions/${version}`, {
         headers: getHeaders()
       });
       if (res.ok) {
@@ -311,7 +311,7 @@ export default function KnowledgeBase() {
     const token = localStorage.getItem("access_token");
 
     try {
-      const res = await apiFetch(`${API_BASE_URL}/api/admin/knowledge/articles/${editingArticle.article_id}/upload`, {
+      const res = await apiFetch(`/api/admin/knowledge/articles/${editingArticle.article_id}/upload`, {
         method: "POST",
         headers: token ? { "Authorization": `Bearer ${token}` } : {},
         body: formData
