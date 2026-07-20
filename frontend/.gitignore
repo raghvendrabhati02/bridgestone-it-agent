@@ -61,3 +61,10 @@ node_modules/
 
 
 
+# Python
+__pycache__/
+*.pyc
+
+# PostgreSQL
+pg_data/
+pg_portable/
