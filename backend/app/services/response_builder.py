@@ -66,7 +66,7 @@ def format_ticket_prompt() -> str:
     return (
         "I've guided you through all recommended troubleshooting steps, "
         "but it looks like the issue is still unresolved. "
-        "Would you like me to create a ServiceNow support ticket?"
+        "Would you like me to create a ServiceNow ticket?"
     )
 
 

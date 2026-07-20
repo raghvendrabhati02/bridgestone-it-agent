@@ -104,13 +104,26 @@ def create_ticket(category: str, issue_description: str, created_by: str = None)
 
     # Human-readable status label shown to the employee
     status_label = {
-        "WAITING_MANAGER": "Pending Manager Approval",
         "NEW": "Open — Assigned to IT Team",
+        "AI_DIAGNOSING": "AI Diagnosing Issue",
+        "ADMIN_REQUIRED": "Administrator Privileges Required",
+        "WAITING_MANAGER": "Pending Manager Approval",
+        "WAITING_MANAGER_APPROVAL": "Pending Manager Approval",
+        "WAITING_ADMIN": "Pending IT Admin Approval",
+        "WAITING_ADMIN_APPROVAL": "Pending IT Admin Approval",
+        "ADMIN_APPROVED": "Admin Approved — Generating LAPS Credentials",
+        "TEMP_ADMIN_GRANTED": "Temporary Admin Access Granted",
+        "EXECUTION_READY": "Ready for Execution",
+        "EXECUTING": "Executing with Elevated Privileges",
         "APPROVED": "Approved",
+        "ASSIGNED": "Assigned to IT Team",
         "IN_PROGRESS": "In Progress",
+        "COMPLETED": "Task Completed",
         "RESOLVED": "Resolved",
+        "FULFILLED": "Fulfilled",
         "CLOSED": "Closed",
-    }.get(status, status)
+        "REJECTED": "Rejected",
+    }.get(status, status.replace("_", " ").title())
 
     ticket = {
         "ticket_id": ticket_id,

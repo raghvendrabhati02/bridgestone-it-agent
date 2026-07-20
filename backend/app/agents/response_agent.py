@@ -1,6 +1,6 @@
 import os
 import logging
-import google.generativeai as genai
+from app.services.ai_provider import get_ai_provider
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -22,9 +22,7 @@ class ResponseAgent:
     """
 
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
+        self.provider = get_ai_provider()
 
     # ──────────────────────────────────────────────────────────
     # Public interface
@@ -61,26 +59,20 @@ class ResponseAgent:
             user_message, history, plan, reasoning, category
         )
 
-        if self.api_key:
-            try:
-                prompt = self._build_prompt(
-                    user_message, history, plan, reasoning, category, knowledge_context
+        try:
+            prompt = self._build_prompt(
+                user_message, history, plan, reasoning, category, knowledge_context
+            )
+            response = self.provider.generate_response(prompt)
+            if response:
+                logger.info(
+                    "ResponseAgent: AI provider response generated: %s", response[:120]
                 )
-                model = genai.GenerativeModel("gemini-2.5-flash-lite")
-                response = model.generate_content(
-                    prompt,
-                    request_options={"timeout": 15.0},
-                )
-                if response and response.text:
-                    text = response.text.strip()
-                    logger.info(
-                        "ResponseAgent: Gemini response generated: %s", text[:120]
-                    )
-                    return text
-            except Exception as e:
-                logger.warning(
-                    "ResponseAgent: Gemini generation failed (%s). Using rule-based fallback.", e
-                )
+                return response
+        except Exception as e:
+            logger.warning(
+                "ResponseAgent: AI provider generation failed (%s). Using rule-based fallback.", e
+            )
 
         logger.info("ResponseAgent: Using rule-based fallback response.")
         return fallback

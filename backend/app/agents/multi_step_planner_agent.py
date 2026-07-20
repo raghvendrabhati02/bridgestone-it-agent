@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-import google.generativeai as genai
+from app.services.ai_provider import get_ai_provider
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -12,9 +12,7 @@ class MultiStepPlannerAgent:
     """
 
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
+        self.provider = get_ai_provider()
 
     def plan_next_step(
         self,
@@ -36,32 +34,27 @@ class MultiStepPlannerAgent:
         # 1. Always check rule-based logic first as fallback / primary decision driver
         rule_based_next = self._plan_rule_based(category, tool_chain)
 
-        # 2. Try Gemini to see if it can enrich/improve the decision, falling back to rule-based
-        if self.api_key:
-            try:
-                prompt = self._build_planner_prompt(category, tool_chain, hypotheses, user_message)
-                model = genai.GenerativeModel("gemini-2.5-flash-lite")
-                response = model.generate_content(
-                    prompt,
-                    generation_config={"response_mime_type": "application/json"},
-                    request_options={"timeout": 10.0}
-                )
-                if response and response.text:
-                    result = json.loads(response.text.strip())
-                    next_tool = result.get("next_tool")
-                    # Normalize next_tool to None if "NONE" or empty
-                    if next_tool in ("NONE", "", None):
+        # 2. Try AI Provider to see if it can enrich/improve the decision, falling back to rule-based
+        try:
+            prompt = self._build_planner_prompt(category, tool_chain, hypotheses, user_message)
+            response = self.provider.generate_response(prompt)
+            if response:
+                result = json.loads(response.strip())
+                next_tool = result.get("next_tool")
+                # Normalize next_tool to None if "NONE" or empty
+                if next_tool in ("NONE", "", None):
+                    next_tool = None
+                else:
+                    next_tool = str(next_tool).upper().strip()
+                    if next_tool not in ("VPN", "NETWORK", "OUTLOOK", "SOFTWARE_INSTALLATION"):
                         next_tool = None
-                    else:
-                        next_tool = str(next_tool).upper().strip()
-                        if next_tool not in ("VPN", "NETWORK", "OUTLOOK", "SOFTWARE_INSTALLATION"):
-                            next_tool = None
-                    
-                    logger.info("MultiStepPlannerAgent: Gemini selected next tool: %s", next_tool)
-                    return next_tool
-            except Exception as e:
-                logger.warning("MultiStepPlannerAgent: Gemini call failed (%s). Using rule-based fallback.", e)
+                
+                logger.info("MultiStepPlannerAgent: AI provider selected next tool: %s", next_tool)
+                return next_tool
+        except Exception as e:
+            logger.warning("MultiStepPlannerAgent: AI provider call failed (%s). Using rule-based fallback.", e)
 
+      # 2. Try AI Provider to see if it can enrich/improve the decision, falling back to rule-based
         logger.info("MultiStepPlannerAgent: Using rule-based decision: %s", rule_based_next)
         return rule_based_next
 

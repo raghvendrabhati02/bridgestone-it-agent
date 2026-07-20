@@ -1,8 +1,8 @@
 import logging
 import json
 import os
-import google.generativeai as genai
 from app.graph.state import AgentState
+from app.services.ai_provider import get_ai_provider
 from app.services.catalog_service import get_service_catalog, create_service_request
 from app.database.session import get_db
 
@@ -107,8 +107,7 @@ def service_request_node(state: AgentState) -> dict:
         elif "ergonomic" in msg_lower or "chair" in msg_lower or "keyboard" in msg_lower or "mouse" in msg_lower:
             mapped_service_id = "SRV015"
             
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not mapped_service_id and api_key:
+        if not mapped_service_id:
             try:
                 catalog_desc = "\n".join([f"- {i['service_id']}: {i['name']} ({i['description']})" for i in catalog])
                 prompt = (
@@ -119,14 +118,13 @@ def service_request_node(state: AgentState) -> dict:
                     "Return ONLY a JSON object matching:\n"
                     '{\n  "service_id": "SRVxxx" or null\n}'
                 )
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel("gemini-2.5-flash-lite")
-                resp = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
-                if resp and resp.text:
-                    res_dict = json.loads(resp.text.strip())
+                provider = get_ai_provider()
+                resp = provider.generate_response(prompt)
+                if resp:
+                    res_dict = json.loads(resp.strip())
                     mapped_service_id = res_dict.get("service_id")
             except Exception as e:
-                logger.warning("Service Request Node: Gemini catalog mapping failed: %s", e)
+                logger.warning("Service Request Node: AI provider catalog mapping failed: %s", e)
 
         if not mapped_service_id:
             list_str = "\n".join([f"- {i['name']} (ID: {i['service_id']})" for i in catalog[:8]])
@@ -149,42 +147,39 @@ def service_request_node(state: AgentState) -> dict:
         }
         
     required_keys = REQUIRED_SLOTS.get(active_req, ["justification"])
-    api_key = os.getenv("GEMINI_API_KEY")
-    if api_key:
+    try:
+        history = []
         try:
-            history = []
-            try:
-                from app.services.conversation_service import get_conversation
-                conv_state = get_conversation(session_id)
-                history = conv_state.conversation_history if conv_state else []
-            except Exception:
-                pass
-            
-            history_str = "\n".join([f"{'User' if h['sender'] == 'user' else 'Agent'}: {h['text']}" for h in history[-5:]])
-            history_str += f"\nLatest User Message: {user_msg}"
-            
-            slots_desc = "\n".join([f"- {k}: value (representing {SLOT_PROMPTS.get(k, k)})" for k in required_keys])
-            
-            prompt = (
-                f"You are an information extraction assistant. Extract the value for these parameters from the user conversation history:\n"
-                f"{slots_desc}\n\n"
-                f"Conversation History:\n{history_str}\n\n"
-                f"Current extracted parameters so far: {json.dumps(slots)}\n\n"
-                "Return ONLY a JSON object of the updated extracted parameters (keys must exactly match, use null or omit if not found in conversation):\n"
-                "{\n"
-                '  "param1": "value", ...\n'
-                "}"
-            )
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-2.5-flash-lite")
-            resp = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
-            if resp and resp.text:
-                extracted = json.loads(resp.text.strip())
-                for k in required_keys:
-                    if extracted.get(k):
-                        slots[k] = extracted[k]
-        except Exception as e:
-            logger.warning("Service Request Node: Gemini slot extraction failed: %s", e)
+            from app.services.conversation_service import get_conversation
+            conv_state = get_conversation(session_id)
+            history = conv_state.conversation_history if conv_state else []
+        except Exception:
+            pass
+        
+        history_str = "\n".join([f"{'User' if h['sender'] == 'user' else 'Agent'}: {h['text']}" for h in history[-5:]])
+        history_str += f"\nLatest User Message: {user_msg}"
+        
+        slots_desc = "\n".join([f"- {k}: value (representing {SLOT_PROMPTS.get(k, k)})" for k in required_keys])
+        
+        prompt = (
+            f"You are an information extraction assistant. Extract the value for these parameters from the user conversation history:\n"
+            f"{slots_desc}\n\n"
+            f"Conversation History:\n{history_str}\n\n"
+            f"Current extracted parameters so far: {json.dumps(slots)}\n\n"
+            "Return ONLY a JSON object of the updated extracted parameters (keys must exactly match, use null or omit if not found in conversation):\n"
+            "{\n"
+            '  "param1": "value", ...\n'
+            "}"
+        )
+        provider = get_ai_provider()
+        resp = provider.generate_response(prompt)
+        if resp:
+            extracted = json.loads(resp.strip())
+            for k in required_keys:
+                if extracted.get(k):
+                    slots[k] = extracted[k]
+    except Exception as e:
+        logger.warning("Service Request Node: AI provider slot extraction failed: %s", e)
             
     msg_lower = user_msg.lower()
     first_missing_before = None

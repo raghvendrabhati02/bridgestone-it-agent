@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-import google.generativeai as genai
+from app.services.ai_provider import get_ai_provider
 from app.graph.state import AgentState
 
 logger = logging.getLogger("it-agent-backend")
@@ -137,10 +137,8 @@ def check_context_sufficiency(category: str, message: str) -> bool:
     """
     Checks if the user's message has enough diagnostic context to skip the interview.
     """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if api_key:
-        try:
-            prompt = f"""You are an IT support assistant for Bridgestone.
+    try:
+        prompt = f"""You are an IT support assistant for Bridgestone.
 Analyze if the user's message has enough details to diagnose a {category} issue.
 For example, does it mention the error message, symptom type (e.g. timeout vs auth), or platform (desktop/web)?
 
@@ -152,17 +150,13 @@ JSON:
   "sufficient": true
 }}
 """
-            model = genai.GenerativeModel("gemini-2.5-flash-lite")
-            response = model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"},
-                request_options={"timeout": 6.0}
-            )
-            if response and response.text:
-                result = json.loads(response.text.strip())
-                return bool(result.get("sufficient", False))
-        except Exception as e:
-            logger.warning("Diagnostic Interview: LLM sufficiency check failed (%s). Using rules.", e)
+        provider = get_ai_provider()
+        response = provider.generate_response(prompt)
+        if response:
+            result = json.loads(response.strip())
+            return bool(result.get("sufficient", False))
+    except Exception as e:
+        logger.warning("Diagnostic Interview: LLM sufficiency check failed (%s). Using rules.", e)
 
     # Rule-based fallback checks
     msg_lower = message.lower()

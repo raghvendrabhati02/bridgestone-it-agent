@@ -69,6 +69,13 @@ class SessionManager:
             logger.warning(
                 "SessionManager: session %s not found — creating fresh", session_id
             )
+            from app.services.conversation_service import SessionState
+            state = SessionState(session_id=session_id, category=category)
+            persistence.cache_set(session_id, state)
+            logger.info(
+                "SessionManager: Created new session %s (category=%s)", session_id, category
+            )
+            return session_id, state
         return self.create(category)
 
     def save_to_cache(self, state) -> None:

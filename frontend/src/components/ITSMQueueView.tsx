@@ -348,8 +348,8 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
       }
     });
 
-    const aiResRate = analyticsOverview?.overview_metrics?.ai_resolution_rate_pct 
-      || analyticsOverview?.ai_resolution_rate_pct 
+    const aiResRate = analyticsOverview?.overview_metrics?.ai_resolution_rate_pct
+      || analyticsOverview?.ai_resolution_rate_pct
       || 72.4;
 
     const avgResolutionTime = analyticsOverview?.overview_metrics?.avg_resolution_time_hours
@@ -451,9 +451,15 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
     e.preventDefault();
     if (!editingArticle) return;
     const isNew = !editingArticle.article_id;
+<<<<<<< HEAD
     const url = isNew 
       ? "/api/admin/knowledge/articles" 
       : `/api/admin/knowledge/articles/${editingArticle.article_id}`;
+=======
+    const url = isNew
+      ? `${apiBaseUrl}/api/admin/knowledge/articles`
+      : `${apiBaseUrl}/api/admin/knowledge/articles/${editingArticle.article_id}`;
+>>>>>>> 0faacec8 (Ignore local PostgreSQL portable files)
     const method = isNew ? "POST" : "PUT";
 
     try {
@@ -555,7 +561,7 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
 
   return (
     <div className="flex h-full w-full bg-[#F8FAFC] font-sans overflow-hidden">
-      
+
       {/* Toast notifications */}
       {toast && (
         <div className="fixed bottom-5 right-5 z-55 flex items-center gap-2 px-4 py-3 rounded-xl border shadow-xl bg-white border-[#E2E8F0] max-w-sm">
@@ -574,9 +580,8 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
 
       {/* Mobile Sidebar Drawer */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-60 bg-white border-r border-[#E2E8F0] flex flex-col pt-3 pb-4 shadow-xl transform transition-transform duration-300 ease-in-out md:hidden ${
-          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        className={`fixed inset-y-0 left-0 z-40 w-60 bg-white border-r border-[#E2E8F0] flex flex-col pt-3 pb-4 shadow-xl transform transition-transform duration-300 ease-in-out md:hidden ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
       >
         <div className="flex items-center justify-between px-4 pb-3 border-b border-[#F1F5F9] mb-2">
           <span className="text-[10px] font-bold text-[#94A3B8] uppercase tracking-wider">Console Navigation</span>
@@ -608,8 +613,8 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
                 setIsSidebarOpen(false); // Auto close
               }}
               className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer
-                ${subView === item.id 
-                  ? "bg-red-50 text-[#E30613]" 
+                ${subView === item.id
+                  ? "bg-red-50 text-[#E30613]"
                   : "text-[#475569] hover:text-[#0F172A] hover:bg-[#F8FAFC]"}`}
             >
               <div className="flex items-center gap-2.5">
@@ -643,8 +648,8 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
               key={item.id}
               onClick={() => { setSubView(item.id as SubView); setSelectedTicket(null); }}
               className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer
-                ${subView === item.id 
-                  ? "bg-red-50 text-[#E30613]" 
+                ${subView === item.id
+                  ? "bg-red-50 text-[#E30613]"
                   : "text-[#475569] hover:text-[#0F172A] hover:bg-[#F8FAFC]"}`}
             >
               <div className="flex items-center gap-2.5">
@@ -715,7 +720,7 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
             </div>
           ) : (
             <div className="flex-1 min-w-0 space-y-6">
-              
+
               {/* DASHBOARD VIEW */}
               {subView === "dashboard" && (
                 <div className="space-y-6">
@@ -1200,7 +1205,7 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
               {subView === "settings" && (
                 <div className="max-w-2xl bg-white border border-[#E2E8F0] p-6 rounded-2xl shadow-xs space-y-6">
                   <h3 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider block">Admin Console Configuration</h3>
-                  
+
                   <div className="space-y-4 text-xs font-semibold text-[#334155]">
                     <div className="flex items-center justify-between p-3.5 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl">
                       <div>
@@ -1302,17 +1307,16 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
 
                   <div className="space-y-3 pt-2 border-t border-[#E2E8F0] flex flex-col font-bold uppercase">
                     <span className="text-[9px] text-[#64748B] block tracking-wider">Comments &amp; Work Notes</span>
-                    
+
                     <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                       {comments.length === 0 ? (
                         <p className="text-[11px] text-[#64748B] italic text-center py-2 normal-case font-semibold">No work notes or comments logged.</p>
                       ) : (
                         comments.map((c, i) => (
-                          <div key={i} className={`p-2.5 rounded-xl border space-y-1 text-[11px] normal-case ${
-                            c.is_internal 
-                              ? "bg-yellow-50/50 border-yellow-200" 
+                          <div key={i} className={`p-2.5 rounded-xl border space-y-1 text-[11px] normal-case ${c.is_internal
+                              ? "bg-yellow-50/50 border-yellow-200"
                               : "bg-[#F8FAFC] border-[#E2E8F0]"
-                          }`}>
+                            }`}>
                             <div className="flex justify-between font-bold">
                               <span className={c.is_internal ? "text-yellow-800 flex items-center gap-1" : "text-indigo-650"}>
                                 {c.is_internal && <Shield className="w-3 h-3 text-yellow-600" />}
@@ -1361,7 +1365,7 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
                   {/* Actions Console controls */}
                   <div className="space-y-4 pt-4 border-t border-[#E2E8F0] font-bold uppercase">
                     <span className="text-[9px] text-[#64748B] block tracking-wider">Console Command Center</span>
-                    
+
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-[#64748B] block tracking-wider">Action Justification Note</label>
                       <textarea
@@ -1372,6 +1376,17 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
                         className="w-full px-3 py-2 bg-white border border-[#E2E8F0] rounded-xl text-xs font-semibold outline-none focus:ring-1 focus:ring-[#E30613] resize-none text-[#1E293B] normal-case"
                       />
                     </div>
+
+                    {(selectedTicket.status === "WAITING_ADMIN_APPROVAL" || selectedTicket.status === "WAITING_ADMIN") && (
+                      <button
+                        onClick={() => handleTicketAction("admin_approve")}
+                        disabled={actionLoading}
+                        className="w-full py-2.5 bg-emerald-650 hover:bg-emerald-700 text-white font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md uppercase tracking-wider text-[11px] mb-3"
+                      >
+                        <Shield className="w-4 h-4" />
+                        Approve LAPS Access
+                      </button>
+                    )}
 
                     <div className="grid grid-cols-2 gap-3 text-xs">
                       <button

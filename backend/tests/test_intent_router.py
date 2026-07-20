@@ -327,7 +327,7 @@ class TestIntentRouterUnit:
     def test_general_hello(self):
         from app.services.intent_router import IntentType
         result = self._router().route("hello there")
-        assert result.intent == IntentType.GENERAL
+        assert result.intent == IntentType.GREETING
 
     def test_priority_ticket_over_restart(self):
         """'create ticket and restart' — TICKET_COMMAND must win."""

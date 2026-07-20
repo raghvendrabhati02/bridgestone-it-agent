@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-import google.generativeai as genai
+from app.services.ai_provider import get_ai_provider
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -11,9 +11,7 @@ class HypothesisTrackerAgent:
     """
 
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
+        self.provider = get_ai_provider()
 
     def update_hypotheses(
         self,
@@ -35,18 +33,13 @@ class HypothesisTrackerAgent:
         # 1. Run rule-based update first as base / fallback
         rule_based_hypotheses = self._update_rule_based(category, tool_chain)
 
-        # 2. Try Gemini to see if it can produce richer/more customized hypotheses
-        if self.api_key and tool_chain:
+        # 2. Try AI Provider to see if it can produce richer/more customized hypotheses
+        if tool_chain:
             try:
                 prompt = self._build_tracker_prompt(category, tool_chain, current_hypotheses, user_message)
-                model = genai.GenerativeModel("gemini-2.5-flash-lite")
-                response = model.generate_content(
-                    prompt,
-                    generation_config={"response_mime_type": "application/json"},
-                    request_options={"timeout": 10.0}
-                )
-                if response and response.text:
-                    result = json.loads(response.text.strip())
+                response = self.provider.generate_response(prompt)
+                if response:
+                    result = json.loads(response.strip())
                     hypotheses = result.get("hypotheses", [])
                     if isinstance(hypotheses, list) and len(hypotheses) > 0:
                         # Validate hypothesis structure
@@ -61,10 +54,10 @@ class HypothesisTrackerAgent:
                                     "status": h.get("status", "ACTIVE")
                                 })
                         if validated:
-                            logger.info("HypothesisTrackerAgent: Gemini successfully updated %d hypotheses", len(validated))
+                            logger.info("HypothesisTrackerAgent: AI provider successfully updated %d hypotheses", len(validated))
                             return validated
             except Exception as e:
-                logger.warning("HypothesisTrackerAgent: Gemini call failed (%s). Using rule-based fallback.", e)
+                logger.warning("HypothesisTrackerAgent: AI provider call failed (%s). Using rule-based fallback.", e)
 
         logger.info("HypothesisTrackerAgent: Using %d rule-based hypotheses", len(rule_based_hypotheses))
         return rule_based_hypotheses

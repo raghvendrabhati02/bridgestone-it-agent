@@ -27,46 +27,17 @@ try:
             pool_recycle=1800,
             pool_pre_ping=True
         )
-        with engine.connect() as conn:
-            pass
-        logger.info("PostgreSQL database connection established successfully.")
     else:
-        # SQLite or other configured DB url
-        is_sqlite = DATABASE_URL.startswith("sqlite")
-        if is_sqlite:
-            from sqlalchemy.pool import NullPool
-            engine = create_engine(
-                DATABASE_URL,
-                connect_args={"check_same_thread": False, "timeout": 30.0},
-                poolclass=NullPool
-            )
-        else:
-            engine = create_engine(DATABASE_URL)
-        logger.info("Database connection established for: %s", DATABASE_URL)
+        engine = create_engine(DATABASE_URL)
+    
+    with engine.connect() as conn:
+        pass
+    logger.info("PostgreSQL database connection established successfully.")
 except Exception as e:
     logger.error("Failed to connect to configured database (%s): %s", DATABASE_URL, e)
-    sqlite_url = "sqlite:///bridgestone_it_agent.db"
-    logger.warning("Falling back to local SQLite database: %s", sqlite_url)
-    DATABASE_URL = sqlite_url
-    is_sqlite = True
-    from sqlalchemy.pool import NullPool
-    engine = create_engine(
-        sqlite_url,
-        connect_args={"check_same_thread": False, "timeout": 30.0},
-        poolclass=NullPool
-    )
+    raise RuntimeError(f"Database connection failed: {e}")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Enable WAL mode for SQLite
-from sqlalchemy import event
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    if is_sqlite:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.close()
 
 # ==============================================================================
 # Database Observability Hooks (SQLAlchemy event listeners)

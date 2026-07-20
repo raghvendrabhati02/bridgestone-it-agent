@@ -11,6 +11,7 @@ ai_decision_ctx = contextvars.ContextVar("ai_decision", default="")
 tool_executed_ctx = contextvars.ContextVar("tool_executed", default="")
 ticket_id_ctx = contextvars.ContextVar("ticket_id", default="")
 error_stack_ctx = contextvars.ContextVar("error_stack", default="")
+turn_start_time_ctx = contextvars.ContextVar("turn_start_time", default=0.0)
 
 def clear_logging_context():
     """
@@ -27,6 +28,7 @@ def clear_logging_context():
     tool_executed_ctx.set("")
     ticket_id_ctx.set("")
     error_stack_ctx.set("")
+    turn_start_time_ctx.set(0.0)
 
 def get_context_dict() -> dict:
     """

@@ -1,6 +1,6 @@
 import os
 import logging
-import google.generativeai as genai
+from app.services.ai_provider import get_ai_provider
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -10,9 +10,7 @@ class EngineerSummaryAgent:
     """
 
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
+        self.provider = get_ai_provider()
 
     def generate_summary(
         self,
@@ -33,22 +31,17 @@ class EngineerSummaryAgent:
         # 1. Generate programmatic fallback report first
         fallback_report = self._generate_fallback(category, tool_chain, hypotheses, user_message)
 
-        # 2. Try Gemini for a richer, more professional narrative
-        if self.api_key:
-            try:
-                prompt = self._build_summary_prompt(category, tool_chain, hypotheses, user_message)
-                model = genai.GenerativeModel("gemini-2.5-flash-lite")
-                response = model.generate_content(
-                    prompt,
-                    request_options={"timeout": 12.0}
-                )
-                if response and response.text:
-                    parsed_report = response.text.strip()
-                    if "## IT Diagnostic Report" in parsed_report or "### Tools Executed" in parsed_report:
-                        logger.info("EngineerSummaryAgent: Rich report generated successfully by Gemini.")
-                        return parsed_report
-            except Exception as e:
-                logger.warning("EngineerSummaryAgent: Gemini generation failed (%s). Using programmatic report.", e)
+        # 2. Try AI Provider for a richer, more professional narrative
+        try:
+            prompt = self._build_summary_prompt(category, tool_chain, hypotheses, user_message)
+            response = self.provider.generate_response(prompt)
+            if response:
+                parsed_report = response.strip()
+                if "## IT Diagnostic Report" in parsed_report or "### Tools Executed" in parsed_report:
+                    logger.info("EngineerSummaryAgent: Rich report generated successfully by AI provider.")
+                    return parsed_report
+        except Exception as e:
+            logger.warning("EngineerSummaryAgent: AI provider generation failed (%s). Using programmatic report.", e)
 
         logger.info("EngineerSummaryAgent: Using fallback programmatic report.")
         return fallback_report

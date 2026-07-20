@@ -1,6 +1,6 @@
 import logging
 import os
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -68,9 +68,14 @@ else:
     origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
         "http://localhost:8000",
-        "http://127.0.0.1:8000"
+        "http://127.0.0.1:8000",
+        "http://localhost:8001",
+        "http://127.0.0.1:8001"
     ]
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -438,20 +443,17 @@ def health(db: Session = Depends(get_db_context)):
         except Exception:
             pass
 
-    # 3. Gemini LLM API check
+    # 3. AI Provider check
     gemini_status = "unhealthy"
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if gemini_api_key:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel("gemini-2.5-flash-lite")
-            # If initialization is fine and API key is present
+    try:
+        from app.services.ai_provider import get_ai_provider
+        provider = get_ai_provider()
+        if provider.is_ready():
             gemini_status = "healthy"
-        except Exception as e:
-            logger.error("Health Check: Gemini configuration failed: %s", e)
-    else:
-        gemini_status = "unconfigured (missing API key)"
+        else:
+            gemini_status = "unconfigured (provider not ready)"
+    except Exception as e:
+        logger.error("Health Check: AI provider configuration failed: %s", e)
 
     # 4. Enterprise Adapters Check
     adapters_status = {}
@@ -792,7 +794,7 @@ def run_ticket_action(
     elif action == "reject_request":
         if current_user.role not in ("ADMIN", "MANAGER"):
             raise HTTPException(status_code=403, detail="Only Admins and Managers can reject requests.")
-    elif action in ("start_work", "put_on_hold", "request_more_information", "change_priority", "resolve", "fulfill", "escalate", "pending"):
+    elif action in ("start_work", "put_on_hold", "request_more_information", "change_priority", "resolve", "fulfill", "escalate", "pending", "admin_approve"):
         if current_user.role != "ADMIN":
             raise HTTPException(status_code=403, detail="Only Admin users can execute this ticket lifecycle action.")
     elif action in ("close", "confirm_resolution"):
@@ -862,6 +864,23 @@ def run_ticket_action(
         ticket.approval_status = "APPROVED"
         ticket.status = "APPROVED"
         db.commit()
+
+        # Log Admin approval requested
+        try:
+            from app.database.models.session import SessionModel
+            from app.core.logging_context import session_id_ctx
+            from app.services.observability_service import log_event
+            session_record = db.query(SessionModel).filter(SessionModel.active_ticket == ticket_id).first()
+            if session_record:
+                session_id_ctx.set(session_record.session_id)
+                log_event(
+                    "Admin approval requested",
+                    db=db,
+                    category=ticket.category,
+                    ticket_id=ticket_id
+                )
+        except Exception as _obs_err:
+            logger.warning("Failed to log admin approval requested: %s", _obs_err)
 
         from app.services.timeline_service import TimelineService
         TimelineService.log_event(
@@ -1325,6 +1344,100 @@ def run_ticket_action(
             details={"action": "reopen", "note": request.note or ""}
         )
 
+    elif action == "admin_approve":
+        new_status = "TEMP_ADMIN_GRANTED"
+        ticket.status = new_status
+
+        # Generate simulated temporary Microsoft LAPS password
+        # Format: BS-XXXX-XXXX-XX (alphanumeric, 14 chars after prefix)
+        import random, string, secrets
+        chars = string.ascii_letters + string.digits
+        segments = [
+            "".join(secrets.choice(chars) for _ in range(4)),
+            "".join(secrets.choice(chars) for _ in range(4)),
+            "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(2)),
+        ]
+        laps_pwd = f"BS-{'-'.join(segments)}"
+
+        # Retrieve the manager who previously approved (for the audit trail)
+        manager_name = ticket.manager or "manager"
+        admin_name = current_user.username
+        audit_ts = int(datetime.datetime.utcnow().timestamp())
+
+        ticket.laps_password = laps_pwd
+        ticket.laps_expiration = datetime.datetime.utcnow() + datetime.timedelta(minutes=15)
+        ticket.laps_active = True
+        # Embed approver names in audit ID for display in UI
+        ticket.laps_audit_id = f"LAPS-{ticket_id}-{audit_ts}"
+        # Store approved-by metadata on the manager field for LAPS panel display
+        # (manager already set when ticket was created; admin name stored in audit)
+        db.commit()
+
+        # Log LAPS password generated
+        try:
+            from app.database.models.session import SessionModel
+            from app.core.logging_context import session_id_ctx
+            from app.services.observability_service import log_event
+            session_record = db.query(SessionModel).filter(SessionModel.active_ticket == ticket_id).first()
+            if session_record:
+                session_id_ctx.set(session_record.session_id)
+                log_event(
+                    "LAPS password generated",
+                    db=db,
+                    category=ticket.category,
+                    ticket_id=ticket_id
+                )
+        except Exception as _obs_err:
+            logger.warning("Failed to log laps password generated: %s", _obs_err)
+
+        # Non-critical audit trail — wrapped to prevent any transient database write issues from blocking the response
+        try:
+            from app.services.timeline_service import TimelineService
+            TimelineService.log_event(
+                db=db,
+                ticket_id=ticket_id,
+                event_type="LAPS_GRANTED",
+                actor=admin_name,
+                action="admin_approve",
+                description=(
+                    f"Temporary administrator privileges granted by {admin_name} (Admin). "
+                    f"Previously approved by {manager_name} (Manager). "
+                    f"Audit ID: {ticket.laps_audit_id}. Expires in 15 minutes."
+                )
+            )
+            create_notification(
+                ticket_id=ticket_id,
+                recipient=ticket.created_by or "Employee",
+                message=(
+                    f"✅ Temporary administrator privileges have been granted for ticket {ticket_id}. "
+                    f"Open 'My Tickets → Ticket Details' to view and copy your secure LAPS password. "
+                    f"The password expires in 15 minutes."
+                )
+            )
+            log_rbac_event(
+                user=admin_name,
+                role=current_user.role,
+                action="laps_access_granted",
+                ticket_id=ticket_id,
+                old_state=old_status,
+                new_state=new_status,
+                details={
+                    "action": "admin_approve",
+                    "laps_audit_id": ticket.laps_audit_id,
+                    "manager_approver": manager_name,
+                    "admin_approver": admin_name,
+                    "expires_minutes": 15,
+                    "note": request.note or ""
+                }
+            )
+            db.commit()
+        except Exception as _audit_err:
+            logger.warning("admin_approve: audit/notification write failed (non-critical, LAPS already granted): %s", _audit_err)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
     # Update in-memory ticket lifecycle store for synchronization
     try:
         import app.services.ticket_lifecycle_service as tls
@@ -1431,6 +1544,30 @@ def get_ticket_details(
     ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
     if not ticket:
         raise HTTPException(status_code=404, detail=f"Ticket '{ticket_id}' not found.")
+
+    # Self-healing LAPS Password Expiration Check
+    laps_password = None
+    laps_active = False
+    laps_time_left = 0
+    if getattr(ticket, "laps_active", False) and getattr(ticket, "laps_expiration", None):
+        import datetime
+        now = datetime.datetime.utcnow()
+        if now > ticket.laps_expiration:
+            ticket.laps_active = False
+            from app.services.timeline_service import TimelineService
+            TimelineService.log_event(
+                db=db,
+                ticket_id=ticket.ticket_id,
+                event_type="LAPS_EXPIRED",
+                actor="system",
+                action="expire laps",
+                description="Temporary privilege expired."
+            )
+            db.commit()
+        else:
+            laps_password = ticket.laps_password
+            laps_active = True
+            laps_time_left = int((ticket.laps_expiration - now).total_seconds())
 
     # RBAC: Employee can only see their own tickets
     if current_user.role not in ("ADMIN", "MANAGER") and ticket.created_by != current_user.username:
@@ -1889,7 +2026,16 @@ def get_ticket_details(
             "assigned_engineer": ticket.assigned_engineer,
             "reopen_count": ticket.reopen_count or 0,
             "reopened_at": ticket.reopened_at.isoformat() + "Z" if ticket.reopened_at else None,
-            "reopened_by": ticket.reopened_by
+            "reopened_by": ticket.reopened_by,
+            # ITSM workflow fields — needed for approval banners and LAPS panel
+            "request_type": ticket.request_type,
+            "approval_status": ticket.approval_status,
+            "manager": ticket.manager,
+            # LAPS simulation fields
+            "laps_password": laps_password,
+            "laps_active": laps_active,
+            "laps_time_left": laps_time_left,
+            "laps_audit_id": ticket.laps_audit_id
         },
         "session_id": session_id,
         "requester": req_profile,
@@ -2331,6 +2477,18 @@ def startup_event():
         return
     from app.core.json_logger import setup_json_logging
     setup_json_logging(logging.INFO)
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    logger.info("FastAPI Startup: Resolved Gemini model name from environment: %s", model_name)
+    
+    # Verify AI Provider availability
+    try:
+        from app.services.ai_provider import get_ai_provider
+        provider = get_ai_provider()
+        if not provider.is_ready():
+            logger.error("FastAPI Startup ERROR: Active AI provider is not ready.")
+    except Exception as e:
+        logger.warning("FastAPI Startup: Failed to perform AI provider verification check: %s", e)
+
     logger.info("FastAPI Startup: Initializing background job scheduler.")
     from app.jobs.scheduler import init_scheduler
     init_scheduler()
@@ -2914,7 +3072,7 @@ def get_manager_approval_queue(
 
     from app.database.models.ticket import Ticket
     tickets_q = db.query(Ticket).filter(
-        Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"]),
+        ((Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"])) | (Ticket.status == "WAITING_MANAGER_APPROVAL")),
         Ticket.approval_status == "PENDING",
         Ticket.status.notin_(["REJECTED", "CLOSED"])
     )
@@ -3046,7 +3204,7 @@ def get_manager_tickets(
     from app.database.models.agent_trace import AgentTrace
 
     query = db.query(Ticket).filter(
-        Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"])
+        (Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"])) | (Ticket.status == "WAITING_MANAGER_APPROVAL")
     )
 
     if current_user.role == "MANAGER":
@@ -3106,6 +3264,132 @@ def get_manager_tickets(
             "ai_recommendation": ai_recommendation
         })
     return {"count": len(results), "tickets": results}
+
+
+@app.post("/api/itsm/manager-tickets/{ticket_id}/approve")
+def approve_manager_ticket(
+    ticket_id: str,
+    request: dict = Body(default={}),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    if current_user.role not in ("MANAGER", "ADMIN"):
+        raise HTTPException(status_code=403, detail="Only Managers and Admins can approve tickets.")
+    
+    from app.database.models.ticket import Ticket
+    from app.services.timeline_service import TimelineService
+    from app.services.rbac_audit_service import log_rbac_event
+    
+    ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found.")
+        
+    old_status = ticket.status
+    
+    if ticket.status == "WAITING_MANAGER_APPROVAL":
+        ticket.status = "WAITING_ADMIN_APPROVAL"
+    elif ticket.status == "WAITING_MANAGER":
+        ticket.status = "WAITING_ADMIN"
+    else:
+        ticket.status = "WAITING_ADMIN"
+        
+    ticket.approval_status = "APPROVED"
+    db.commit()
+
+    # Log Admin approval requested
+    try:
+        from app.database.models.session import SessionModel
+        from app.core.logging_context import session_id_ctx
+        from app.services.observability_service import log_event
+        session_record = db.query(SessionModel).filter(SessionModel.active_ticket == ticket_id).first()
+        if session_record:
+            session_id_ctx.set(session_record.session_id)
+            log_event(
+                "Admin approval requested",
+                db=db,
+                category=ticket.category,
+                ticket_id=ticket_id
+            )
+    except Exception as _obs_err:
+        logger.warning("Failed to log admin approval requested: %s", _obs_err)
+    
+    try:
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="MANAGER_APPROVED",
+            actor=current_user.username,
+            action="manager_approve",
+            description=f"Request approved by manager {current_user.username}. Reason: {request.get('reason', 'Approved via Manager Portal.')}"
+        )
+        log_rbac_event(
+            user=current_user.username,
+            role=current_user.role,
+            action="update_ticket_lifecycle",
+            ticket_id=ticket_id,
+            old_state=old_status,
+            new_state=ticket.status,
+            details={"action": "manager_approve", "reason": request.get('reason', '')}
+        )
+        db.commit()
+    except Exception as _audit_err:
+        logger.warning("manager_approve: audit/timeline write failed (non-critical, ticket already approved): %s", _audit_err)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    return {"message": "Ticket request successfully approved.", "status": ticket.status}
+
+
+@app.post("/api/itsm/manager-tickets/{ticket_id}/reject")
+def reject_manager_ticket(
+    ticket_id: str,
+    request: dict = Body(default={}),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    if current_user.role not in ("MANAGER", "ADMIN"):
+        raise HTTPException(status_code=403, detail="Only Managers and Admins can reject tickets.")
+        
+    from app.database.models.ticket import Ticket
+    from app.services.timeline_service import TimelineService
+    from app.services.rbac_audit_service import log_rbac_event
+    
+    ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found.")
+        
+    old_status = ticket.status
+    ticket.status = "REJECTED"
+    ticket.approval_status = "REJECTED"
+    db.commit()
+    
+    try:
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="MANAGER_REJECTED",
+            actor=current_user.username,
+            action="manager_reject",
+            description=f"Request rejected by manager {current_user.username}. Reason: {request.get('reason', 'Rejected via Manager Portal.')}"
+        )
+        log_rbac_event(
+            user=current_user.username,
+            role=current_user.role,
+            action="update_ticket_lifecycle",
+            ticket_id=ticket_id,
+            old_state=old_status,
+            new_state="REJECTED",
+            details={"action": "manager_reject", "reason": request.get('reason', '')}
+        )
+        db.commit()
+    except Exception as _audit_err:
+        logger.warning("manager_reject: audit/timeline write failed (non-critical, ticket already rejected): %s", _audit_err)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    return {"message": "Ticket request rejected successfully.", "status": "REJECTED"}
 
 
 class ExecuteActionRequest(BaseModel):
@@ -3285,4 +3569,18 @@ def post_device_agent_action(
     }
 
 
-
+@app.get("/system/provider")
+def get_active_provider(
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    from app.services.ai_provider import get_ai_provider
+    provider = get_ai_provider()
+    return {
+        "provider": provider.__class__.__name__.replace("Provider", "").lower(),
+        "model": getattr(provider, "_model_name", "unknown"),
+        "ready": provider.is_ready()
+    }
+
+
+
+

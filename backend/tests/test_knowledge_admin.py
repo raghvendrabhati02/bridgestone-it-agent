@@ -14,20 +14,46 @@ import app.services.knowledge_service as ks
 import app.services.knowledge_admin_service as kas
 
 
+def _remove_dir_robust(path):
+    import time
+    if not os.path.isdir(path):
+        return
+    for i in range(5):
+        try:
+            for root, dirs, files in os.walk(path):
+                for f in files:
+                    try:
+                        os.chmod(os.path.join(root, f), 0o777)
+                    except Exception:
+                        pass
+                for d in dirs:
+                    try:
+                        os.chmod(os.path.join(root, d), 0o777)
+                    except Exception:
+                        pass
+            shutil.rmtree(path)
+            return
+        except Exception:
+            time.sleep(0.1)
+    shutil.rmtree(path)
+
+
 @pytest.fixture(autouse=True)
 def setup_teardown_kb():
     """Backup KB_DIR and restore it after each test to keep tests deterministic."""
     kb_backup = ks.KB_DIR + "_backup"
+    if os.path.isdir(kb_backup):
+        _remove_dir_robust(kb_backup)
     if os.path.isdir(ks.KB_DIR):
         shutil.copytree(ks.KB_DIR, kb_backup)
     
     yield
     
     if os.path.isdir(ks.KB_DIR):
-        shutil.rmtree(ks.KB_DIR)
+        _remove_dir_robust(ks.KB_DIR)
     if os.path.isdir(kb_backup):
         shutil.copytree(kb_backup, ks.KB_DIR)
-        shutil.rmtree(kb_backup)
+        _remove_dir_robust(kb_backup)
 
 
 def test_list_all_articles():

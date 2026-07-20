@@ -55,6 +55,7 @@ _WEAK_APPROVALS = {
 
 _EXPLICIT_REJECTIONS = {
     "no", "nope", "cancel", "don't", "do not", "stop", "abort", "reject", "never mind",
+    "still not working", "not working", "not", "failed", "did not work",
 }
 
 _WEAK_REJECTIONS = {

@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+from app.services.ai_provider import get_ai_provider
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -27,7 +28,7 @@ class RootCauseAgent:
     """Deterministic root-cause analyser with optional Gemini enrichment."""
 
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        self.provider = get_ai_provider()
 
     # ──────────────────────────────────────────────────────────
     # Public API
@@ -56,8 +57,8 @@ class RootCauseAgent:
             # Step 1 — deterministic rule-based analysis
             analysis = self._analyze_rules(category, user_message, tool_result)
 
-            # Step 2 — optional Gemini enrichment
-            if self.api_key and tool_result and tool_result.get("data"):
+            # Step 2 — optional AI Provider enrichment
+            if tool_result and tool_result.get("data"):
                 enriched = self._try_gemini(
                     category, user_message, tool_result, knowledge_context
                 )
@@ -290,9 +291,6 @@ class RootCauseAgent:
 
     def _try_gemini(self, category, user_message, tool_result, knowledge_context) -> dict | None:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
-
             prompt = (
                 "You are a Root Cause Analysis agent for Bridgestone IT Support.\n"
                 f"Category: {category}\n"
@@ -309,14 +307,9 @@ class RootCauseAgent:
                 "}\n"
             )
 
-            model = genai.GenerativeModel("gemini-2.5-flash-lite")
-            response = model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"},
-                request_options={"timeout": 10.0},
-            )
-            if response and response.text:
-                result = json.loads(response.text.strip())
+            response = self.provider.generate_response(prompt)
+            if response:
+                result = json.loads(response.strip())
                 if result.get("observations") and result.get("possible_causes"):
                     return self._normalize(
                         result["observations"],
@@ -326,7 +319,7 @@ class RootCauseAgent:
                         result.get("summary", ""),
                     )
         except Exception as e:
-            logger.warning("RootCauseAgent: Gemini enrichment failed: %s", e)
+            logger.warning("RootCauseAgent: AI provider enrichment failed: %s", e)
         return None
 
     # ──────────────────────────────────────────────────────────

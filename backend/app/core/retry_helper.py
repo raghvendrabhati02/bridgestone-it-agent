@@ -19,7 +19,8 @@ def with_retry(retries=3, backoff_factor=2.0, jitter=True):
                     result = func(*args, **kwargs)
                     # Check if the result is a dict indicating a debug_error
                     if isinstance(result, dict) and "debug_error" in result:
-                        raise RuntimeError(f"API call returned debug_error: {result['debug_error']}")
+                        # Avoid double-retrying at the decorator level when the provider already handles retries
+                        return result
                     return result
                 except Exception as ex:
                     last_ex = ex

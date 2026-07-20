@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-import google.generativeai as genai
+from app.services.ai_provider import get_ai_provider
 from dotenv import load_dotenv
 
 logger = logging.getLogger("it-agent-backend")
@@ -9,9 +9,7 @@ logger = logging.getLogger("it-agent-backend")
 class ConversationAgent:
     def __init__(self):
         load_dotenv()
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
+        self.provider = get_ai_provider()
 
     def classify_message(self, message: str, history: list[dict], current_category: str = "GENERAL", current_status: str = "ACTIVE") -> dict:
         """
@@ -24,35 +22,29 @@ class ConversationAgent:
         # 1. First run rules fallback checks for high-priority deterministic intents (greetings, approvals, ticket requests)
         fallback_res = self._check_rule_based_fallback(message, history, current_category, current_status)
         
-        # If we have a API key, try the Gemini LLM classification
-        if self.api_key:
-            try:
-                prompt = self._build_prompt(message, history, current_category, current_status)
-                model = genai.GenerativeModel("gemini-2.5-flash-lite")
-                response = model.generate_content(
-                    prompt,
-                    generation_config={"response_mime_type": "application/json"},
-                    request_options={"timeout": 10.0}
-                )
+        # Try the Gemini LLM classification
+        try:
+            prompt = self._build_prompt(message, history, current_category, current_status)
+            response = self.provider.generate_response(prompt)
                 
-                if response and response.text:
-                    result = json.loads(response.text.strip())
-                    intent = result.get("intent", "").strip().upper()
-                    category = result.get("category", "").strip().upper()
+            if response:
+                result = json.loads(response)
+                intent = result.get("intent", "").strip().upper()
+                category = result.get("category", "").strip().upper()
                     
-                    valid_intents = {"GREETING", "IDENTITY", "SMALL_TALK", "CAPABILITY", "THANKS", "GOODBYE", "IT_ISSUE", "TICKET_REQUEST", "APPROVAL_RESPONSE", "FOLLOW_UP", "SERVICE_REQUEST"}
-                    valid_categories = {"VPN", "PASSWORD_RESET", "OUTLOOK", "SOFTWARE_INSTALLATION", "PRINTER", "SAP", "NETWORK", "HARDWARE", "GENERAL"}
+                valid_intents = {"GREETING", "IDENTITY", "SMALL_TALK", "CAPABILITY", "THANKS", "GOODBYE", "IT_ISSUE", "TICKET_REQUEST", "APPROVAL_RESPONSE", "FOLLOW_UP", "SERVICE_REQUEST"}
+                valid_categories = {"VPN", "PASSWORD_RESET", "OUTLOOK", "SOFTWARE_INSTALLATION", "PRINTER", "SAP", "NETWORK", "HARDWARE", "GENERAL"}
                     
-                    if intent in valid_intents and category in valid_categories:
-                        logger.info("ConversationAgent: Gemini classified successfully: Intent=%s, Category=%s", intent, category)
-                        return {
-                            "intent": intent,
-                            "category": category,
-                            "explanation": result.get("explanation", "")
-                        }
-            except Exception as e:
-                logger.warning("ConversationAgent: Gemini classification failed: %s. Using rule-based fallback.", e)
-                
+                if intent in valid_intents and category in valid_categories:
+                    logger.info("ConversationAgent: AI Provider classified successfully: Intent=%s, Category=%s", intent, category)
+                    return {
+                        "intent": intent,
+                        "category": category,
+                        "explanation": result.get("explanation", "")
+                    }
+        except Exception as e:
+            logger.warning("ConversationAgent: Gemini classification failed: %s. Using rule-based fallback.", e)
+            
         # 2. Fallback to rule-based classification
         logger.info("ConversationAgent: Using fallback classification: Intent=%s, Category=%s", fallback_res["intent"], fallback_res["category"])
         return fallback_res
@@ -212,28 +204,25 @@ class ConversationAgent:
         
         fallback_text = fallback_responses.get(intent, "Hello! How can I assist you with your IT needs today?")
         
-        if self.api_key:
-            try:
-                prompt = (
-                    "You are Bridgestone's Conversational IT Support Agent. Speak naturally, professionally, and warmly.\n"
-                    f"The user message has the intent: {intent}.\n"
-                    f"User message: '{message}'\n\n"
-                    "=== Conversation History ===\n"
-                )
-                for msg in history[-5:]:
-                    sender = "User" if msg["sender"] == "user" else "Agent"
-                    prompt += f"{sender}: {msg['text']}\n"
-                prompt += f"User: {message}\n"
-                prompt += "\nWrite a friendly, natural, and helpful reply. Keep it under 2 sentences."
-                
-                model = genai.GenerativeModel("gemini-2.5-flash-lite")
-                response = model.generate_content(
-                    prompt,
-                    request_options={"timeout": 10.0}
-                )
-                if response and response.text:
-                    return response.text.strip()
-            except Exception as e:
-                logger.warning("ConversationAgent: Gemini generation failed: %s. Using rule-based fallback.", e)
+        try:
+            prompt = (
+                "You are Bridgestone's Conversational IT Support Agent. Speak naturally, professionally, and warmly.\n"
+                f"The user message has the intent: {intent}.\n"
+                f"User message: '{message}'\n\n"
+                "=== Conversation History ===\n"
+            )
+            for msg in history[-5:]:
+                sender = "User" if msg["sender"] == "user" else "Agent"
+                prompt += f"{sender}: {msg['text']}\n"
+            prompt += f"User: {message}\n"
+            prompt += "\nWrite a friendly, natural, and helpful reply. Keep it under 2 sentences."
+            
+            response = self.provider.generate_response(prompt)
+
+            if response:
+                return response
+
+        except Exception as e:
+            logger.warning("ConversationAgent: AI Provider generate response failed: %s. Using rule-based fallback.", e)
                 
         return fallback_text

@@ -915,3 +915,108 @@ def get_dashboard_analytics(
         logger.error("Dashboard Analytics Calculation error: %s", e)
         return {"cards": {}, "charts": {}, "tables": {}}
 
+
+def get_engine_observability_metrics(db: Session) -> Dict[str, Any]:
+    """
+    Computes conversation engine observability and telemetry metrics.
+    """
+    try:
+        from app.database.models.conversation_event import ConversationEvent
+        
+        # 1. Total unique sessions
+        total_sessions = db.query(func.count(func.distinct(ConversationEvent.session_id))).scalar() or 0
+        
+        # 2. Average troubleshooting turns per conversation
+        total_steps = db.query(func.count(ConversationEvent.id)).filter(
+            ConversationEvent.event_name == "Troubleshooting step suggested"
+        ).scalar() or 0
+        avg_troubleshooting_turns = round(total_steps / total_sessions, 2) if total_sessions > 0 else 0.0
+        
+        # 3. Ticket creation rate
+        tickets_created = db.query(func.count(ConversationEvent.id)).filter(
+            ConversationEvent.event_name == "Ticket created"
+        ).scalar() or 0
+        ticket_creation_rate = round(tickets_created / total_sessions, 4) if total_sessions > 0 else 0.0
+        
+        # 4. Ticket block rate (guardrail activations)
+        blocked_count = db.query(func.count(ConversationEvent.id)).filter(
+            ConversationEvent.event_name == "Premature escalation blocked"
+        ).scalar() or 0
+        allowed_count = db.query(func.count(ConversationEvent.id)).filter(
+            ConversationEvent.event_name == "Ticket recommendation generated",
+            ConversationEvent.escalation_blocked == False
+        ).scalar() or 0
+        total_escalation_attempts = blocked_count + allowed_count
+        ticket_block_rate = round(blocked_count / total_escalation_attempts, 4) if total_escalation_attempts > 0 else 0.0
+        
+        # 5. Resolution without ticket (completed sessions without ticket created)
+        completed_sessions = db.query(ConversationEvent.session_id).filter(
+            ConversationEvent.event_name == "Conversation completed"
+        ).distinct().all()
+        completed_session_ids = [s[0] for s in completed_sessions]
+        
+        sessions_with_ticket = db.query(ConversationEvent.session_id).filter(
+            ConversationEvent.event_name == "Ticket created",
+            ConversationEvent.session_id.in_(completed_session_ids)
+        ).distinct().all()
+        sessions_with_ticket_ids = set([s[0] for s in sessions_with_ticket])
+        resolution_without_ticket = max(0, len(completed_session_ids) - len(sessions_with_ticket_ids))
+        
+        # 6. Average response latency
+        avg_response_latency = db.query(func.avg(ConversationEvent.response_latency)).filter(
+            ConversationEvent.response_latency > 0
+        ).scalar() or 0.0
+        avg_response_latency = round(float(avg_response_latency), 3)
+        
+        # 7. Average LLM confidence
+        avg_llm_confidence = db.query(func.avg(ConversationEvent.llm_confidence)).filter(
+            ConversationEvent.llm_confidence > 0
+        ).scalar() or 0.0
+        avg_llm_confidence = round(float(avg_llm_confidence), 3)
+        
+        # 8. Most common issue categories
+        categories_query = db.query(
+            ConversationEvent.category,
+            func.count(ConversationEvent.id).label("count")
+        ).filter(
+            ConversationEvent.category != None,
+            ConversationEvent.category != "",
+            ConversationEvent.category != "GENERAL"
+        ).group_by(ConversationEvent.category).order_by(text("count DESC")).limit(5).all()
+        most_common_categories = {cat: count for cat, count in categories_query if cat}
+        
+        # 9. Most common escalation reasons
+        reasons_query = db.query(
+            ConversationEvent.escalation_reason,
+            func.count(ConversationEvent.id).label("count")
+        ).filter(
+            ConversationEvent.escalation_reason != None,
+            ConversationEvent.escalation_reason != ""
+        ).group_by(ConversationEvent.escalation_reason).order_by(text("count DESC")).limit(5).all()
+        most_common_escalation_reasons = {reason: count for reason, count in reasons_query if reason}
+        
+        return {
+            "total_conversations": total_sessions,
+            "average_troubleshooting_turns": avg_troubleshooting_turns,
+            "ticket_creation_rate": ticket_creation_rate,
+            "ticket_block_rate": ticket_block_rate,
+            "resolution_without_ticket": resolution_without_ticket,
+            "average_response_latency": avg_response_latency,
+            "average_llm_confidence": avg_llm_confidence,
+            "most_common_categories": most_common_categories,
+            "most_common_escalation_reasons": most_common_escalation_reasons
+        }
+    except Exception as e:
+        logger.error("Engine Observability Metrics Calculation error: %s", e)
+        return {
+            "total_conversations": 0,
+            "average_troubleshooting_turns": 0.0,
+            "ticket_creation_rate": 0.0,
+            "ticket_block_rate": 0.0,
+            "resolution_without_ticket": 0,
+            "average_response_latency": 0.0,
+            "average_llm_confidence": 0.0,
+            "most_common_categories": {},
+            "most_common_escalation_reasons": {}
+        }
+

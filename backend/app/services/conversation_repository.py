@@ -66,6 +66,9 @@ class ConversationRepository:
         else:
             state.tool_result.pop("_attempted_actions", None)
 
+        state.tool_result["clarifying_questions_asked"] = getattr(state, "clarifying_questions_asked", 0)
+        state.tool_result["troubleshooting_steps_suggested"] = getattr(state, "troubleshooting_steps_suggested", 0)
+
     def restore_ts(self, state: "SessionState") -> None:
         """Deserialise a TroubleshootingSession stored inside state.tool_result."""
         from app.services.troubleshooting_service import TroubleshootingSession
@@ -97,6 +100,8 @@ class ConversationRepository:
             )
         state.diagnostic_answers = state.tool_result.get("_diagnostic_answers", {}) if isinstance(state.tool_result, dict) else {}
         state.attempted_actions = state.tool_result.get("_attempted_actions", []) if isinstance(state.tool_result, dict) else []
+        state.clarifying_questions_asked = state.tool_result.get("clarifying_questions_asked", 0) if isinstance(state.tool_result, dict) else 0
+        state.troubleshooting_steps_suggested = state.tool_result.get("troubleshooting_steps_suggested", 0) if isinstance(state.tool_result, dict) else 0
 
     # ── Write ─────────────────────────────────────────────────────────────────
 

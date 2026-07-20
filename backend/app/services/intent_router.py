@@ -42,6 +42,7 @@ class IntentType(str, Enum):
     RESOLVED_KEYWORD = "RESOLVED_KEYWORD"
     IT_ISSUE         = "IT_ISSUE"
     GENERAL          = "GENERAL"
+    GREETING         = "GREETING"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,7 +94,8 @@ _PASSWORD_RESET_PATTERNS = re.compile(
 
 _RESTART_PATTERNS = re.compile(
     r"\b(start\s+over|begin\s+again|new\s+issue|new\s+problem|fresh\s+start|start\s+fresh|"
-    r"reset\s+chat|reset\s+conversation|new\s+conversation|clear\s+conversation|new\s+session|clear\s+chat)\b"
+    r"reset\s+chat|reset\s+conversation|new\s+conversation|clear\s+conversation|new\s+session|clear\s+chat"
+    r"|restart\s+and\s+cancel)\b"
     r"|^(\s*reset\s*|\s*restart\s*)[.!?]?$",
     re.IGNORECASE,
 )
@@ -112,6 +114,11 @@ _RESOLVED_PATTERNS = re.compile(
     r"(?<!not )(?<!not\t)\b(working|fixed|solved|resolved|issue\s+resolved|problem\s+fixed|"
     r"it\s+works?|all\s+good|sorted|it.?s\s+working|now\s+working|resolved\s+now|"
     r"problem\s+solved)\b",
+    re.IGNORECASE,
+)
+
+_GREETING_PATTERNS = re.compile(
+    r"^(\s*(hi|hello|hey|good\s+morning|good\s+evening|greetings|howdy|yo|hiya|hello\s+there|hi\s+there)\s*)[.,!?]?$",
     re.IGNORECASE,
 )
 
@@ -225,6 +232,11 @@ class IntentRouter:
         if _RESOLVED_PATTERNS.search(message):
             logger.info("IntentRouter: RESOLVED_KEYWORD matched | input=%r", normalized)
             return RouteResult(IntentType.RESOLVED_KEYWORD, None, normalized)
+
+        # 5.5 Standalone greeting detection
+        if _GREETING_PATTERNS.search(message):
+            logger.info("IntentRouter: GREETING matched | input=%r", normalized)
+            return RouteResult(IntentType.GREETING, None, normalized)
 
         # 6. IT Issue — classify via intent_service (regex + optional LLM)
         category = self._classify_category(message)

@@ -1,21 +1,14 @@
 import os
 import json
 import logging
-import google.generativeai as genai
+from app.services.ai_provider import get_ai_provider
 from dotenv import load_dotenv
 
 logger = logging.getLogger("it-agent-backend")
 
 # Load environment variables
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
-    load_dotenv(dotenv_path=env_path)
-    api_key = os.getenv("GEMINI_API_KEY")
 
-if api_key:
-    genai.configure(api_key=api_key)
 
 # SLA database/rules tracker
 sla_records = []
@@ -41,7 +34,7 @@ def calculate_sla(priority: str) -> int:
 
 def calculate_priority(category: str, issue_description: str) -> str:
     """
-    SLA Agent: Calculates the priority based on category and issue description using Gemini.
+    SLA Agent: Calculates the priority based on category and issue description using AI provider.
     Returns: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
     """
     logger.info("SLA Agent: Calculating priority for category: %s, issue: %s", category, issue_description)
@@ -63,23 +56,18 @@ def calculate_priority(category: str, issue_description: str) -> str:
         "}"
     )
 
-    if api_key:
-        try:
-            model = genai.GenerativeModel("gemini-2.5-flash-lite")
-            response = model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"},
-                request_options={"timeout": 15.0}
-            )
-            if response and response.text:
-                result = json.loads(response.text.strip())
-                priority = result.get("priority", "").strip().upper()
-                reason = result.get("reason", "").strip()
-                if priority in ("LOW", "MEDIUM", "HIGH", "CRITICAL"):
-                    logger.info("SLA Agent: Gemini determined priority: %s (Reason: %s)", priority, reason)
-                    return priority
-        except Exception as e:
-            logger.error("SLA Agent: Gemini classification failed, using rules fallback. Error: %s", e)
+    try:
+        provider = get_ai_provider()
+        response = provider.generate_response(prompt)
+        if response:
+            result = json.loads(response.strip())
+            priority = result.get("priority", "").strip().upper()
+            reason = result.get("reason", "").strip()
+            if priority in ("LOW", "MEDIUM", "HIGH", "CRITICAL"):
+                logger.info("SLA Agent: AI provider determined priority: %s (Reason: %s)", priority, reason)
+                return priority
+    except Exception as e:
+        logger.error("SLA Agent: AI provider classification failed, using rules fallback. Error: %s", e)
 
     # Rule-based fallback system
     desc_lower = issue_description.lower().strip()

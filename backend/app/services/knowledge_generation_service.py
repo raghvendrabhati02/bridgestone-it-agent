@@ -15,16 +15,8 @@ class KnowledgeGenerationService:
         """
         Uses Gemini to generate structured knowledge article contents from a resolved ticket.
         """
-        import google.generativeai as genai
-        import os
-        
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            logger.warning("Knowledge Generation: GEMINI_API_KEY is not defined. Using fallback generator.")
-            return KnowledgeGenerationService._fallback_draft(ticket_details)
-            
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+        from app.services.ai_provider import get_ai_provider
+        provider = get_ai_provider()
         
         prompt = f"""
         You are an IT Knowledge Base Expert. Analyze this resolved IT ticket and draft a Knowledge Base Article.
@@ -51,9 +43,9 @@ class KnowledgeGenerationService:
         """
         
         try:
-            response = model.generate_content(prompt, request_options={"timeout": 15.0})
-            if response and response.text:
-                raw_text = response.text.strip()
+            response = provider.generate_response(prompt)
+            if response:
+                raw_text = response.strip()
                 # Clean markdown wrapper if Gemini added it
                 if raw_text.startswith("```"):
                     lines = raw_text.splitlines()
@@ -66,7 +58,7 @@ class KnowledgeGenerationService:
                 parsed = json.loads(raw_text)
                 return parsed
         except Exception as e:
-            logger.error("Knowledge Generation: Gemini request failed or parsing failed: %s", e)
+            logger.error("Knowledge Generation: AI provider request failed or parsing failed: %s", e)
             
         return KnowledgeGenerationService._fallback_draft(ticket_details)
 

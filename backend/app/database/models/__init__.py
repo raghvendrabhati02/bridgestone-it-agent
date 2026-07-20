@@ -2,6 +2,7 @@ from app.database.base import Base
 from app.database.models.user import User
 from app.database.models.session import SessionModel
 from app.database.models.conversation import Conversation
+from app.database.models.conversation_event import ConversationEvent
 from app.database.models.audit_log import AuditLog
 from app.database.models.action_history import ActionHistory
 from app.database.models.approval_history import ApprovalHistory

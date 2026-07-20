@@ -69,7 +69,8 @@ logger = logging.getLogger("it-agent-backend")
 class ConversationPhase(str, Enum):
     UNDERSTANDING               = "UNDERSTANDING"
     DIAGNOSING                  = "DIAGNOSING"
-    TROUBLESHOOTING             = "TROUBLESHOOTING"
+    AI_TROUBLESHOOTING          = "AI_TROUBLESHOOTING"    # Gemini-driven multi-turn troubleshooting (NEW)
+    TROUBLESHOOTING             = "TROUBLESHOOTING"       # KB-step troubleshooting (privileged operations)
     VERIFYING                   = "VERIFYING"
     WAITING_ACTION_CONFIRMATION = "WAITING_ACTION_CONFIRMATION"
     WAITING_TICKET_CONFIRMATION = "WAITING_TICKET_CONFIRMATION"
@@ -96,6 +97,8 @@ class SessionState:
     max_automatic_actions: int = 3
     # ServiceNow draft — saved when SN is unreachable
     ticket_draft: Dict[str, Any] = field(default_factory=dict)
+    clarifying_questions_asked: int = 0
+    troubleshooting_steps_suggested: int = 0
     # Legacy fields kept for DB persistence / payload builder compatibility
     current_step: int = 0
     approval_required: bool = False
@@ -113,6 +116,10 @@ class SessionState:
         """Legacy status string used by DB persistence and payload builder."""
         if hasattr(self, "_legacy_status") and self._legacy_status is not None:
             return self._legacy_status
+        if self.phase == ConversationPhase.ESCALATED:
+            return "TICKET_CREATED"
+        if self.phase in (ConversationPhase.UNDERSTANDING, ConversationPhase.DIAGNOSING):
+            return "ACTIVE"
         return self.phase.value
 
     @status.setter
@@ -129,6 +136,8 @@ class SessionState:
         self.phase = ConversationPhase.UNDERSTANDING
         self.diagnostic_answers = {}
         self.attempted_actions = []
+        self.clarifying_questions_asked = 0
+        self.troubleshooting_steps_suggested = 0
 
     @property
     def is_troubleshooting(self) -> bool:
@@ -143,11 +152,39 @@ class SessionState:
 
     @property
     def waiting_for_step_confirmation(self) -> bool:
-        return self.phase in (ConversationPhase.TROUBLESHOOTING, ConversationPhase.VERIFYING)
+        return self.phase == ConversationPhase.TROUBLESHOOTING
 
     @waiting_for_step_confirmation.setter
     def waiting_for_step_confirmation(self, val: bool) -> None:
-        pass
+        if val:
+            self.phase = ConversationPhase.TROUBLESHOOTING
+        else:
+            if self.phase == ConversationPhase.TROUBLESHOOTING:
+                self.phase = ConversationPhase.UNDERSTANDING
+
+    @property
+    def waiting_for_solution_verification(self) -> bool:
+        return self.phase == ConversationPhase.VERIFYING
+
+    @waiting_for_solution_verification.setter
+    def waiting_for_solution_verification(self, val: bool) -> None:
+        if val:
+            self.phase = ConversationPhase.VERIFYING
+        else:
+            if self.phase == ConversationPhase.VERIFYING:
+                self.phase = ConversationPhase.UNDERSTANDING
+
+    @property
+    def waiting_for_ticket_confirmation(self) -> bool:
+        return self.phase == ConversationPhase.WAITING_TICKET_CONFIRMATION
+
+    @waiting_for_ticket_confirmation.setter
+    def waiting_for_ticket_confirmation(self, val: bool) -> None:
+        if val:
+            self.phase = ConversationPhase.WAITING_TICKET_CONFIRMATION
+        else:
+            if self.phase == ConversationPhase.WAITING_TICKET_CONFIRMATION:
+                self.phase = ConversationPhase.UNDERSTANDING
 
     @property
     def steps(self) -> List[str]:
@@ -173,7 +210,9 @@ def start_conversation(message: str, category: str) -> ConversationState:
     session_id = str(uuid.uuid4())
     state = ConversationState(session_id, category, message)
     _default_session_mgr.save_to_cache(state)
-    return state
+    # Automatically execute the first turn to populate initial response and transitions
+    _default_service.handle_chat_turn(session_id, message)
+    return _default_session_mgr.get(session_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -246,6 +285,11 @@ class ConversationService:
     def _transition(self, state: SessionState, next_phase: ConversationPhase, reason: str) -> None:
         self._tl.log_transition(state.session_id, state.phase, next_phase, reason)
         state.phase = next_phase
+        from app.services.observability_service import log_event
+        p_val = next_phase.value if hasattr(next_phase, 'value') else str(next_phase)
+        log_event("Conversation phase transition", phase=p_val, escalation_reason=reason)
+        if p_val in ("RESOLVED", "ESCALATED"):
+            log_event("Conversation completed", category=state.category, phase=p_val, ticket_id=state.active_ticket)
 
     def _reply(self, state: SessionState, message: str, bot_text: str, action: str, **kw) -> dict:
         self._repo.persist(state, message, bot_text)
@@ -255,6 +299,8 @@ class ConversationService:
         td = ticket_details or {}
         if state.approval_required and state.approval_status == "PENDING":
             action = "WAIT_FOR_APPROVAL"
+        
+        resolved_ticket_id = ticket_id or state.active_ticket
         return {
             "session_id": state.session_id,
             "category": state.category,
@@ -262,9 +308,9 @@ class ConversationService:
             "response": bot_text,
             "history_length": len(memory.get_history(state.session_id)),
             # Ticket creation fields — only truthy when DB persistence succeeded
-            "ticket_created": bool(ticket_created and ticket_id and not td.get("error")),
-            "ticket_id": ticket_id,
-            "servicenow_id": td.get("servicenow_id"),
+            "ticket_created": bool(ticket_created and resolved_ticket_id and not td.get("error")),
+            "ticket_id": resolved_ticket_id,
+            "servicenow_id": td.get("servicenow_id") or (resolved_ticket_id if resolved_ticket_id and resolved_ticket_id.startswith("REQ") or resolved_ticket_id.startswith("INC") else None),
             "assigned_team": td.get("assigned_team"),
             "priority": td.get("priority"),
             "sla_hours": td.get("sla_hours"),
@@ -287,50 +333,363 @@ class ConversationService:
             "status": state.phase.value,
         }
 
-    # ── Phase handlers (all < 20 lines) ──────────────────────────────────────
+    # ── Intent classification sets (class-level) ───────────────────────────────
+    # Controls which Gemini intents trigger which conversation phases.
+    _DIAGNOSABLE_INTENTS: frozenset = frozenset({
+        "GENERAL_SUPPORT", "CHECK_VPN_STATUS", "CHECK_OUTLOOK",
+        "CHECK_DEVICE_STATUS", "CHECK_DEVICE_HEALTH", "RESTART_SERVICE",
+        "SEARCH_KNOWLEDGE_BASE", "UNKNOWN",
+    })
+    _PRIVILEGED_INTENTS: frozenset = frozenset({"VPN_ACCESS_RESTORE", "INSTALL_SOFTWARE"})
+    _TICKET_INTENTS: frozenset = frozenset({"CREATE_TICKET", "ESCALATE_TO_HUMAN"})
+
+
 
     def _handle_understanding_or_diagnosing(self, state, message, username):
+        """
+        Gemini-first reasoning handler (UNDERSTANDING / DIAGNOSING phases).
+
+        Flow:
+          1. Call generate_decision() — Gemini reasons as IT engineer, KB injected via RAG.
+          2. If privileged intent → enter KB TROUBLESHOOTING phase (LAPS/approval flow).
+          3. If ticket intent → transition to WAITING_TICKET_CONFIRMATION.
+          4. If diagnosable intent → transition to AI_TROUBLESHOOTING (multi-turn).
+          5. Fallback: DiagnosticEngine if Gemini unavailable.
+        """
+        import app.services.orchestrator_service as orchestrator_service
+        import app.services.conversation_memory as mem
+
+        history = mem.get_history(state.session_id)
+
+        try:
+            decision = orchestrator_service.generate_decision(
+                category=state.category,
+                history=history,
+                user_message=message,
+            )
+            gemini_response = decision.get("assistant_message", "")
+            intent = decision.get("intent", "GENERAL_SUPPORT")
+            requires_confirmation = decision.get("requires_confirmation", False)
+            
+            from app.services.observability_service import log_event
+            log_event(
+                "Intent detected",
+                intent=intent,
+                category=state.category,
+                phase=state.phase.value,
+                llm_confidence=decision.get("confidence", 0.0),
+                model_name=decision.get("model_name")
+            )
+            log_event(
+                "Category detected",
+                category=state.category,
+                phase=state.phase.value
+            )
+        except Exception as exc:
+            logger.warning(
+                "ConversationService: Gemini decision failed (%s) — falling back to DiagnosticEngine.",
+                exc,
+            )
+            gemini_response = ""
+            intent = "GENERAL_SUPPORT"
+            requires_confirmation = False
+            
+            from app.services.observability_service import log_event
+            log_event(
+                "Intent detected",
+                intent="GENERAL_SUPPORT",
+                category=state.category,
+                phase=state.phase.value,
+                llm_confidence=0.0
+            )
+            log_event(
+                "Category detected",
+                category=state.category,
+                phase=state.phase.value
+            )
+
+        # ── Privileged operation → KB TROUBLESHOOTING (LAPS / approval) ─────────
+        if intent in self._PRIVILEGED_INTENTS and not requires_confirmation:
+            step_text = self._kb.start_troubleshooting(state, message)
+            if step_text:
+                self._transition(
+                    state, ConversationPhase.TROUBLESHOOTING,
+                    f"Privileged intent {intent} — starting KB troubleshooting",
+                )
+                from app.services.observability_service import log_event
+                log_event("Troubleshooting step suggested", category=state.category, phase=state.phase.value)
+                greeting = (
+                    f"I understand you need assistance with this {state.category} issue. "
+                    f"Let me guide you through the required steps.\n\n"
+                )
+                return self._reply(state, message, greeting + step_text, "ASK_MORE_INFO")
+
+        # ── Ticket intent → offer ticket creation ────────────────────────────────
+        if intent in self._TICKET_INTENTS:
+            escalation_reason = decision.get("escalation_reason", "")
+            
+            is_justified = (
+                state.troubleshooting_steps_suggested > 0
+                or escalation_reason in ("ADMIN_REQUIRED", "HARDWARE_FAILURE", "USER_REQUESTED", "POLICY_REQUIRED")
+                or self._is_ticket_request(message)
+            )
+
+
+
+            from app.services.observability_service import log_event
+            log_event(
+                "Ticket recommendation generated",
+                intent=intent,
+                category=state.category,
+                phase=state.phase.value,
+                escalation_reason=escalation_reason,
+                escalation_blocked=not is_justified
+            )
+
+            if not is_justified:
+                logger.info("Blocked premature escalation in understanding phase. Insufficient evidence of troubleshooting.")
+                intent = "GENERAL_SUPPORT"
+                
+                log_event(
+                    "Premature escalation blocked",
+                    intent=intent,
+                    category=state.category,
+                    phase=state.phase.value,
+                    escalation_reason=escalation_reason,
+                    escalation_blocked=True
+                )
+                
+                # Context-Preserving Response Modification
+                import re
+                ticket_phrases = r"(?i)\b(I (will|can) (create|raise|open|submit) a ticket|Let me (create|raise|open) a ticket|I'm going to escalate|I'll escalate|I'll raise a support request|Would you like me to create a ticket)\b[^.]*\.?"
+                cleaned_response = re.sub(ticket_phrases, "", gemini_response).strip()
+                
+                if cleaned_response and len(cleaned_response.split()) > 5:
+                    gemini_response = cleaned_response
+                else:
+                    gemini_response = "I need to ask a few more questions to diagnose this properly before we escalate. Could you provide a bit more detail about what you're experiencing?"
+            else:
+                self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION,
+                                 f"Gemini signalled {intent} — offering ticket")
+                prompt = format_ticket_prompt()
+                if gemini_response:
+                    prompt = f"{gemini_response}\n\n{format_ticket_prompt()}"
+                return self._reply(state, message, prompt, "ASK_MORE_INFO")
+
+        # Log questions/steps if any
+        if 'decision' in locals() and decision:
+            act_type = decision.get("action_type", "")
+            from app.services.observability_service import log_event
+            if act_type == "QUESTION" and "?" in gemini_response:
+                log_event("Clarifying question asked", clarifying_questions_asked=state.clarifying_questions_asked, troubleshooting_steps_suggested=state.troubleshooting_steps_suggested)
+            elif act_type == "STEP":
+                log_event("Troubleshooting step suggested", clarifying_questions_asked=state.clarifying_questions_asked, troubleshooting_steps_suggested=state.troubleshooting_steps_suggested)
+
+        # ── Diagnosable intent → AI_TROUBLESHOOTING multi-turn ───────────────────
+        # Gemini's first response is already a good opening — show it and enter session.
+        if gemini_response and intent in self._DIAGNOSABLE_INTENTS:
+            self._transition(
+                state, ConversationPhase.AI_TROUBLESHOOTING,
+                f"Diagnosable intent {intent} — entering AI multi-turn troubleshooting",
+            )
+            return self._reply(state, message, gemini_response, "ASK_MORE_INFO")
+
+        # ── Any other Gemini response — show it and stay in UNDERSTANDING ────────
+        if gemini_response:
+            return self._reply(state, message, gemini_response, "ASK_MORE_INFO")
+
+        # ── Gemini unavailable — DiagnosticEngine fallback ───────────────────────
         import app.services.diagnostic_engine as de
-        
-        # 1. If currently in DIAGNOSING phase, extract the answer to the last question asked
+
         if state.phase == ConversationPhase.DIAGNOSING:
             last_agent_message = ""
-            history = memory.get_history(state.session_id)
-            if history:
-                for turn in reversed(history):
-                    if turn.get("sender") == "agent":
-                        last_agent_message = turn.get("text", "")
-                        break
+            history_turns = mem.get_history(state.session_id)
+            for turn in reversed(history_turns):
+                if turn.get("sender") == "agent":
+                    last_agent_message = turn.get("text", "")
+                    break
             if last_agent_message:
                 ans = de.extract_answers(state.category, message, last_agent_message)
                 for k, v in ans.items():
                     state.diagnostic_answers[k] = v
 
-        # 2. Re-evaluate if confidence is high
         if de.is_confidence_high(state.category, message, state.diagnostic_answers):
             step_text = self._kb.start_troubleshooting(state, message)
             if step_text:
-                self._transition(state, ConversationPhase.TROUBLESHOOTING, "Confidence high — starting KB")
-                greeting = f"Welcome to Bridgestone IT Support. Let me assist you to resolve this {state.category} issue.\n\n"
+                self._transition(state, ConversationPhase.TROUBLESHOOTING, "Fallback: confidence high — starting KB")
+                greeting = f"Let me assist you with your {state.category} issue.\n\n"
                 return self._reply(state, message, greeting + step_text, "ASK_MORE_INFO")
-            else:
-                self._transition(state, ConversationPhase.UNDERSTANDING, "No KB exists — delegating to Gemini")
-                return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
-        else:
-            # 3. Confidence is low — ask next question
-            question = de.get_next_question(state.category, state.diagnostic_answers)
-            if question:
-                self._transition(state, ConversationPhase.DIAGNOSING, "Confidence low — asking diagnostic question")
-                return self._reply(state, message, question, "ASK_MORE_INFO")
-            else:
-                step_text = self._kb.start_troubleshooting(state, message)
-                if step_text:
-                    self._transition(state, ConversationPhase.TROUBLESHOOTING, "Questions exhausted — starting KB")
-                    greeting = f"Welcome to Bridgestone IT Support. Let me assist you to resolve this {state.category} issue.\n\n"
-                    return self._reply(state, message, greeting + step_text, "ASK_MORE_INFO")
+            return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
+
+        question = de.get_next_question(state.category, state.diagnostic_answers)
+        if question:
+            self._transition(state, ConversationPhase.DIAGNOSING, "Fallback: asking diagnostic question")
+            return self._reply(state, message, question, "ASK_MORE_INFO")
+
+        step_text = self._kb.start_troubleshooting(state, message)
+        if step_text:
+            self._transition(state, ConversationPhase.TROUBLESHOOTING, "Fallback: questions exhausted — starting KB")
+            greeting = f"Let me assist you with your {state.category} issue.\n\n"
+            return self._reply(state, message, greeting + step_text, "ASK_MORE_INFO")
+
+        return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
+
+    def _handle_ai_troubleshooting(self, state, message, username):
+        """
+        Multi-turn AI-guided troubleshooting handler (AI_TROUBLESHOOTING phase).
+
+        Called on every turn after the initial UNDERSTANDING→AI_TROUBLESHOOTING transition.
+
+        Behaviour:
+          - Injects a continuation instruction so Gemini knows it's mid-session.
+          - Gemini reviews full history, does NOT repeat previous steps.
+          - Adapts its next step to the user's latest response.
+          - Escalates to WAITING_TICKET_CONFIRMATION when CREATE_TICKET signalled.
+          - Transitions to TROUBLESHOOTING (KB+LAPS) for privileged intent mid-session.
+          - Falls back to LlmOrchestrator.converse() if Gemini unavailable.
+        """
+        import app.services.orchestrator_service as orchestrator_service
+        import app.services.conversation_memory as mem
+        from app.services.prompt_builder import build_troubleshooting_continuation_prompt
+
+        history = mem.get_history(state.session_id)
+
+        # Build continuation instruction — tells Gemini it's mid-session
+        continuation_msg = build_troubleshooting_continuation_prompt(
+            state.category,
+            message,
+            clarifying_questions_asked=state.clarifying_questions_asked,
+            troubleshooting_steps_suggested=state.troubleshooting_steps_suggested,
+        )
+
+        try:
+            decision = orchestrator_service.generate_decision(
+                category=state.category,
+                history=history,
+                user_message=continuation_msg,
+            )
+            intent = decision.get("intent", "GENERAL_SUPPORT")
+            response = decision.get("assistant_message", "")
+            requires_confirmation = decision.get("requires_confirmation", False)
+            
+            from app.services.observability_service import log_event
+            log_event(
+                "Intent detected",
+                intent=intent,
+                category=state.category,
+                phase=state.phase.value,
+                llm_confidence=decision.get("confidence", 0.0),
+                model_name=decision.get("model_name")
+            )
+            log_event(
+                "Category detected",
+                category=state.category,
+                phase=state.phase.value
+            )
+        except Exception as exc:
+            logger.warning("ConversationService: AI troubleshooting decision failed: %s — using LLM fallback.", exc)
+            from app.services.observability_service import log_event
+            log_event(
+                "Intent detected",
+                intent="GENERAL_SUPPORT",
+                category=state.category,
+                phase=state.phase.value,
+                llm_confidence=0.0
+            )
+            log_event(
+                "Category detected",
+                category=state.category,
+                phase=state.phase.value
+            )
+            return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
+
+        # Extract engine-validated metadata
+        action_type = decision.get("action_type", "")
+        if action_type == "QUESTION" and "?" in response:
+            state.clarifying_questions_asked += 1
+            from app.services.observability_service import log_event
+            log_event("Clarifying question asked", clarifying_questions_asked=state.clarifying_questions_asked, troubleshooting_steps_suggested=state.troubleshooting_steps_suggested)
+        elif action_type == "STEP":
+            state.troubleshooting_steps_suggested += 1
+            from app.services.observability_service import log_event
+            log_event("Troubleshooting step suggested", clarifying_questions_asked=state.clarifying_questions_asked, troubleshooting_steps_suggested=state.troubleshooting_steps_suggested)
+
+        if intent in self._TICKET_INTENTS:
+            escalation_reason = decision.get("escalation_reason", "")
+            
+            is_justified = (
+                state.troubleshooting_steps_suggested > 0
+                or escalation_reason in ("ADMIN_REQUIRED", "HARDWARE_FAILURE", "USER_REQUESTED", "POLICY_REQUIRED")
+                or self._is_ticket_request(message)
+            )
+
+
+
+            from app.services.observability_service import log_event
+            log_event(
+                "Ticket recommendation generated",
+                intent=intent,
+                category=state.category,
+                phase=state.phase.value,
+                escalation_reason=escalation_reason,
+                escalation_blocked=not is_justified
+            )
+
+            if not is_justified:
+                logger.info("Blocked premature escalation. Insufficient evidence of troubleshooting.")
+                intent = "GENERAL_SUPPORT"
+                
+                log_event(
+                    "Premature escalation blocked",
+                    intent=intent,
+                    category=state.category,
+                    phase=state.phase.value,
+                    escalation_reason=escalation_reason,
+                    escalation_blocked=True
+                )
+                
+                # Context-Preserving Response Modification
+                import re
+                # Strip out ticket creation phrasing but preserve troubleshooting context
+                ticket_phrases = r"(?i)\b(I (will|can) (create|raise|open|submit) a ticket|Let me (create|raise|open) a ticket|I'm going to escalate|I'll escalate|I'll raise a support request|Would you like me to create a ticket)\b[^.]*\.?"
+                cleaned_response = re.sub(ticket_phrases, "", response).strip()
+                
+                if cleaned_response and len(cleaned_response.split()) > 5:
+                    response = cleaned_response
                 else:
-                    self._transition(state, ConversationPhase.UNDERSTANDING, "Questions exhausted — delegating to Gemini")
-                    return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
+                    # Fallback only if the entire message was about a ticket
+                    response = "I need to ask a few more questions to diagnose this properly before we escalate. Could you provide a bit more detail about what you're experiencing?"
+
+        # ── Escalation: Gemini signals ticket creation ────────────────────────
+        if intent in self._TICKET_INTENTS:
+            self._transition(
+                state, ConversationPhase.WAITING_TICKET_CONFIRMATION,
+                f"AI troubleshooting: Gemini signalled {intent} — offering ticket",
+            )
+            ticket_prompt = format_ticket_prompt()
+            if response:
+                ticket_prompt = f"{response}\n\n{format_ticket_prompt()}"
+            return self._reply(state, message, ticket_prompt, "ASK_MORE_INFO")
+
+        # ── Privileged operation detected mid-troubleshooting ─────────────────
+        if intent in self._PRIVILEGED_INTENTS and not requires_confirmation:
+            step_text = self._kb.start_troubleshooting(state, message)
+            if step_text:
+                self._transition(
+                    state, ConversationPhase.TROUBLESHOOTING,
+                    f"Privileged intent {intent} detected during AI troubleshooting",
+                )
+                from app.services.observability_service import log_event
+                log_event("Troubleshooting step suggested", category=state.category, phase=state.phase.value)
+                return self._reply(state, message, step_text, "ASK_MORE_INFO")
+
+        # ── Continue troubleshooting ──────────────────────────────────────────
+        if response:
+            return self._reply(state, message, response, "ASK_MORE_INFO")
+
+        # ── LLM fallback ──────────────────────────────────────────────────────
+        return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
+
 
     def _handle_troubleshooting(self, state, message, username):
         ts = state.troubleshooting_session
@@ -341,6 +700,8 @@ class ConversationService:
             troubleshooting_service.mark_completed(ts)
             next_d = troubleshooting_service.next_step(ts)
             if next_d:
+                from app.services.observability_service import log_event
+                log_event("Troubleshooting step suggested", category=state.category, phase=state.phase.value)
                 return self._reply(state, message, format_step(next_d), "ASK_MORE_INFO")
             self._transition(state, ConversationPhase.VERIFYING, "all steps completed — approved")
             return self._reply(state, message, format_verification(troubleshooting_service.get_verification(ts)), "ASK_MORE_INFO")
@@ -349,6 +710,8 @@ class ConversationService:
             troubleshooting_service.mark_completed(ts)
             next_d = troubleshooting_service.next_step(ts)
             if next_d:
+                from app.services.observability_service import log_event
+                log_event("Troubleshooting step suggested", category=state.category, phase=state.phase.value)
                 return self._reply(state, message, format_step(next_d), "ASK_MORE_INFO")
             self._transition(state, ConversationPhase.VERIFYING, "all steps completed — rejected")
             return self._reply(state, message, format_verification(troubleshooting_service.get_verification(ts)), "ASK_MORE_INFO")
@@ -451,6 +814,15 @@ class ConversationService:
                 }
                 return self._reply(state, message, format_sn_failure_options(), "ASK_MORE_INFO")
             tid = ticket.get("ticket_id", "N/A")
+            req_type = ticket.get("request_type", "INCIDENT")
+            from app.services.observability_service import log_event
+            if req_type == "SERVICE_REQUEST":
+                log_event("Service request created", category=state.category, phase=state.phase.value, ticket_id=tid)
+            else:
+                log_event("Ticket created", category=state.category, phase=state.phase.value, ticket_id=tid)
+            if ticket.get("requires_approval") or req_type == "SERVICE_REQUEST":
+                log_event("Manager approval requested", category=state.category, phase=state.phase.value, ticket_id=tid)
+
             self._transition(state, ConversationPhase.ESCALATED, f"ticket approved — {tid}")
             state.active_ticket = tid
             state.troubleshooting_session = None
@@ -479,6 +851,15 @@ class ConversationService:
                 # Still failing — stay in WAITING_SN_RECOVERY
                 return self._reply(state, message, format_sn_failure_options(), "ASK_MORE_INFO")
             tid = ticket.get("ticket_id", "N/A")
+            req_type = ticket.get("request_type", "INCIDENT")
+            from app.services.observability_service import log_event
+            if req_type == "SERVICE_REQUEST":
+                log_event("Service request created", category=state.category, phase=state.phase.value, ticket_id=tid)
+            else:
+                log_event("Ticket created", category=state.category, phase=state.phase.value, ticket_id=tid)
+            if ticket.get("requires_approval") or req_type == "SERVICE_REQUEST":
+                log_event("Manager approval requested", category=state.category, phase=state.phase.value, ticket_id=tid)
+
             self._transition(state, ConversationPhase.ESCALATED, f"ticket retry successful — {tid}")
             state.active_ticket = tid
             state.troubleshooting_session = None
@@ -510,10 +891,19 @@ class ConversationService:
     # ── Intent Router phase handlers ──────────────────────────────────────────
 
     def _handle_ticket_command(self, state, message, username):
-        """User explicitly asked to create a ticket — create it immediately."""
+        """User explicitly asked to create a ticket — prompt for confirmation or create it."""
         if state.phase == ConversationPhase.ESCALATED and state.active_ticket:
             return self._reply(state, message, format_status_response(state.active_ticket), "ASK_MORE_INFO")
-        
+
+        if state.phase in (
+            ConversationPhase.UNDERSTANDING,
+            ConversationPhase.DIAGNOSING,
+            ConversationPhase.AI_TROUBLESHOOTING,
+            ConversationPhase.TROUBLESHOOTING,
+        ):
+            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "user requested ticket creation")
+            return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
+
         ticket = self._tickets.create(state, username)
         if not ticket or ticket.get("error"):
             # ServiceNow unavailable — transition to recovery phase
@@ -527,6 +917,15 @@ class ConversationService:
             return self._reply(state, message, format_sn_failure_options(), "ASK_MORE_INFO")
             
         tid = ticket.get("ticket_id", "N/A")
+        req_type = ticket.get("request_type", "INCIDENT")
+        from app.services.observability_service import log_event
+        if req_type == "SERVICE_REQUEST":
+            log_event("Service request created", category=state.category, phase=state.phase.value, ticket_id=tid)
+        else:
+            log_event("Ticket created", category=state.category, phase=state.phase.value, ticket_id=tid)
+        if ticket.get("requires_approval") or req_type == "SERVICE_REQUEST":
+            log_event("Manager approval requested", category=state.category, phase=state.phase.value, ticket_id=tid)
+
         self._transition(state, ConversationPhase.ESCALATED, f"ticket created — {tid}")
         state.active_ticket = tid
         state.troubleshooting_session = None
@@ -546,6 +945,21 @@ class ConversationService:
         state.ticket_draft = {}
         self._tl.log_transition(state.session_id, old_phase, ConversationPhase.UNDERSTANDING, "user restarted conversation")
         return self._reply(state, message, format_restart_ack(), "ASK_MORE_INFO")
+
+    def _handle_greeting(self, state, message):
+        """Handle a greeting by resetting troubleshooting context and responding naturally."""
+        state.category = "GENERAL"
+        state.reset_troubleshooting()
+        self._transition(state, ConversationPhase.UNDERSTANDING, "user greeted agent")
+        greeting_text = (
+            "Hello! 👋 How can I help you today?\n\n"
+            "Examples:\n"
+            "• VPN not connecting\n"
+            "• Outlook not opening\n"
+            "• Need software installation\n"
+            "• Printer issue"
+        )
+        return self._reply(state, message, greeting_text, "ASK_MORE_INFO")
 
     def _handle_cancel(self, state, message):
         """Cancel the current workflow and return to UNDERSTANDING."""
@@ -570,6 +984,63 @@ class ConversationService:
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
+    # ── Execution time estimates per category ────────────────────────────────
+    _EXEC_TIME: dict = {
+        "VPN": "5–10 minutes",
+        "Driver": "10–15 minutes",
+        "Software": "10–20 minutes",
+        "SAP": "5–10 minutes",
+        "Printer": "5–10 minutes",
+        "Registry": "5 minutes",
+        "Service": "2–5 minutes",
+        "Adobe": "15–20 minutes",
+        "Citrix": "10–15 minutes",
+        "PowerBI": "10–15 minutes",
+        "Office": "15–25 minutes",
+        "Outlook": "5–10 minutes",
+        "Network": "5–10 minutes",
+        "Password": "2–5 minutes",
+        "Hardware": "varies — contact IT",
+    }
+
+    @staticmethod
+    def _get_exec_time(category: str) -> str:
+        """Return estimated execution time for a given category."""
+        for key, val in ConversationService._EXEC_TIME.items():
+            if key.lower() in (category or "").lower():
+                return val
+        return "10–15 minutes"
+
+    @staticmethod
+    def _compute_confidence(message: str, keywords_hit: list[str]) -> tuple[int, str]:
+        """Return (confidence_pct, reasoning_sentence) based on matched keywords."""
+        n = len(keywords_hit)
+        if n >= 4:
+            pct = 97
+        elif n == 3:
+            pct = 93
+        elif n == 2:
+            pct = 87
+        elif n == 1:
+            pct = 79
+        else:
+            pct = 72
+
+        # Build human-readable reasoning
+        if keywords_hit:
+            kw_str = ", ".join(f'"{k}"' for k in keywords_hit[:3])
+            reasoning = (
+                f"Detected privileged operation indicator{'s' if n > 1 else ''} "
+                f"({kw_str}) — this action requires system-level privilege elevation "
+                f"beyond standard user permissions."
+            )
+        else:
+            reasoning = (
+                "Based on the request category and description, this action is likely "
+                "to require administrator access to complete successfully."
+            )
+        return pct, reasoning
+
     def handle_chat_turn(
         self,
         session_id: Optional[str],
@@ -577,6 +1048,13 @@ class ConversationService:
         username: Optional[str] = None,
         user_role: Optional[str] = None,
     ) -> dict:
+        import time
+        from app.core.logging_context import session_id_ctx, user_ctx, role_ctx, turn_start_time_ctx
+        from app.services.observability_service import log_event
+
+        # Track start time for latency calculations
+        turn_start_time_ctx.set(time.time())
+
         from app.services.intent_router import IntentRouter, IntentType
 
         # 1. Route message — deterministic, priority-ordered
@@ -585,6 +1063,465 @@ class ConversationService:
         # 2. Session load or create (use route category for new sessions)
         detected_category = route.category or "GENERAL"
         session_id, state = self._session_mgr.load_or_create(session_id, detected_category)
+
+
+
+        # Set thread/async context variables
+        session_id_ctx.set(session_id or "")
+        user_ctx.set(username or "anonymous")
+        role_ctx.set(user_role or "anonymous")
+
+        # Telemetry logs
+        is_new_conversation = len(state.conversation_history) == 0
+        if is_new_conversation:
+            log_event("Conversation started", category=detected_category, phase=state.phase.value)
+
+        log_event("Intent detected", intent=route.intent.value, category=detected_category, phase=state.phase.value)
+        log_event("Category detected", category=detected_category, phase=state.phase.value)
+
+        # ── LAPS active ticket chat workflow & Admin privilege check ──────────
+        from app.database.session import get_db
+        
+        # Helper check for admin privileges
+        def requires_admin_privileges(category: str, msg: str) -> bool:
+            m_l = msg.lower()
+            keywords = [
+                # Core admin terms
+                "admin", "administrator", "elevate", "elevation", "privilege",
+                # Registry
+                "registry", "regedit", "regedit.exe", "hkey",
+                # Drivers
+                "driver", "install driver", "update driver", "device driver",
+                "uninstall driver",
+                # Services
+                "spooler", "service restart", "restart service", "start service",
+                "stop service", "sc start", "sc stop", "net start", "net stop",
+                # Windows system locations / tools
+                "system32", "syswow64", "group policy", "gpupdate", "gpedit",
+                "msc", "mmc",
+                # Security features
+                "uac", "user account control", "run as administrator",
+                "elevated", "elevated prompt", "elevated command",
+                # Software installation (requiring elevation)
+                "software requiring elevation", "msi install", ".msi",
+                "setup.exe", "installer.exe",
+                # Uninstall operations
+                "uninstall", "remove software", "remove program",
+            ]
+            if any(kw in m_l for kw in keywords):
+                return True
+            return False
+
+        if state.active_ticket:
+            with get_db() as db:
+                from app.database.models.ticket import Ticket
+                from app.services.rbac_audit_service import log_rbac_event
+                db_ticket = db.query(Ticket).filter(Ticket.ticket_id == state.active_ticket).first()
+                if db_ticket:
+                    # If ticket is resolved/closed/rejected, clear it
+                    if db_ticket.status in ("CLOSED", "RESOLVED", "FULFILLED", "REJECTED"):
+                        state.active_ticket = ""
+                        state.phase = ConversationPhase.UNDERSTANDING
+                    else:
+                        if db_ticket.status in ("WAITING_MANAGER_APPROVAL", "WAITING_MANAGER"):
+                            mgr = db_ticket.manager or "your manager"
+                            bot_text = (
+                                f"I've already escalated ticket **{db_ticket.ticket_id}** to **{mgr}** for sign-off — "
+                                f"no action needed from you right now. \n\n"
+                                f"The moment your manager approves, I'll automatically route this to the IT Admin Queue "
+                                f"and guide you through the next steps. Is there anything else I can help you with in the meantime?"
+                            )
+                            return self._build_payload(state, bot_text, "WAITING_MANAGER")
+                        elif db_ticket.status in ("WAITING_ADMIN_APPROVAL", "WAITING_ADMIN"):
+                            bot_text = (
+                                f"Good news — your manager has signed off on ticket **{db_ticket.ticket_id}**. \n\n"
+                                f"It's now sitting in the **IT Admin Queue** for final credential approval. "
+                                f"Once an IT admin grants access, your temporary LAPS password will appear in "
+                                f"**My Tickets → Ticket Details** and I'll walk you through the exact steps to use it."
+                            )
+                            return self._build_payload(state, bot_text, "WAITING_ADMIN")
+                        elif db_ticket.status == "TEMP_ADMIN_GRANTED":
+                            m_l = message.lower()
+                            if any(w in m_l for w in ["yes", "done", "completed", "worked", "it worked", "success"]):
+                                db_ticket.status = "CLOSED"
+                                db_ticket.laps_active = False
+                                db_ticket.laps_password = None
+                                db_ticket.closed_at = datetime.utcnow()
+                                db.commit()
+                                
+                                from app.services.timeline_service import TimelineService
+                                TimelineService.log_event(
+                                    db=db,
+                                    ticket_id=db_ticket.ticket_id,
+                                    event_type="LAPS_REVOKED",
+                                    actor="system",
+                                    action="revoke laps",
+                                    description="Temporary privilege revoked upon user completion."
+                                )
+                                TimelineService.log_event(
+                                    db=db,
+                                    ticket_id=db_ticket.ticket_id,
+                                    event_type="TICKET_CLOSED",
+                                    actor="system",
+                                    action="close ticket",
+                                    description="Ticket successfully closed and verified by user."
+                                )
+                                log_rbac_event(
+                                    user=username or "Employee",
+                                    role="EMPLOYEE",
+                                    action="update_ticket_lifecycle",
+                                    ticket_id=db_ticket.ticket_id,
+                                    old_state="TEMP_ADMIN_GRANTED",
+                                    new_state="CLOSED",
+                                    details={"action": "user_completed", "note": "Temporary LAPS privileges revoked."}
+                                )
+                                db.commit()
+                                
+                                old_tid = db_ticket.ticket_id
+                                state.active_ticket = ""
+                                state.phase = ConversationPhase.RESOLVED
+                                self._repo.persist(state, message, "Privileges revoked and ticket closed.")
+                                bot_text = f"Excellent! I have successfully verified completion of the task, revoked your temporary administrative privileges, and closed Ticket **{old_tid}**. An audit log has been filed. Let me know if you need help with anything else!"
+                                return self._build_payload(state, bot_text, "RESOLVED")
+                            
+                            elif any(w in m_l for w in ["no", "failed", "did not work", "error", "broken"]):
+                                db_ticket.status = "CLOSED"
+                                db_ticket.laps_active = False
+                                db_ticket.laps_password = None
+                                db_ticket.closed_at = datetime.utcnow()
+                                db.commit()
+                                
+                                from app.services.timeline_service import TimelineService
+                                TimelineService.log_event(
+                                    db=db,
+                                    ticket_id=db_ticket.ticket_id,
+                                    event_type="LAPS_REVOKED",
+                                    actor="system",
+                                    action="revoke laps",
+                                    description="Temporary privilege revoked due to execution failure."
+                                )
+                                TimelineService.log_event(
+                                    db=db,
+                                    ticket_id=db_ticket.ticket_id,
+                                    event_type="TICKET_CLOSED",
+                                    actor="system",
+                                    action="close ticket",
+                                    description="Ticket closed due to troubleshooting failure."
+                                )
+                                log_rbac_event(
+                                    user=username or "Employee",
+                                    role="EMPLOYEE",
+                                    action="update_ticket_lifecycle",
+                                    ticket_id=db_ticket.ticket_id,
+                                    old_state="TEMP_ADMIN_GRANTED",
+                                    new_state="CLOSED",
+                                    details={"action": "user_failed", "note": "Temporary LAPS privileges revoked after failure."}
+                                )
+                                db.commit()
+                                
+                                old_tid = db_ticket.ticket_id
+                                state.active_ticket = ""
+                                state.phase = ConversationPhase.UNDERSTANDING
+                                self._repo.persist(state, message, "Privileges revoked after failure.")
+                                bot_text = f"I'm sorry to hear that the fix didn't work. For security, I have revoked the temporary administrator privileges and closed Ticket **{old_tid}**. Would you like me to start a new troubleshooting session or escalate this to manual support?"
+                                return self._build_payload(state, bot_text, "PLAIN")
+                            
+                            else:
+                                cat = (db_ticket.category or "").lower()
+                                est = self._get_exec_time(db_ticket.category or "")
+                                tid_ref = db_ticket.ticket_id
+
+                                # Build category-aware execution guide
+                                if any(k in cat for k in ["driver", "device"]):
+                                    steps = (
+                                        "1. Open **Device Manager** → right-click the device → *Update Driver*\n"
+                                        "2. Choose **Browse my computer** → point to the driver folder\n"
+                                        "3. Click **Install** — enter the LAPS password when UAC prompts\n"
+                                        "4. Wait for the installation to complete and verify the device is working"
+                                    )
+                                elif any(k in cat for k in ["software", "install", "adobe", "citrix"]):
+                                    steps = (
+                                        "1. Locate the installer (e.g., `setup.exe` or `.msi` file)\n"
+                                        "2. **Right-click → Run as Administrator** — enter the LAPS password when prompted\n"
+                                        "3. Follow the installation wizard to completion\n"
+                                        "4. Launch the application to confirm it installed successfully"
+                                    )
+                                elif any(k in cat for k in ["registry", "regedit"]):
+                                    steps = (
+                                        "1. Press **Win + R**, type `regedit`, press Enter\n"
+                                        "2. Enter the LAPS password at the UAC prompt\n"
+                                        "3. Navigate to the key specified in your ticket description\n"
+                                        "4. Make the required change and close Registry Editor"
+                                    )
+                                elif any(k in cat for k in ["service", "spooler"]):
+                                    steps = (
+                                        "1. Press **Win + R**, type `services.msc`, press Enter\n"
+                                        "2. Enter the LAPS password at the UAC prompt\n"
+                                        "3. Locate the service in the list → right-click → **Restart**\n"
+                                        "4. Verify the service status shows **Running**"
+                                    )
+                                elif any(k in cat for k in ["vpn"]):
+                                    steps = (
+                                        "1. Open the **VPN client** → Settings\n"
+                                        "2. If prompted for elevation, enter the LAPS password\n"
+                                        "3. Re-configure the connection profile as needed\n"
+                                        "4. Attempt to connect and confirm the VPN tunnel establishes"
+                                    )
+                                elif any(k in cat for k in ["printer"]):
+                                    steps = (
+                                        "1. Go to **Settings → Bluetooth & devices → Printers & scanners**\n"
+                                        "2. Click **Add device** or select the existing printer\n"
+                                        "3. If a driver install prompt appears, enter the LAPS password\n"
+                                        "4. Print a test page to confirm the printer is working"
+                                    )
+                                else:
+                                    steps = (
+                                        "1. Open the relevant application or tool\n"
+                                        "2. Enter the LAPS password at any **UAC** / administrator prompts\n"
+                                        "3. Complete the required action\n"
+                                        "4. Verify the issue is resolved"
+                                    )
+
+                                bot_text = (
+                                    f"🔐 **Your temporary admin credentials are ready** for ticket **{tid_ref}**.\n\n"
+                                    f"Open **My Tickets → Ticket Details** to reveal and copy the LAPS password. "
+                                    f"You have **15 minutes** before it expires — estimated task time: **{est}**.\n\n"
+                                    f"**Here's exactly what to do:**\n{steps}\n\n"
+                                    f"⚠️ Do not share the password. Once you're finished, reply **'done'** and I'll "
+                                    f"immediately revoke the credentials and close the ticket with a full audit trail."
+                                )
+                                return self._build_payload(state, bot_text, "TEMP_ADMIN_GRANTED")
+
+        # ── Turn 1 check for required admin privileges ───────────────────────
+        if state.phase in (ConversationPhase.UNDERSTANDING, ConversationPhase.DIAGNOSING):
+            from app.services.itsm_classifier import classify_request
+            classification = classify_request(detected_category, message)
+            
+            if classification.request_type == "SERVICE_REQUEST":
+                ticket = self._tickets.create(state, username)
+                if not ticket or ticket.get("error"):
+                    self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure")
+                    bot_text = "Ticketing system is currently unavailable. Please try again later."
+                    self._repo.persist(state, message, bot_text)
+                    return self._build_payload(state, bot_text, "ERROR")
+                    
+                tid = ticket.get("ticket_id", "N/A")
+                from app.services.observability_service import log_event
+                log_event("Service request created", category=detected_category, phase=state.phase.value, ticket_id=tid)
+                log_event("Manager approval requested", category=detected_category, phase=state.phase.value, ticket_id=tid)
+
+                with get_db() as db:
+                    from app.database.models.ticket import Ticket
+                    db_ticket = db.query(Ticket).filter(Ticket.ticket_id == tid).first()
+                    if db_ticket:
+                        db_ticket.status = "WAITING_MANAGER"
+                        db_ticket.approval_status = "PENDING"
+                        db.commit()
+
+                        # Log the service request creation in the timeline
+                        from app.services.timeline_service import TimelineService
+                        est_sr = self._get_exec_time(detected_category)
+                        TimelineService.log_event(
+                            db=db,
+                            ticket_id=tid,
+                            event_type="SERVICE_REQUEST_CREATED",
+                            actor="AI Agent",
+                            action="service_request_created",
+                            description=(
+                                f"Service Request raised for '{detected_category}'. "
+                                f"AI Confidence: 92%. "
+                                f"Requires dual approval (Manager → IT Admin) per Bridgestone IT policy. "
+                                f"Estimated installation time: {est_sr}."
+                            )
+                        )
+                        db.commit()
+                        
+                self._transition(state, ConversationPhase.ESCALATED, f"service request created — {tid}")
+                state.active_ticket = tid
+                self._repo.persist(state, message, f"Service Request ticket {tid} created.")
+                est = self._get_exec_time(detected_category)
+                mgr_name = "your manager"
+                bot_text = (
+                    f"I've identified this as a **software installation / access request** for "
+                    f"**{detected_category}** — per Bridgestone IT policy, this requires "
+                    f"manager and IT admin approval before I can provision access.\n\n"
+                    f"I've opened Service Request **{tid}** and routed it directly to "
+                    f"{mgr_name} for sign-off. No action needed from you right now. \n\n"
+                    f"Once both approvals are in, I'll walk you through the installation "
+                    f"step-by-step. Estimated setup time once approved: **{est}**."
+                )
+
+                payload = self._build_payload(state, bot_text, "TICKET_CREATED")
+                payload.update({
+                    "ticket_created": True,
+                    "ticket_id": tid,
+                    "ticket": ticket,
+                    "request_type": "SERVICE_REQUEST",
+                    "ticket_status": "WAITING_MANAGER",
+                    "estimated_minutes": est,
+                    "ai_confidence": 92,
+                    "ai_reasoning": f"Request category '{detected_category}' matched enterprise software installation policy — requires dual approval (Manager + IT Admin) before privileged access is granted.",
+                })
+                return payload
+            
+            elif requires_admin_privileges(detected_category, message):
+                ticket = self._tickets.create(state, username)
+                if not ticket or ticket.get("error"):
+                    self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure")
+                    bot_text = "Ticketing system is currently unavailable. Please try again later."
+                    self._repo.persist(state, message, bot_text)
+                    return self._build_payload(state, bot_text, "ERROR")
+                    
+                tid = ticket.get("ticket_id", "N/A")
+                from app.services.observability_service import log_event
+                log_event("Ticket created", category=detected_category, phase=state.phase.value, ticket_id=tid)
+                log_event("Manager approval requested", category=detected_category, phase=state.phase.value, ticket_id=tid)
+
+                with get_db() as db:
+                    from app.database.models.ticket import Ticket
+                    db_ticket = db.query(Ticket).filter(Ticket.ticket_id == tid).first()
+                    if db_ticket:
+                        db_ticket.status = "WAITING_MANAGER_APPROVAL"
+                        db_ticket.approval_status = "PENDING"
+                        db_ticket.request_type = "PRIVILEGED_ACTION"
+                        db_ticket.manager = "manager"
+                        db.commit()
+
+                        # Log AI diagnosis in the timeline immediately at ticket creation
+                        # Note: hits and confidence_pct are computed below; use a placeholder here
+                        # The full AI_DIAGNOSIS event is logged after confidence is computed
+
+                        
+                self._transition(state, ConversationPhase.ESCALATED, f"incident requires admin privileges — {tid}")
+                state.active_ticket = tid
+                self._repo.persist(state, message, f"Incident ticket {tid} created.")
+
+                # Compute confidence from matched keywords
+                m_lower = message.lower()
+                priv_keywords = [
+                    "admin", "administrator", "elevate", "elevation", "privilege",
+                    "registry", "regedit", "driver", "install driver", "update driver",
+                    "spooler", "service restart", "restart service",
+                    "system32", "group policy", "gpupdate",
+                    "uac", "user account control", "run as administrator",
+                    "elevated", ".msi", "setup.exe", "uninstall",
+                ]
+                hits = [kw for kw in priv_keywords if kw in m_lower]
+                confidence_pct, reasoning = self._compute_confidence(message, hits)
+                est = self._get_exec_time(detected_category)
+
+                # Log the AI diagnosis decision in the timeline now that we have confidence
+                try:
+                    with get_db() as db_log:
+                        from app.services.timeline_service import TimelineService
+                        TimelineService.log_event(
+                            db=db_log,
+                            ticket_id=tid,
+                            event_type="AI_DIAGNOSIS",
+                            actor="AI Agent",
+                            action="privileged_action_detected",
+                            description=(
+                                f"AI Confidence: {confidence_pct}%. {reasoning} "
+                                f"Estimated execution time: {est}. "
+                                f"Ticket routed to Manager → IT Admin approval chain."
+                            )
+                        )
+                        db_log.commit()
+                except Exception:
+                    pass  # Don't fail ticket creation if timeline logging fails
+
+                bot_text = (
+                    f"After reviewing your case, I've flagged this as a **privileged operation**. \n\n"
+                    f"**AI Assessment** (confidence: {confidence_pct}%): {reasoning}\n\n"
+                    f"I've opened Incident **{tid}** and sent it through the privileged access "
+                    f"approval chain (Manager → IT Admin). Estimated resolution time once approved: **{est}**.\n\n"
+                    f"I'll automatically resume guiding you through the fix the moment your credentials are ready — "
+                    f"just keep this chat open."
+                )
+
+                payload = self._build_payload(state, bot_text, "TICKET_CREATED")
+                payload.update({
+                    "ticket_created": True,
+                    "ticket_id": tid,
+                    "ticket": ticket,
+                    "request_type": "PRIVILEGED_ACTION",
+                    "ticket_status": "WAITING_MANAGER_APPROVAL",
+                    "ai_confidence": confidence_pct,
+                    "ai_reasoning": reasoning,
+                    "estimated_minutes": est,
+                })
+                return payload
+
+        # Check if the active troubleshooting step requires admin privileges
+        if state.phase == ConversationPhase.TROUBLESHOOTING:
+            ts = state.troubleshooting_session
+            step_details = troubleshooting_service.current_step(ts) if ts else None
+            t_l = step_details.get("title", "").lower() if step_details else ""
+            i_l = step_details.get("instruction", "").lower() if step_details else ""
+            step_req_admin = any(kw in t_l or kw in i_l for kw in ["admin", "administrator", "elevate", "elevation", "privilege", "registry", "regedit", "driver", "install driver", "spooler", "service restart"])
+            
+            if requires_admin_privileges(state.category, message) or step_req_admin:
+                ticket = self._tickets.create(state, username)
+                if not ticket or ticket.get("error"):
+                    self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure")
+                    bot_text = "Ticketing system is currently unavailable. Please try again later."
+                    self._repo.persist(state, message, bot_text)
+                    return self._build_payload(state, bot_text, "ERROR")
+                    
+                tid = ticket.get("ticket_id", "N/A")
+                from app.services.observability_service import log_event
+                log_event("Ticket created", category=state.category, phase=state.phase.value, ticket_id=tid)
+                log_event("Manager approval requested", category=state.category, phase=state.phase.value, ticket_id=tid)
+
+                with get_db() as db:
+                    from app.database.models.ticket import Ticket
+                    db_ticket = db.query(Ticket).filter(Ticket.ticket_id == tid).first()
+                    if db_ticket:
+                        db_ticket.status = "WAITING_MANAGER_APPROVAL"
+                        db_ticket.approval_status = "PENDING"
+                        db_ticket.request_type = "PRIVILEGED_ACTION"
+                        db_ticket.manager = "manager"
+                        db.commit()
+                        
+                self._transition(state, ConversationPhase.ESCALATED, f"troubleshooting step requires admin — {tid}")
+                state.active_ticket = tid
+                self._repo.persist(state, message, f"Incident ticket {tid} created.")
+
+                m_lower = message.lower()
+                priv_kws = [
+                    "admin", "administrator", "elevate", "elevation", "privilege",
+                    "registry", "regedit", "driver", "install driver", "update driver",
+                    "spooler", "service restart", "restart service",
+                    "system32", "group policy", "gpupdate",
+                    "uac", "user account control", "run as administrator",
+                    "elevated", ".msi", "setup.exe", "uninstall",
+                ]
+                hits = [kw for kw in priv_kws if kw in m_lower]
+                confidence_pct, reasoning = self._compute_confidence(message, hits)
+                est = self._get_exec_time(state.category or detected_category or "")
+
+                bot_text = (
+                    f"I've hit a step in the troubleshooting process that requires **elevated privileges** "
+                    f"to continue. \n\n"
+                    f"**AI Assessment** (confidence: {confidence_pct}%): {reasoning}\n\n"
+                    f"I've opened Incident **{tid}** and routed it through the privileged access workflow "
+                    f"(Manager → IT Admin approval). Estimated fix time once approved: **{est}**.\n\n"
+                    f"Keep this chat open — as soon as your credentials are ready I'll pick up right where we left off."
+                )
+
+                payload = self._build_payload(state, bot_text, "TICKET_CREATED")
+                payload.update({
+                    "ticket_created": True,
+                    "ticket_id": tid,
+                    "ticket": ticket,
+                    "request_type": "PRIVILEGED_ACTION",
+                    "ticket_status": "WAITING_MANAGER_APPROVAL",
+                    "ai_confidence": confidence_pct,
+                    "ai_reasoning": reasoning,
+                    "estimated_minutes": est,
+                })
+                return payload
+
 
         # 1. Handle Turn 2 (pending approval confirmation)
         if state.approval_required and state.approval_status == "PENDING":
@@ -647,6 +1584,8 @@ class ConversationService:
             state.recommended_action = "VPN_ACCESS_RESTORATION"
             state.phase = ConversationPhase.WAITING_ACTION_CONFIRMATION
             bot_text = "Your VPN access currently appears to be disabled. A restoration request requires manager approval. Would you like me to request approval?"
+            from app.services.observability_service import log_event
+            log_event("Manager approval requested", category=state.category, phase=state.phase.value)
             self._repo.persist(state, message, bot_text)
             return self._build_payload(state, bot_text, "WAIT_FOR_APPROVAL")
 
@@ -678,11 +1617,15 @@ class ConversationService:
         if route.intent == IntentType.STATUS:
             return self._handle_status(state, message)
 
+        if route.intent == IntentType.GREETING:
+            return self._handle_greeting(state, message)
+
         # 4. RESOLVED_KEYWORD — only triggers in active troubleshooting phases
         #    Never claims success unless user explicitly confirms.
         if route.intent == IntentType.RESOLVED_KEYWORD:
             _active_phases = (
                 ConversationPhase.TROUBLESHOOTING,
+                ConversationPhase.AI_TROUBLESHOOTING,
                 ConversationPhase.VERIFYING,
                 ConversationPhase.WAITING_ACTION_CONFIRMATION,
             )
@@ -700,27 +1643,22 @@ class ConversationService:
                 state.category = detected
                 state.reset_troubleshooting()
                 self._tl.log_transition(state.session_id, old, detected, "category switch")
-                ack = format_issue_switch(detected)
+                # Transition to UNDERSTANDING, then immediately open the new session.
+                # _handle_understanding_or_diagnosing() will go through Gemini (or DiagnosticEngine
+                # fallback) and start KB TROUBLESHOOTING if confidence is high — preserving
+                # backward compatibility with existing category-switch tests.
+                self._transition(state, ConversationPhase.UNDERSTANDING, "Category switch — reset to UNDERSTANDING")
+                return self._handle_understanding_or_diagnosing(state, message, username)
 
-                import app.services.diagnostic_engine as de
-                if de.is_confidence_high(detected, message, state.diagnostic_answers):
-                    step = self._kb.start_troubleshooting(state, message)
-                    greeting = f"Welcome to Bridgestone IT Support. Let me assist you to resolve this {detected} issue.\n\n"
-                    bot_text = f"{ack}\n\n{greeting}{step}" if step else ack
-                    if step:
-                        self._transition(state, ConversationPhase.TROUBLESHOOTING, "Switch & starting KB")
-                else:
-                    question = de.get_next_question(detected, state.diagnostic_answers)
-                    bot_text = f"{ack}\n\n{question}" if question else ack
-                    if question:
-                        self._transition(state, ConversationPhase.DIAGNOSING, "Switch & asking diagnostic")
-                return self._reply(state, message, bot_text, "ASK_MORE_INFO")
 
         # 6. Phase dispatch
         phase = state.phase
 
         if phase in (ConversationPhase.UNDERSTANDING, ConversationPhase.DIAGNOSING):
             return self._handle_understanding_or_diagnosing(state, message, username)
+
+        if phase == ConversationPhase.AI_TROUBLESHOOTING:
+            return self._handle_ai_troubleshooting(state, message, username)
 
         if phase == ConversationPhase.TROUBLESHOOTING:
             if not state.troubleshooting_session:

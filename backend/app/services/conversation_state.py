@@ -153,6 +153,12 @@ class ConversationContext:
         each time the orchestrator tries a new resolution path. Used to
         decide when to escalate to ticket creation.
 
+    clarifying_questions_asked : int
+        Number of diagnostic questions asked by the AI during this session.
+
+    troubleshooting_steps_suggested : int
+        Number of troubleshooting steps suggested by the AI during this session.
+
     issue_resolved : bool
         ``True`` if the employee has confirmed their issue is resolved.
         ``False`` otherwise.
@@ -189,6 +195,8 @@ class ConversationContext:
     # ── Progress tracking ────────────────────────────────────────────────────
     current_step: int = 0
     attempt_count: int = 0
+    clarifying_questions_asked: int = 0
+    troubleshooting_steps_suggested: int = 0
 
     # ── Resolution flags ─────────────────────────────────────────────────────
     issue_resolved: bool = False
@@ -230,6 +238,8 @@ class ConversationContext:
             "pending_parameters": dict(self.pending_parameters),
             "current_step":       self.current_step,
             "attempt_count":      self.attempt_count,
+            "clarifying_questions_asked": self.clarifying_questions_asked,
+            "troubleshooting_steps_suggested": self.troubleshooting_steps_suggested,
             "issue_resolved":     self.issue_resolved,
             "ticket_created":     self.ticket_created,
             "created_at":         self.created_at,
@@ -305,6 +315,8 @@ class ConversationContext:
             pending_parameters= pending_parameters,
             current_step      = int(data.get("current_step", 0)),
             attempt_count     = int(data.get("attempt_count", 0)),
+            clarifying_questions_asked = int(data.get("clarifying_questions_asked", 0)),
+            troubleshooting_steps_suggested = int(data.get("troubleshooting_steps_suggested", 0)),
             issue_resolved    = bool(data.get("issue_resolved", False)),
             ticket_created    = bool(data.get("ticket_created", False)),
             created_at        = str(data.get("created_at", _utc_now())),
@@ -344,6 +356,8 @@ class ConversationContext:
         self.pending_parameters = {}
         self.current_step       = 0
         self.attempt_count      = 0
+        self.clarifying_questions_asked = 0
+        self.troubleshooting_steps_suggested = 0
         self.issue_resolved     = False
         self.ticket_created     = False
         self.updated_at         = _utc_now()

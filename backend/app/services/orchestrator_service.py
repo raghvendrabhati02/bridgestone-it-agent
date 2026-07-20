@@ -79,19 +79,29 @@ SUPPORTED_INTENTS = {
 # Fallback decision returned when Gemini is unreachable or JSON parse fails.
 # ─────────────────────────────────────────────────────────────────────────────
 def _fallback_decision(category: str, reason: str = "") -> dict:
+    import os
     if reason:
         logger.warning("OrchestratorService: using fallback decision — %s", reason)
-    return {
-        "assistant_message": (
+    
+    provider_choice = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+    if provider_choice == "gemini":
+        msg = f"System Error: Production AI (Gemini) is unavailable ({reason or 'Connection Error'})."
+    else:
+        msg = (
             f"I'm looking into your {category} issue. "
             "Could you describe what you're experiencing in a bit more detail, "
             "or would you like me to raise a support ticket?"
-        ),
+        )
+
+    return {
+        "assistant_message": msg,
         "intent": "GENERAL_SUPPORT",
         "tool": None,
         "parameters": {},
         "confidence": 0.0,
         "requires_confirmation": False,
+        "action_type": "OTHER",
+        "escalation_reason": None,
         "_fallback": True,
     }
 
@@ -183,6 +193,20 @@ def _validate_decision(data: dict) -> dict:
 
     requires_confirmation = bool(data.get("requires_confirmation", False))
 
+    action_type = data.get("action_type")
+    if action_type:
+        action_type = str(action_type).strip().upper()
+    else:
+        action_type = "OTHER"
+
+    escalation_reason = data.get("escalation_reason")
+    if escalation_reason:
+        escalation_reason = str(escalation_reason).strip().upper()
+        if escalation_reason in ("NULL", "NONE"):
+            escalation_reason = None
+    else:
+        escalation_reason = None
+
     return {
         "assistant_message":   assistant_message,
         "intent":              intent,
@@ -190,6 +214,8 @@ def _validate_decision(data: dict) -> dict:
         "parameters":          parameters,
         "confidence":          confidence,
         "requires_confirmation": requires_confirmation,
+        "action_type":          action_type,
+        "escalation_reason":    escalation_reason,
     }
 
 
@@ -240,8 +266,15 @@ def generate_decision(
         len(gemini_history),
     )
 
+    from app.services.rag_service import retrieve_context
+    kb_context = ""
+    try:
+        kb_context = retrieve_context(category)
+    except Exception as exc:
+        logger.warning("OrchestratorService: failed to retrieve RAG context: %s", exc)
+
     # ── Build the decision-mode system prompt ─────────────────────────────────
-    system_prompt = build_decision_prompt(category)
+    system_prompt = build_decision_prompt(category, kb_context)
 
     # ── Call GeminiService with the decision prompt as a temporary system override
     # GeminiService.chat() uses its own system_instruction set at init time.
@@ -257,8 +290,8 @@ def generate_decision(
 
     raw_reply = _gemini.chat(user_message=full_message, history=decision_history)
 
-    # ── Handle GeminiService-level errors ─────────────────────────────────────
-    if raw_reply.startswith("[GeminiService Error]"):
+    # ── Handle AI Provider-level errors ─────────────────────────────────────
+    if raw_reply.startswith("[AI Provider Error]") or raw_reply.startswith("[GeminiService Error]"):
         return _fallback_decision(category, reason=raw_reply)
 
     logger.debug(
@@ -337,10 +370,9 @@ def _synthesize_tool_response(tool_result: dict, category: str) -> str:
     )
 
     raw_reply = _gemini.chat(user_message=tool_result_message, history=synthesis_history)
-
-    if raw_reply.startswith("[GeminiService Error]"):
+    if raw_reply.startswith("[AI Provider Error]") or raw_reply.startswith("[GeminiService Error]"):
         logger.warning(
-            "OrchestratorService._synthesize_tool_response: GeminiService error — %s",
+            "OrchestratorService._synthesize_tool_response: AI provider error — %s",
             raw_reply,
         )
         # Safe human-readable fallback based on status

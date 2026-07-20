@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-import google.generativeai as genai
+from app.services.ai_provider import get_ai_provider
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -22,9 +22,7 @@ class ReasoningAgent:
     """
 
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
+        self.provider = get_ai_provider()
 
     # ──────────────────────────────────────────────────────────
     # Public interface
@@ -51,23 +49,18 @@ class ReasoningAgent:
         # Always run rule-based as deterministic fallback
         fallback = self._reflect_rule_based(category, tool_result)
 
-        # Try Gemini LLM for richer reflection
-        if self.api_key and tool_result and tool_result.get("data"):
+        # Try AI Provider for richer reflection
+        if tool_result and tool_result.get("data"):
             try:
                 prompt = self._build_reflection_prompt(query, category, tool_result, history)
-                model = genai.GenerativeModel("gemini-2.5-flash-lite")
-                response = model.generate_content(
-                    prompt,
-                    generation_config={"response_mime_type": "application/json"},
-                    request_options={"timeout": 12.0},
-                )
+                response = self.provider.generate_response(prompt)
 
-                if response and response.text:
-                    result = json.loads(response.text.strip())
+                if response:
+                    result = json.loads(response.strip())
                     # Validate required fields exist and are non-empty
                     if result.get("findings") and result.get("observations"):
                         logger.info(
-                            "ReasoningAgent.reflect: Gemini reflection successful. "
+                            "ReasoningAgent.reflect: AI provider reflection successful. "
                             "Confidence=%.2f, EscalationNeeded=%s",
                             result.get("confidence", 0.0),
                             result.get("escalation_needed", False),
@@ -75,7 +68,7 @@ class ReasoningAgent:
                         return self._normalize_reflection(result)
             except Exception as e:
                 logger.warning(
-                    "ReasoningAgent.reflect: Gemini call failed (%s). Using rule-based fallback.", e
+                    "ReasoningAgent.reflect: AI provider call failed (%s). Using rule-based fallback.", e
                 )
 
         logger.info(

@@ -58,4 +58,11 @@ class Ticket(Base):
     previous_resolution = Column(Text, nullable=True)
     cluster_id = Column(Integer, nullable=True)
 
+    # LAPS Simulation fields
+    laps_password = Column(String(100), nullable=True)
+    laps_expiration = Column(DateTime, nullable=True)
+    laps_active = Column(Boolean, default=False)
+    laps_audit_id = Column(String(50), nullable=True)
+
+
 

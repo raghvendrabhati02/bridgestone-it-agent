@@ -61,6 +61,17 @@ SERVICE_REQUEST_CATEGORIES: set[str] = {
     # SAP
     "SAP_ACCESS",
     "SAP",
+    # Adobe suite
+    "ADOBE",
+    "ADOBE_ACROBAT",
+    "ADOBE_READER",
+    # Enterprise productivity
+    "CITRIX",
+    "POWERBI",
+    "POWER_BI",
+    "MICROSOFT_OFFICE",
+    "OFFICE365",
+    "OFFICE_365",
     # Shared resources
     "SHARED_MAILBOX",
     "DISTRIBUTION_LIST",
@@ -72,8 +83,6 @@ SERVICE_REQUEST_CATEGORIES: set[str] = {
     "ASSET_REQUEST",
     "NEW_LAPTOP",
     "NEW_LAPTOP_REQUEST",
-    "HARDWARE_REQUEST",
-    "HARDWARE",
     "LAPTOP_REQUEST",
     "MOBILE_DEVICE",
     "MOBILE_REQUEST",
@@ -117,6 +126,51 @@ SERVICE_REQUEST_PHRASES: list[str] = [
     "need a laptop",
     "request printer access",
     "shared drive",
+    # Adobe
+    "install adobe",
+    "adobe acrobat",
+    "adobe reader",
+    "adobe creative",
+    "request adobe",
+    # Citrix
+    "install citrix",
+    "citrix receiver",
+    "citrix workspace",
+    "request citrix",
+    # Power BI
+    "install power bi",
+    "install powerbi",
+    "power bi desktop",
+    "request power bi",
+    # Microsoft Office
+    "install office",
+    "microsoft office",
+    "install ms office",
+    "office 365",
+    "install word",
+    "install excel",
+    "install teams",
+    # Browsers
+    "install chrome",
+    "install firefox",
+    "install edge",
+    # Printer driver / installation
+    "printer driver",
+    "printer installation",
+    "install printer driver",
+    "set up printer",
+    "setup printer",
+    # Other enterprise software
+    "install autocad",
+    "install visio",
+    "install project",
+    "install slack",
+    "install zoom",
+    "install anydesk",
+    "install teamviewer",
+    "install putty",
+    "install vmware",
+    "install virtualbox",
 ]
 
 # ── Incident categories — go directly to Admin Queue, NO manager approval ───

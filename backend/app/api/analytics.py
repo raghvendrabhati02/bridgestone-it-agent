@@ -106,3 +106,12 @@ def get_service_requests(
     logger.info("FastAPI Endpoint GET '/api/analytics/service-requests': Requested by user %s", current_user.username)
     return analytics_service.get_service_request_metrics(db)
 
+
+@router.get("/engine-observability")
+def get_engine_observability(
+    current_user: User = Depends(admin_or_manager),
+    db: Session = Depends(get_db_context)
+):
+    logger.info("FastAPI Endpoint GET '/api/analytics/engine-observability': Requested by user %s", current_user.username)
+    return analytics_service.get_engine_observability_metrics(db)
+

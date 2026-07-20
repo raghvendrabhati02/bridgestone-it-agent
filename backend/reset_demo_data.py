@@ -29,7 +29,7 @@ from app.database.models.device import Device
 from app.core.security import hash_password
 
 def clear_data(db):
-    print("Purging existing development data from SQLite database...")
+    print("Purging existing development data from PostgreSQL database...")
     try:
         db.query(JobExecutionHistory).delete()
         db.query(ScheduledJob).delete()

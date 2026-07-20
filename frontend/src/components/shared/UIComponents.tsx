@@ -22,15 +22,34 @@ export function Badge({ variant = "DEFAULT", children, className = "", ...props 
     case "IN_PROGRESS":
     case "ASSIGNED":
     case "RUNNING":
+    case "AI_DIAGNOSING":
       colorClass = "bg-indigo-50 text-indigo-800 border-indigo-200";
       break;
     case "PENDING":
     case "WAITING":
       colorClass = "bg-amber-50 text-amber-800 border-amber-200";
       break;
+    case "ADMIN_REQUIRED":
+      colorClass = "bg-orange-100 text-orange-900 border-orange-300 font-extrabold";
+      break;
     case "WAITING_MANAGER":
     case "WAITING_MANAGER_APPROVAL":
       colorClass = "bg-orange-50 text-orange-800 border-orange-200";
+      break;
+    case "WAITING_ADMIN":
+    case "WAITING_ADMIN_APPROVAL":
+      colorClass = "bg-amber-100 text-amber-900 border-amber-300";
+      break;
+    case "TEMP_ADMIN_GRANTED":
+    case "ADMIN_APPROVED":
+      colorClass = "bg-emerald-100 text-emerald-900 border-emerald-300 font-extrabold";
+      break;
+    case "EXECUTING":
+    case "EXECUTION_READY":
+      colorClass = "bg-indigo-100 text-indigo-900 border-indigo-300";
+      break;
+    case "COMPLETED":
+      colorClass = "bg-teal-100 text-teal-900 border-teal-300";
       break;
     case "WAITING_FOR_USER":
       colorClass = "bg-yellow-50 text-yellow-900 border-yellow-300";
@@ -60,6 +79,9 @@ export function Badge({ variant = "DEFAULT", children, className = "", ...props 
       break;
     case "INCIDENT":
       colorClass = "bg-transparent text-blue-700 border-blue-400 border";
+      break;
+    case "PRIVILEGED_ACTION":
+      colorClass = "bg-transparent text-red-700 border-red-400 border font-extrabold";
       break;
     case "SERVICE_REQUEST":
     case "SERVICE REQUEST":

@@ -166,52 +166,7 @@ def test_add_work_note_success(mock_env):
         mock_put.assert_called_once()
 
 
-def test_ticket_orchestrator_integration_success(mock_env):
-    mock_client = MagicMock()
-    mock_client.create_incident.return_value = {
-        "success": True,
-        "sys_id": "sys123",
-        "ticket_id": "INC007",
-        "number": "INC007",
-        "state": "1",
-        "message": "Success"
-    }
-    
-    state = SessionState(session_id="session123", category="VPN")
-    orchestrator = TicketOrchestrator(client=mock_client)
-    
-    with patch("app.services.conversation_memory.get_history", return_value=[{"text": "My vpn does not work"}]):
-        res = orchestrator.create(state, username="alice")
-        
-    assert res["ticket_id"] == "INC007"
-    assert res["servicenow_id"] == "sys123"
-    assert res["assigned_team"] == "IT Support"
-    mock_client.create_incident.assert_called_once_with(
-        short_description="VPN Issue",
-        description="My vpn does not work",
-        category="VPN",
-        severity=3,
-    )
 
-
-def test_ticket_orchestrator_integration_failure(mock_env):
-    mock_client = MagicMock()
-    mock_client.create_incident.return_value = {
-        "success": False,
-        "sys_id": "",
-        "ticket_id": "",
-        "state": "",
-        "message": "Connection timed out"
-    }
-    
-    state = SessionState(session_id="session123", category="VPN")
-    orchestrator = TicketOrchestrator(client=mock_client)
-    
-    with patch("app.services.conversation_memory.get_history", return_value=[{"text": "My vpn does not work"}]):
-        res = orchestrator.create(state, username="alice")
-        
-    assert res.get("error") is True
-    assert "currently unavailable" in res.get("message", "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -6,9 +6,23 @@ class MockResponse:
     def __init__(self, text):
         self.text = text
 
+class MockChatSession:
+    def __init__(self, model, history=None):
+        self.model = model
+        self.history = history or []
+
+    def send_message(self, message, request_options=None):
+        self.history.append({"role": "user", "parts": [message]})
+        resp = self.model.generate_content(message, request_options=request_options)
+        self.history.append({"role": "model", "parts": [resp.text]})
+        return resp
+
 class MockGenerativeModel:
-    def __init__(self, model_name):
+    def __init__(self, model_name, *args, **kwargs):
         self.model_name = model_name
+
+    def start_chat(self, history=None):
+        return MockChatSession(self, history)
 
     def generate_content(self, prompt, **kwargs):
         prompt_str = str(prompt)
@@ -47,6 +61,30 @@ class MockGenerativeModel:
                 category = "SAP"
             elif "network" in prompt_lower or "switch" in prompt_lower:
                 category = "NETWORK"
+            elif "teams" in prompt_lower:
+                category = "TEAMS"
+            elif "onedrive" in prompt_lower:
+                category = "ONEDRIVE"
+            elif "wifi" in prompt_lower or "wi-fi" in prompt_lower or "wireless" in prompt_lower:
+                category = "WIFI"
+            elif "browser" in prompt_lower or "chrome" in prompt_lower or "edge" in prompt_lower:
+                category = "BROWSER"
+            elif "adobe" in prompt_lower or "pdf" in prompt_lower:
+                category = "ADOBE"
+            elif "citrix" in prompt_lower:
+                category = "CITRIX"
+            elif "bitlocker" in prompt_lower:
+                category = "BITLOCKER"
+            elif "driver" in prompt_lower:
+                category = "DRIVERS"
+            elif "performance" in prompt_lower or "slow" in prompt_lower:
+                category = "PERFORMANCE"
+            elif "login" in prompt_lower or "sign in" in prompt_lower:
+                category = "LOGIN"
+            elif "windows" in prompt_lower:
+                category = "WINDOWS"
+            elif "office" in prompt_lower:
+                category = "OFFICE"
             elif "hardware" in prompt_lower or "keyboard" in prompt_lower or "monitor" in prompt_lower or "laptop" in prompt_lower:
                 category = "HARDWARE"
             text = category
@@ -213,11 +251,74 @@ class MockGenerativeModel:
 def configure(*args, **kwargs):
     pass
 
-# Mock generativeai module exports
+# Mock legacy generativeai module exports
 mock_genai = MagicMock()
 mock_genai.GenerativeModel = MockGenerativeModel
 mock_genai.configure = configure
 
-# Inject into sys.modules
+# Inject legacy google.generativeai into sys.modules
 sys.modules["google.generativeai"] = mock_genai
 print("[MOCK] google.generativeai client successfully mocked globally.")
+
+# Define modern google-genai SDK mocks
+class MockHttpOptions:
+    def __init__(self, *args, **kwargs):
+        pass
+
+class MockContent:
+    def __init__(self, *args, **kwargs):
+        pass
+
+class MockPart:
+    @staticmethod
+    def from_text(text):
+        return text
+
+class MockGenerateContentConfig:
+    def __init__(self, *args, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+class MockGenAIChat:
+    def __init__(self, model, history=None, config=None):
+        self.model = model
+        self.history = history or []
+        self.config = config
+
+    def send_message(self, message, config=None):
+        m = MockGenerativeModel(self.model)
+        system_instruction = getattr(self.config, "system_instruction", "") if self.config else ""
+        prompt = message
+        if system_instruction:
+            prompt = f"{system_instruction}\n\n{prompt}"
+        return m.generate_content(prompt)
+
+class MockChats:
+    def create(self, model, history=None, config=None):
+        return MockGenAIChat(model, history, config)
+
+class MockModels:
+    def generate_content(self, model, contents, config=None):
+        m = MockGenerativeModel(model)
+        return m.generate_content(contents)
+
+class MockGenAIClient:
+    def __init__(self, *args, **kwargs):
+        self.chats = MockChats()
+        self.models = MockModels()
+
+# Create mock google.genai module and google.genai.types
+mock_genai_module = MagicMock()
+mock_genai_module.Client = MockGenAIClient
+
+mock_types_module = MagicMock()
+mock_types_module.HttpOptions = MockHttpOptions
+mock_types_module.Content = MockContent
+mock_types_module.Part = MockPart
+mock_types_module.GenerateContentConfig = MockGenerateContentConfig
+
+# Inject modern google-genai into sys.modules
+sys.modules["google.genai"] = mock_genai_module
+sys.modules["google.genai.types"] = mock_types_module
+print("[MOCK] google.genai and google.genai.types successfully mocked globally.")
+
