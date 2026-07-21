@@ -228,6 +228,27 @@ def generate_decision(
     history: List[dict],
     user_message: str,
 ) -> dict:
+    import time
+    from app.core.logging_context import request_id_ctx, session_id_ctx
+    t0 = time.time()
+    req_id = request_id_ctx.get() or "N/A"
+    sess_id = session_id_ctx.get() or "N/A"
+    logger.info(">>> TRACE STAGE: OrchestratorService.generate_decision Start | Request ID: %s | Session ID: %s | Category: %s | Message: %s", req_id, sess_id, category, user_message)
+    try:
+        res = _generate_decision_internal(category, history, user_message)
+        elapsed = (time.time() - t0) * 1000
+        logger.info("<<< TRACE STAGE: OrchestratorService.generate_decision End | Request ID: %s | Session ID: %s | Category: %s | Elapsed: %.2f ms | Result: %s", req_id, sess_id, category, elapsed, res)
+        return res
+    except Exception as exc:
+        elapsed = (time.time() - t0) * 1000
+        logger.error("!!! TRACE STAGE ERROR: OrchestratorService.generate_decision failed | Request ID: %s | Session ID: %s | Category: %s | Elapsed: %.2f ms | Error: %s", req_id, sess_id, category, elapsed, exc, exc_info=True)
+        raise
+
+def _generate_decision_internal(
+    category: str,
+    history: List[dict],
+    user_message: str,
+) -> dict:
     """
     Ask Gemini to produce a structured decision for the current conversation turn.
 
@@ -324,27 +345,23 @@ def generate_decision(
 
 
 def _synthesize_tool_response(tool_result: dict, category: str) -> str:
-    """
-    Ask Gemini to convert a raw ToolRouter result into a professional,
-    employee-facing natural-language response.
+    import time
+    from app.core.logging_context import request_id_ctx, session_id_ctx
+    t0 = time.time()
+    req_id = request_id_ctx.get() or "N/A"
+    sess_id = session_id_ctx.get() or "N/A"
+    logger.info(">>> TRACE STAGE: OrchestratorService._synthesize_tool_response Start | Request ID: %s | Session ID: %s | Category: %s", req_id, sess_id, category)
+    try:
+        res = _synthesize_tool_response_internal(tool_result, category)
+        elapsed = (time.time() - t0) * 1000
+        logger.info("<<< TRACE STAGE: OrchestratorService._synthesize_tool_response End | Request ID: %s | Session ID: %s | Category: %s | Elapsed: %.2f ms", req_id, sess_id, category, elapsed)
+        return res
+    except Exception as exc:
+        elapsed = (time.time() - t0) * 1000
+        logger.error("!!! TRACE STAGE ERROR: OrchestratorService._synthesize_tool_response failed | Request ID: %s | Session ID: %s | Category: %s | Elapsed: %.2f ms | Error: %s", req_id, sess_id, category, elapsed, exc, exc_info=True)
+        raise
 
-    This is the "Observe → Respond" step of the agentic loop.
-    The employee never sees JSON, tool names, or status codes.
-
-    Parameters
-    ----------
-    tool_result : dict
-        The dict returned by ToolRouter.route().
-        Contains: tool, status (SUCCESS|ERROR|PLACEHOLDER), data, message.
-    category : str
-        Used in the fallback message if Gemini is unavailable.
-
-    Returns
-    -------
-    str
-        A professional, conversational IT support response.
-        Never raises — returns a safe fallback on any error.
-    """
+def _synthesize_tool_response_internal(tool_result: dict, category: str) -> str:
     if not _gemini.is_ready():
         return (
             f"Your request has been processed. "
@@ -388,6 +405,27 @@ def _synthesize_tool_response(tool_result: dict, category: str) -> str:
 
 
 def generate_turn(
+    category: str,
+    history: List[dict],
+    user_message: str,
+) -> str:
+    import time
+    from app.core.logging_context import request_id_ctx, session_id_ctx
+    t0 = time.time()
+    req_id = request_id_ctx.get() or "N/A"
+    sess_id = session_id_ctx.get() or "N/A"
+    logger.info(">>> TRACE STAGE: OrchestratorService.generate_turn Start | Request ID: %s | Session ID: %s | Category: %s | Message: %s", req_id, sess_id, category, user_message)
+    try:
+        res = _generate_turn_internal(category, history, user_message)
+        elapsed = (time.time() - t0) * 1000
+        logger.info("<<< TRACE STAGE: OrchestratorService.generate_turn End | Request ID: %s | Session ID: %s | Category: %s | Elapsed: %.2f ms | Result: %s", req_id, sess_id, category, elapsed, res)
+        return res
+    except Exception as exc:
+        elapsed = (time.time() - t0) * 1000
+        logger.error("!!! TRACE STAGE ERROR: OrchestratorService.generate_turn failed | Request ID: %s | Session ID: %s | Category: %s | Elapsed: %.2f ms | Error: %s", req_id, sess_id, category, elapsed, exc, exc_info=True)
+        raise
+
+def _generate_turn_internal(
     category: str,
     history: List[dict],
     user_message: str,

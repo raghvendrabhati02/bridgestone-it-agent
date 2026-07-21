@@ -119,12 +119,12 @@ def test_update_incident_success(mock_env):
         }
     }
 
-    with patch.object(client.session, "put", return_value=mock_response) as mock_put:
+    with patch.object(client.session, "patch", return_value=mock_response) as mock_patch:
         res = client.update_incident("sys12345", {"short_description": "Updated"})
         assert res["success"] is True
         assert res["sys_id"] == "sys12345"
         assert res["result"]["short_description"] == "Updated"
-        mock_put.assert_called_once()
+        mock_patch.assert_called_once()
 
 
 def test_close_incident_success(mock_env):
@@ -139,12 +139,12 @@ def test_close_incident_success(mock_env):
         }
     }
 
-    with patch.object(client.session, "put", return_value=mock_response) as mock_put:
+    with patch.object(client.session, "patch", return_value=mock_response) as mock_patch:
         res = client.close_incident("sys12345", "Solved")
         assert res["success"] is True
         assert res["state"] == "7"
         assert res["result"]["close_notes"] == "Solved"
-        mock_put.assert_called_once()
+        mock_patch.assert_called_once()
 
 
 def test_add_work_note_success(mock_env):
@@ -158,12 +158,12 @@ def test_add_work_note_success(mock_env):
         }
     }
 
-    with patch.object(client.session, "put", return_value=mock_response) as mock_put:
+    with patch.object(client.session, "patch", return_value=mock_response) as mock_patch:
         res = client.add_work_note("sys12345", "This is a work note")
         assert res["success"] is True
         assert res["sys_id"] == "sys12345"
         assert res["result"]["work_notes"] == "This is a work note"
-        mock_put.assert_called_once()
+        mock_patch.assert_called_once()
 
 
 

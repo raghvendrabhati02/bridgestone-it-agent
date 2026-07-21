@@ -28,14 +28,11 @@ type NavEntry =
 const CORE: NavEntry[] = [
   { type: "item", key: "dashboard",  label: "Home",       icon: <Home        className="w-3.5 h-3.5" /> },
   { type: "item", key: "support",    label: "IT Support",  icon: <MessageSquare className="w-3.5 h-3.5" /> },
-  { type: "item", key: "actions",    label: "IT Actions",  icon: <Zap         className="w-3.5 h-3.5" /> },
   { type: "item", key: "my_tickets", label: "My Tickets",  icon: <ClipboardList className="w-3.5 h-3.5" /> },
 ];
 
 const ADMIN_TOOLS: NavEntry[] = [
   { type: "item", key: "kb",               label: "Knowledge Base",    icon: <BookOpen  className="w-3.5 h-3.5" /> },
-  { type: "item", key: "devices",          label: "Enterprise Devices", icon: <Monitor   className="w-3.5 h-3.5" /> },
-  { type: "item", key: "execution_center", label: "Execution Center",  icon: <Terminal  className="w-3.5 h-3.5" /> },
 ];
 
 const manager_portal: NavEntry = {

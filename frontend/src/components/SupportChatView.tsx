@@ -59,7 +59,6 @@ const SUGGESTION_CHIPS = [
 const PIPELINE_STEPS = [
   { Icon: Brain, label: "Understanding Issue" },
   { Icon: Search, label: "Searching Knowledge Base" },
-  { Icon: Server, label: "Checking Device Information" },
   { Icon: Wrench, label: "Running Troubleshooting" },
   { Icon: FileText, label: "Preparing Solution" },
 ];
@@ -676,12 +675,18 @@ export default function SupportChatView({
                           const requestType = tr.request_type || ticket.request_type || "INCIDENT";
                           const statusLabel = tr.ticket_status_label || ticket.status_label || (requiresApproval ? "Pending Manager Approval" : "Open — Assigned to IT Team");
                           const isServiceRequest = requestType === "SERVICE_REQUEST" || requiresApproval;
+                          const servicenowNumber = tr.servicenow_number || ticket.servicenow_number;
+                          const isSNIncident = Boolean(servicenowNumber || (ticket.servicenow_id && ticket.servicenow_id !== "N/A"));
+                          const incidentNumber = servicenowNumber || tr.ticket_id || ticket.ticket_id || "Pending";
+                          const assignmentGroup = ticket.assignment_group || ticket.assigned_team || tr.assigned_team || "IT Operations";
+                          const createdAtTime = ticket.created_at ? new Date(ticket.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Just now";
+
                           return (
                             <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-sm space-y-4 max-w-md w-full text-left">
                               <div className="flex items-center gap-2 border-b border-[#E2E8F0] pb-3">
                                 <Ticket className="w-5 h-5 text-[#E30613] flex-shrink-0" />
                                 <span className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">
-                                  {isServiceRequest ? "Service Request Created" : "Support Ticket Created"}
+                                  {isSNIncident ? "ServiceNow Incident Created" : (isServiceRequest ? "Service Request Created" : "Support Ticket Created")}
                                 </span>
                                 <span className={`ml-auto inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${isServiceRequest
                                     ? "bg-amber-50 text-amber-800 border-amber-200"
@@ -692,12 +697,12 @@ export default function SupportChatView({
                               </div>
                               <div className="grid grid-cols-2 gap-y-3 gap-x-4">
                                 {[
-                                  { label: "Ticket Number", value: tr.ticket_id || ticket.ticket_id || "Pending", highlight: true },
-                                  { label: "Type", value: requestType.replace("_", " ") },
-                                  { label: "Assigned Team", value: ticket.assigned_team || tr.assigned_team || "IT Operations" },
+                                  { label: isSNIncident ? "Incident Number" : "Ticket Number", value: incidentNumber, highlight: true },
+                                  { label: "Assignment Group", value: assignmentGroup },
                                   { label: "Priority", value: ticket.priority || tr.priority || "Medium" },
-                                  { label: "Estimated SLA", value: (ticket.sla_hours || tr.sla_hours) ? `${ticket.sla_hours || tr.sla_hours} Hours` : "4 Hours" },
-                                  { label: "Status", value: statusLabel },
+                                  { label: "State", value: statusLabel },
+                                  { label: "Created Time", value: createdAtTime },
+                                  { label: "ServiceNow Status", value: isSNIncident ? "Synced to ServiceNow" : "Local Ticket" },
                                 ].map(({ label, value, highlight }) => (
                                   <div key={label} className="space-y-0.5">
                                     <span className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider block">{label}</span>

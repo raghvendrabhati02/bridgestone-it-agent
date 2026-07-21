@@ -27,8 +27,6 @@ from app.services.audit_service import (
 from app.core.security import get_current_user, RoleChecker, get_db_context
 from app.api.auth import router as auth_router
 from app.api.analytics import router as analytics_router
-from app.api.devices import router as devices_router
-from app.api.executions import router as executions_router
 from app.database.models.user import User
 
 
@@ -49,10 +47,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger("it-agent-backend")
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Phase 7 Startup Validation
+    if os.getenv("SERVICENOW_ENABLED", "false").lower() == "true":
+        logger.info("ServiceNow Integration: Validating production configuration during startup...")
+        from app.services.servicenow_service import get_servicenow_service
+        sn_service = get_servicenow_service()
+        is_valid, err_msg = sn_service.validate_configuration()
+        if not is_valid:
+            logger.error("❌ ServiceNow Configuration Check Failed: %s", err_msg)
+            print(f"[X] ServiceNow Configuration Check Failed: {err_msg}")
+        else:
+            health = sn_service.health_check()
+            if health.get("authenticated"):
+                logger.info("✅ ServiceNow Connected (%s)", health.get("instance"))
+                print(f"[OK] ServiceNow Connected ({health.get('instance')})")
+            else:
+                logger.error("❌ ServiceNow Authentication Failed: %s", health.get("message"))
+                print(f"[X] ServiceNow Authentication Failed: {health.get('message')}")
+    else:
+        logger.info("ServiceNow Integration is disabled (SERVICENOW_ENABLED=false)")
+
+    yield
+
 app = FastAPI(
     title="Bridgestone IT Agent",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
+
+@app.get("/health/servicenow")
+def servicenow_health_check_endpoint():
+    """
+    Phase 8: ServiceNow Health Check Endpoint.
+    Returns JSON status, authenticated, instance, version, and latency_ms.
+    """
+    from app.services.servicenow_service import get_servicenow_service
+    sn_service = get_servicenow_service()
+    return sn_service.health_check()
 
 # Mount static files for screenshots
 from fastapi.staticfiles import StaticFiles
@@ -71,9 +106,7 @@ else:
         "http://localhost:3001",
         "http://127.0.0.1:3001",
         "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:8001",
-        "http://127.0.0.1:8001"
+        "http://127.0.0.1:8000"
     ]
 
 
@@ -389,8 +422,6 @@ def system_status(db: Session = Depends(get_db_context)):
 # Include Auth Router
 app.include_router(auth_router)
 app.include_router(analytics_router)
-app.include_router(devices_router)
-app.include_router(executions_router)
 
 
 class ChatRequest(BaseModel):
@@ -446,14 +477,28 @@ def health(db: Session = Depends(get_db_context)):
     # 3. AI Provider check
     gemini_status = "unhealthy"
     try:
-        from app.services.ai_provider import get_ai_provider
+        from app.services.ai_provider import get_ai_provider, google_genai
+        sdk_loaded = google_genai is not None
+        api_key_present = bool(os.getenv("GEMINI_API_KEY"))
+        
+        # Check if provider is initialized in the singleton
+        from app.services.ai_provider import _active_provider
+        provider_initialized = _active_provider is not None
+        
+        # Get verification state
+        verification_state = "NOT_STARTED"
+        if provider_initialized:
+            verification_state = getattr(_active_provider, "_verify_status", "NOT_STARTED")
+        
         provider = get_ai_provider()
         if provider.is_ready():
-            gemini_status = "healthy"
+            gemini_status = f"healthy (SDK Loaded: {sdk_loaded}, Key Present: {api_key_present}, Initialized: {provider_initialized}, Verification: {verification_state})"
         else:
-            gemini_status = "unconfigured (provider not ready)"
+            gemini_status = f"unconfigured (SDK Loaded: {sdk_loaded}, Key Present: {api_key_present}, Initialized: {provider_initialized}, Verification: {verification_state})"
     except Exception as e:
         logger.error("Health Check: AI provider configuration failed: %s", e)
+        gemini_status = f"unhealthy ({e})"
+
 
     # 4. Enterprise Adapters Check
     adapters_status = {}
@@ -611,10 +656,18 @@ def health(db: Session = Depends(get_db_context)):
 
 @app.post("/chat")
 def chat(request: ChatRequest, current_user: User = Depends(get_current_user)):
-    logger.info("FastAPI Endpoint POST '/chat': Received request from user %s with payload: %s", current_user.username, request.model_dump_json())
-    response_payload = handle_chat_turn(request.session_id, request.message, username=current_user.username, user_role=current_user.role)
-    logger.info("FastAPI Endpoint POST '/chat': Returning response payload: %s", response_payload)
-    return response_payload
+    import time
+    t0 = time.time()
+    logger.info(">>> TRACE START: FastAPI Endpoint POST '/chat' | User: %s | Session ID: %s | Payload: %s", current_user.username, request.session_id, request.message)
+    try:
+        response_payload = handle_chat_turn(request.session_id, request.message, username=current_user.username, user_role=current_user.role)
+        elapsed = (time.time() - t0) * 1000
+        logger.info("<<< TRACE END: FastAPI Endpoint POST '/chat' | Elapsed: %.2f ms | Returning: %s", elapsed, response_payload)
+        return response_payload
+    except Exception as exc:
+        elapsed = (time.time() - t0) * 1000
+        logger.error("!!! TRACE ERROR: FastAPI Endpoint POST '/chat' | Elapsed: %.2f ms | Error: %s", elapsed, exc, exc_info=True)
+        raise
 
 
 @app.get("/tickets")
@@ -2484,6 +2537,7 @@ def startup_event():
     try:
         from app.services.ai_provider import get_ai_provider
         provider = get_ai_provider()
+        provider.verify()
         if not provider.is_ready():
             logger.error("FastAPI Startup ERROR: Active AI provider is not ready.")
     except Exception as e:
@@ -3392,181 +3446,7 @@ def reject_manager_ticket(
     return {"message": "Ticket request rejected successfully.", "status": "REJECTED"}
 
 
-class ExecuteActionRequest(BaseModel):
-    action_name: str
-    device_id: str
 
-
-@app.get("/api/it-actions/list")
-def list_device_actions(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_context)
-):
-    from app.services.device_action_service import DeviceActionService
-    actions = DeviceActionService.get_actions(current_user.username, db)
-    return {"actions": actions}
-
-
-@app.post("/api/it-actions/execute")
-def execute_device_action(
-    req: ExecuteActionRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_context)
-):
-    from app.services.device_action_service import DeviceActionService
-    try:
-        res = DeviceActionService.execute_action(
-            username=current_user.username,
-            device_id=req.device_id,
-            action_name=req.action_name,
-            db=db
-        )
-        return res
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/it-actions/history")
-def get_device_action_history(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_context)
-):
-    from app.services.device_action_service import DeviceActionService
-    # Employees only see their own execution history. Managers & Admins see all.
-    username_filter = current_user.username if current_user.role == "EMPLOYEE" else None
-    history = DeviceActionService.get_execution_history(db, username_filter)
-    
-    results = []
-    for h in history:
-        results.append({
-            "id": h.id,
-            "timestamp": h.timestamp.isoformat() + "Z",
-            "username": h.username,
-            "device_id": h.device_id,
-            "action_name": h.action_name,
-            "result": h.result,
-            "duration": h.duration,
-            "logs": h.logs
-        })
-    return {"history": results}
-
-
-class DeviceAgentActionRequest(BaseModel):
-    action: str
-    parameters: dict | None = None
-
-
-@app.get("/api/device-agent/status")
-@app.get("/api/device-agent/health")
-def get_device_agent_status(
-    current_user: User = Depends(get_current_user)
-):
-    from app.services.device_agent_service import DeviceAgentService
-    service = DeviceAgentService()
-    return service.get_status()
-
-
-@app.get("/api/device-agent/system-info")
-def get_device_agent_system_info(
-    current_user: User = Depends(get_current_user)
-):
-    from app.services.device_agent_service import DeviceAgentService
-    service = DeviceAgentService()
-    return service.get_system_info()
-
-
-@app.get("/api/device-agent/history")
-def get_device_agent_history(
-    current_user: User = Depends(get_current_user)
-):
-    from app.services.device_agent_service import DeviceAgentService
-    service = DeviceAgentService()
-    return service.get_history()
-
-
-@app.post("/api/device-agent/action")
-def post_device_agent_action(
-    req: DeviceAgentActionRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_context)
-):
-    import time
-    from datetime import datetime
-    from app.services.device_agent_service import DeviceAgentService
-    from app.database.models.execution_history import ExecutionHistory
-    from app.database.models.rbac_audit_log import RbacAuditLog
-
-    start_time = time.time()
-    service = DeviceAgentService()
-    
-    # Execute action via service
-    res = service.execute_action(req.action, req.parameters or {})
-    duration = round((time.time() - start_time) * 1000) # duration in ms
-    
-    # Check if agent was offline
-    if res.get("connected") is False:
-        return {
-            "connected": False,
-            "message": "Enterprise Device Agent Offline"
-        }
-        
-    success = res.get("success", False)
-    result_str = "SUCCESS" if success else "FAILED"
-    
-    # Format logs/message output
-    logs_val = res.get("logs", [])
-    if isinstance(logs_val, list):
-        logs_str = "\n".join(logs_val)
-    else:
-        logs_str = str(logs_val) if logs_val else res.get("message", "")
-
-    # Map request action to display name
-    action_display_name = req.action.replace("_", " ").title()
-    
-    # Query device department and agent version
-    from app.database.models.device import Device
-    import json
-    device_obj = db.query(Device).filter(Device.id == "BS-EMP-WS09").first()
-    device_dept = device_obj.department if device_obj else "IT Operations"
-    device_av = device_obj.agent_version if device_obj else "1.0"
-
-    # 2. Store to ExecutionHistory
-    history_entry = ExecutionHistory(
-        timestamp=datetime.utcnow(),
-        username=current_user.username,
-        device_id="BS-EMP-WS09",
-        action_name=action_display_name,
-        result=result_str,
-        status="Success" if success else "Failed",
-        duration=round(duration / 1000.0, 2), # convert ms to seconds
-        logs=logs_str,
-        parameters=json.dumps(req.parameters or {}),
-        started_at=datetime.fromtimestamp(start_time),
-        completed_at=datetime.utcnow(),
-        agent_version=device_av,
-        department=device_dept
-    )
-    db.add(history_entry)
-
-    # 3. Store to RbacAuditLog
-    audit_log = RbacAuditLog(
-        timestamp=datetime.utcnow(),
-        user=current_user.username,
-        role=current_user.role,
-        action=f"device_agent_action: {req.action}",
-        details=f"Result: {result_str} | Duration: {duration}ms"
-    )
-    db.add(audit_log)
-    db.commit()
-
-    return {
-        "success": success,
-        "message": res.get("message", "Execution complete"),
-        "duration_ms": duration,
-        "logs": logs_val if isinstance(logs_val, list) else [logs_str]
-    }
 
 
 @app.get("/system/provider")

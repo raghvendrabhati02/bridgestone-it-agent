@@ -28,6 +28,8 @@ interface Ticket {
   priority?: string;
   sla_hours?: number;
   servicenow_id?: string;
+  servicenow_number?: string;
+  local_ticket_id?: string;
   sla_state?: string;
   sla_breached?: boolean;
   request_type?: string;

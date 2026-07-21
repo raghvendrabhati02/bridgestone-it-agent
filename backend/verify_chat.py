@@ -14,7 +14,7 @@ def main():
     )
     
     # Wait for uvicorn to start
-    time.sleep(3)
+    time.sleep(12)
     
     test_cases = [
         ("VPN not working", "vpn_guide.txt", "VPN"),

@@ -4,10 +4,20 @@ import re
 import json
 import logging
 import time
+import threading
 from typing import List, Optional, Dict, Any
-from google import genai as google_genai
-from google.genai import types as genai_types
-import anthropic
+
+try:
+    from google import genai as google_genai
+    from google.genai import types as genai_types
+except ImportError:
+    google_genai = None
+    genai_types = None
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -15,6 +25,11 @@ class BaseAIProvider(abc.ABC):
     @abc.abstractmethod
     def is_ready(self) -> bool:
         """Return True if the provider is fully configured and ready to execute calls."""
+        pass
+
+    @abc.abstractmethod
+    def verify(self) -> bool:
+        """Perform API validation/connectivity check once per process."""
         pass
 
     @abc.abstractmethod
@@ -28,6 +43,43 @@ class BaseAIProvider(abc.ABC):
         pass
 
 
+def _log_gemini_request(func_name: str, user_message: str, model: str):
+    try:
+        from app.core.logging_context import request_id_ctx, session_id_ctx
+        import traceback
+        import datetime
+        req_id = request_id_ctx.get() if hasattr(request_id_ctx, "get") else "N/A"
+        sess_id = session_id_ctx.get() if hasattr(session_id_ctx, "get") else "N/A"
+        timestamp = datetime.datetime.now().isoformat()
+        
+        caller = "Unknown"
+        stack = traceback.extract_stack()
+        if len(stack) >= 3:
+            caller_frame = stack[-3]
+            caller = f"{caller_frame.filename}:{caller_frame.lineno} in {caller_frame.name}"
+            
+        logger.debug("================================================")
+        logger.debug("GEMINI REQUEST")
+        logger.debug("Function: %s", func_name)
+        logger.debug("Caller: %s", caller)
+        logger.debug("Request ID: %s", req_id)
+        logger.debug("Session ID: %s", sess_id)
+        logger.debug("Conversation ID: %s", sess_id)
+        logger.debug("Current User Message: %s", user_message)
+        logger.debug("Model: %s", model)
+        logger.debug("Timestamp: %s", timestamp)
+        logger.debug("================================================")
+        logger.debug("STACK TRACE:")
+        try:
+            formatted_stack = "".join(traceback.format_stack())
+            logger.debug(formatted_stack)
+        except Exception:
+            pass
+        logger.debug("================================================")
+    except Exception:
+        logger.exception("Gemini request logging failed")
+
+
 class GeminiProvider(BaseAIProvider):
     DEFAULT_MODEL = "gemini-2.5-flash"
     DEFAULT_TIMEOUT = 30.0
@@ -39,9 +91,30 @@ class GeminiProvider(BaseAIProvider):
     )
 
     def __init__(self, model_name: str | None = None, timeout: float | None = None) -> None:
+        if google_genai is None or genai_types is None:
+            logger.error("GeminiProvider ERROR: google-genai package is not installed.")
+            raise ImportError(
+                "GeminiProvider requires the 'google-genai' package. "
+                "Please install it using 'pip install google-genai'."
+            )
+
         self._api_key = os.getenv("GEMINI_API_KEY", "")
         self._timeout = timeout or self.DEFAULT_TIMEOUT
         self._ready = False
+        self._verified = False
+        self._verify_lock = threading.Lock()
+        self._verify_status = "NOT_STARTED"
+        self._cached_verify_error = None
+        self._api_calls = 0
+        self._verify_calls = 0
+        
+        # Circuit breaker properties
+        self._circuit_state = "CLOSED"
+
+        self._circuit_failures = 0
+        self._circuit_last_state_change = time.time()
+        self._circuit_failure_threshold = 5
+        self._circuit_recovery_timeout = 30.0
 
         if not self._api_key:
             logger.error("GeminiProvider ERROR: GEMINI_API_KEY is not defined in environment variables.")
@@ -67,57 +140,84 @@ class GeminiProvider(BaseAIProvider):
                 api_key=self._api_key,
                 http_options=genai_types.HttpOptions(timeout=timeout_ms)
             )
-            
-            # Verify if the configured model is available
-            try:
-                is_mock = "mock" in type(self._client.models).__name__.lower()
-                if not is_mock:
-                    resolved_model = self._model_name.strip()
-                    model_id = resolved_model
-                    if not model_id.startswith("models/"):
-                        model_id = f"models/{model_id}"
-                    
-                    if hasattr(self._client.models, 'get'):
-                        self._client.models.get(model=model_id)
-                    elif hasattr(self._client.models, 'list'):
-                        models = self._client.models.list()
-                        available = []
-                        for m in models:
-                            available.append(m.name)
-                            if m.name.startswith("models/"):
-                                available.append(m.name[7:])
-                        if resolved_model not in available:
-                            raise ValueError(f"Configured GEMINI_MODEL '{resolved_model}' is not available/supported for this API key.")
-            except ValueError as vex:
-                # Fatal - invalid model name check failed
-                raise
-            except Exception as vex:
-                # Check classification
-                error_class, _ = self._classify_and_sanitize(vex)
-                if error_class in ("TIMEOUT", "NETWORK_ERROR", "SERVICE_UNAVAILABLE"):
-                    logger.warning(
-                        "GeminiProvider: Model verification check failed due to a temporary network/service issue (%s: %s). "
-                        "Continuing startup as non-fatal.",
-                        error_class,
-                        vex
-                    )
-                else:
-                    logger.error("GeminiProvider ERROR: Model verification check failed: %s", vex)
-                    raise ValueError(f"GeminiProvider: Model verification check failed: {vex}")
-
             self._ready = True
             logger.info("GeminiProvider: Active provider: GeminiProvider")
             logger.info("GeminiProvider: Model name: %s", self._model_name)
             logger.info("GeminiProvider: Timeout: %.1fs", self._timeout)
             logger.info("GeminiProvider: Provider initialization success")
         except Exception as exc:
-            # Propagate ValueErrors directly as they represent fatal startup errors
-            if isinstance(exc, ValueError):
-                raise exc
             raise RuntimeError(f"GeminiProvider: Generative AI SDK configuration failed: {exc}")
 
     def is_ready(self) -> bool:
         return self._ready
+
+    def verify(self) -> bool:
+        try:
+            from app.core.metrics import LLM_VERIFY_TOTAL
+            LLM_VERIFY_TOTAL.inc()
+        except Exception:
+            pass
+
+        self._verify_calls += 1
+
+        if self._verify_status in ("LOCAL_VALIDATED", "READY"):
+            return True
+        if self._verify_status == "FAILED":
+            if isinstance(self._cached_verify_error, ValueError):
+                raise self._cached_verify_error
+            return False
+
+        with self._verify_lock:
+            if self._verify_status in ("LOCAL_VALIDATED", "READY"):
+                return True
+            if self._verify_status == "FAILED":
+                if isinstance(self._cached_verify_error, ValueError):
+                    raise self._cached_verify_error
+                return False
+
+            self._verify_status = "VERIFYING"
+            logger.info("GeminiProvider: Running model verification check...")
+            verify_start = time.time()
+            try:
+                # Local validation checks only (no API network calls)
+                if not self._api_key:
+                    raise ValueError("GeminiProvider: GEMINI_API_KEY is not defined in environment variables.")
+                if not self._model_name:
+                    raise ValueError("GeminiProvider: GEMINI_MODEL is not defined in environment variables.")
+                if not self._ready or self._client is None:
+                    raise ValueError("GeminiProvider: Generative AI SDK client not initialized.")
+                
+                self._verified = True
+                self._verify_status = "LOCAL_VALIDATED"
+                
+                verify_duration = time.time() - verify_start
+                try:
+                    from app.core.metrics import LLM_VERIFY_SUCCESS_TOTAL, LLM_VERIFY_DURATION_SECONDS
+                    LLM_VERIFY_SUCCESS_TOTAL.inc()
+                    LLM_VERIFY_DURATION_SECONDS.observe(verify_duration)
+                except Exception:
+                    pass
+                
+                logger.info("GeminiProvider: Verification check completed successfully (Local Validation).")
+                return True
+            except ValueError as vex:
+                self._verify_status = "FAILED"
+                self._cached_verify_error = vex
+                try:
+                    from app.core.metrics import LLM_VERIFY_FAILURE_TOTAL
+                    LLM_VERIFY_FAILURE_TOTAL.inc()
+                except Exception:
+                    pass
+                raise
+            except Exception as vex:
+                self._verify_status = "FAILED"
+                self._cached_verify_error = vex
+                try:
+                    from app.core.metrics import LLM_VERIFY_FAILURE_TOTAL
+                    LLM_VERIFY_FAILURE_TOTAL.inc()
+                except Exception:
+                    pass
+                raise ValueError(f"GeminiProvider: Model verification check failed: {vex}")
 
     def _classify_and_sanitize(self, exc: Exception) -> tuple[str, str]:
         exc_str = str(exc).lower()
@@ -173,8 +273,68 @@ class GeminiProvider(BaseAIProvider):
         except Exception as mex:
             logger.warning("Failed to increment LLM failure metric: %s", mex)
 
-    def _execute_with_retry(self, func, *args, **kwargs):
-        max_retries = 3
+    def _get_retry_delay(self, exc: Exception) -> float | None:
+        try:
+            if hasattr(exc, "details") and isinstance(exc.details, dict):
+                error_details = exc.details.get("error", {}).get("details", [])
+                for detail in error_details:
+                    if isinstance(detail, dict) and detail.get("@type") == "type.googleapis.com/google.rpc.RetryInfo":
+                        delay_str = detail.get("retryDelay", "")
+                        if delay_str.endswith("s"):
+                            return float(delay_str[:-1])
+                        return float(delay_str)
+        except Exception as parse_exc:
+            logger.warning("Failed to parse RetryInfo from exception: %s", parse_exc)
+        
+        try:
+            import re
+            m = re.search(r"retryDelay\D*(\d+)", str(exc))
+            if m:
+                return float(m.group(1))
+        except Exception:
+            pass
+            
+        return None
+
+    def _check_circuit(self) -> None:
+        now = time.time()
+        if self._circuit_state == "OPEN":
+            if now - self._circuit_last_state_change > self._circuit_recovery_timeout:
+                logger.info("Circuit Breaker: Entering HALF_OPEN state to test request.")
+                self._circuit_state = "HALF_OPEN"
+                self._circuit_last_state_change = now
+            else:
+                raise RuntimeError(
+                    "Circuit Breaker: Gemini Provider is currently unavailable due to repeated failures (Circuit is OPEN)."
+                )
+
+    def _record_success(self) -> None:
+        if self._circuit_state == "HALF_OPEN":
+            logger.info("Circuit Breaker: Request succeeded. Closing circuit.")
+            self._circuit_state = "CLOSED"
+        self._circuit_failures = 0
+        self._circuit_last_state_change = time.time()
+        
+        # Transition verification state machine to READY upon first successful request
+        if self._verify_status in ("LOCAL_VALIDATED", "NOT_STARTED"):
+            self._verify_status = "READY"
+
+    def _record_failure(self, error_class: str) -> None:
+        if error_class not in ("RATE_LIMIT", "SERVICE_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"):
+            return
+        self._circuit_failures += 1
+        now = time.time()
+        if self._circuit_state in ("CLOSED", "HALF_OPEN"):
+            if self._circuit_failures >= self._circuit_failure_threshold or self._circuit_state == "HALF_OPEN":
+                logger.warning(
+                    "Circuit Breaker: Transitioning to OPEN state due to %d consecutive failures.",
+                    self._circuit_failures
+                )
+                self._circuit_state = "OPEN"
+                self._circuit_last_state_change = now
+
+    def _execute_with_retry(self, func, max_retries=3, *args, **kwargs):
+        self._check_circuit()
         backoff = [1, 2, 4]
         
         for attempt in range(max_retries + 1):  # 0, 1, 2, 3 (maximum 3 retries, i.e., 4 total attempts)
@@ -184,10 +344,19 @@ class GeminiProvider(BaseAIProvider):
                     "AI Provider Call Attempt: Provider=GeminiProvider, Model=%s, Attempt=%d/%d",
                     self._model_name, attempt + 1, max_retries + 1
                 )
-                return func(*args, **kwargs)
+                res = func(*args, **kwargs)
+                self._record_success()
+                return res
             except Exception as exc:
                 error_class, _ = self._classify_and_sanitize(exc)
                 exc_type = type(exc).__name__
+                exc_str = str(exc).lower()
+                is_404 = "404" in exc_str or "not found" in exc_str or "not_found" in exc_str
+                
+                # Check for permanent configuration errors
+                if error_class == "AUTH_ERROR" or is_404:
+                    self._verify_status = "FAILED"
+                    self._cached_verify_error = ValueError(f"GeminiProvider: Permanent configuration error: {exc}")
                 
                 # Debug logging on failure
                 logger.debug(
@@ -198,12 +367,198 @@ class GeminiProvider(BaseAIProvider):
                 is_retryable = error_class in ("RATE_LIMIT", "SERVICE_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR")
                 
                 if is_retryable and attempt < max_retries:
-                    wait_time = backoff[attempt]
-                    logger.warning("GeminiProvider: Temporary error detected.")
-                    logger.warning("Retry %d/3 after %d seconds. (Exception: %s)", attempt + 1, wait_time, exc_type)
+                    retry_delay = self._get_retry_delay(exc)
+                    wait_time = retry_delay if retry_delay is not None else backoff[attempt]
+                    if wait_time > 2.0:
+                        logger.warning("GeminiProvider: Retry delay %.2f is too large (> 2.0s). Skipping retry to fail fast/fallback.", wait_time)
+                        self._record_failure(error_class)
+                        raise exc
+                    logger.warning("GeminiProvider: Temporary error detected (%s).", error_class)
+                    logger.warning("Retry %d/3 after %.2f seconds. (Exception: %s)", attempt + 1, wait_time, exc_type)
                     time.sleep(wait_time)
                 else:
+                    self._record_failure(error_class)
                     raise exc
+
+    def _execute_with_fallback(self, api_call_func):
+        from app.core.logging_context import request_id_ctx, correlation_id_ctx, session_id_ctx
+        
+        start_time = time.time()
+        start_api_calls = self._api_calls
+        start_verify_calls = self._verify_calls
+        model_used = self._model_name
+        fallback_used = False
+        primary_attempts = 0
+        fallback_attempts = 0
+        
+        def wrap_call(model_name):
+            nonlocal primary_attempts, model_used
+            primary_attempts += 1
+            model_used = model_name
+            return api_call_func(model_name)
+
+        try:
+            # Try configured model with default retries according to the centralized retry policy
+            res = self._execute_with_retry(lambda: wrap_call(self._model_name), max_retries=3)
+            latency = time.time() - start_time
+            
+            logical_api_calls = self._api_calls - start_api_calls
+            logical_verify_calls = self._verify_calls - start_verify_calls
+            total_retries = max(0, primary_attempts - 1)
+            
+            # Observe request duration metric
+            try:
+                from app.core.metrics import LLM_REQUEST_DURATION_SECONDS
+                LLM_REQUEST_DURATION_SECONDS.labels(
+                    model=model_used,
+                    fallback_used=str(fallback_used)
+                ).observe(latency)
+            except Exception:
+                pass
+                
+            # Log structured log on success
+            logger.info(
+                "Structured LLM Call - Request ID: '%s', Session ID: '%s', Conversation ID: '%s', "
+                "Provider: 'GeminiProvider', Model: '%s', Latency: %.4fs, Retry Count: %d, Fallback Used: %s, Actual Gemini API Calls: %d",
+                request_id_ctx.get(), session_id_ctx.get(), correlation_id_ctx.get(),
+                model_used, latency, total_retries, str(fallback_used), logical_api_calls
+            )
+            
+            logger.info(
+                "Logical Request : 1\n"
+                "Actual Gemini Calls : %d\n"
+                "Verify Calls : %d\n"
+                "Retries : %d\n"
+                "Fallback Used : %s",
+                logical_api_calls,
+                logical_verify_calls,
+                total_retries,
+                str(fallback_used)
+            )
+            return res
+        except Exception as exc:
+            error_class, _ = self._classify_and_sanitize(exc)
+            exc_str = str(exc).lower()
+            is_404 = "404" in exc_str or "not found" in exc_str or "not_found" in exc_str
+            is_503 = "503" in exc_str or "unavailable" in exc_str or "overloaded" in exc_str or error_class == "SERVICE_UNAVAILABLE"
+            is_429 = "429" in exc_str or "quota" in exc_str or "limit" in exc_str or error_class == "RATE_LIMIT"
+
+            if is_404 or is_503 or is_429:
+                fallback_model = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite").strip()
+                fallback_used = True
+                logger.warning(
+                    "GeminiProvider: Primary model '%s' failed (error_class=%s). "
+                    "Falling back to '%s'...",
+                    self._model_name, error_class, fallback_model
+                )
+                
+                # Increment fallback metric
+                try:
+                    from app.core.metrics import LLM_MODEL_FALLBACK_TOTAL
+                    LLM_MODEL_FALLBACK_TOTAL.labels(
+                        target_model=self._model_name,
+                        fallback_model=fallback_model,
+                        reason=f"error_class={error_class}"
+                    ).inc()
+                except Exception as mex:
+                    logger.warning("Failed to increment LLM model fallback metric: %s", mex)
+
+                def wrap_fallback_call(model_name):
+                    nonlocal fallback_attempts, model_used
+                    fallback_attempts += 1
+                    model_used = model_name
+                    return api_call_func(model_name)
+
+                fallback_start = time.time()
+                try:
+                    # Execute on fallback model with default retries according to the centralized retry policy
+                    res = self._execute_with_retry(lambda: wrap_fallback_call(fallback_model), max_retries=3)
+                    
+                    total_latency = time.time() - start_time
+                    fallback_latency = time.time() - fallback_start
+                    logical_api_calls = self._api_calls - start_api_calls
+                    logical_verify_calls = self._verify_calls - start_verify_calls
+                    total_retries = max(0, primary_attempts - 1) + max(0, fallback_attempts - 1)
+                    
+                    # Observe latency metrics
+                    try:
+                        from app.core.metrics import LLM_REQUEST_DURATION_SECONDS, LLM_FALLBACK_DURATION_SECONDS
+                        LLM_REQUEST_DURATION_SECONDS.labels(
+                            model=model_used,
+                            fallback_used=str(fallback_used)
+                        ).observe(total_latency)
+                        LLM_FALLBACK_DURATION_SECONDS.labels(
+                            target_model=self._model_name,
+                            fallback_model=fallback_model
+                        ).observe(fallback_latency)
+                    except Exception:
+                        pass
+                    
+                    logger.info(
+                        "Structured LLM Call - Request ID: '%s', Session ID: '%s', Conversation ID: '%s', "
+                        "Provider: 'GeminiProvider', Model: '%s', Latency: %.4fs, Retry Count: %d, Fallback Used: %s, Actual Gemini API Calls: %d",
+                        request_id_ctx.get(), session_id_ctx.get(), correlation_id_ctx.get(),
+                        model_used, total_latency, total_retries, str(fallback_used), logical_api_calls
+                    )
+                    logger.info(
+                        "Logical Request : 1\n"
+                        "Actual Gemini Calls : %d\n"
+                        "Verify Calls : %d\n"
+                        "Retries : %d\n"
+                        "Fallback Used : %s",
+                        logical_api_calls,
+                        logical_verify_calls,
+                        total_retries,
+                        str(fallback_used)
+                    )
+                    return res
+                except Exception as fallback_exc:
+                    total_latency = time.time() - start_time
+                    logical_api_calls = self._api_calls - start_api_calls
+                    logical_verify_calls = self._verify_calls - start_verify_calls
+                    total_retries = max(0, primary_attempts - 1) + max(0, fallback_attempts - 1)
+                    logger.error(
+                        "Structured LLM Call FAILED - Request ID: '%s', Session ID: '%s', Conversation ID: '%s', "
+                        "Provider: 'GeminiProvider', Model: '%s', Latency: %.4fs, Retry Count: %d, Fallback Used: %s, Actual Gemini API Calls: %d, Error: %s",
+                        request_id_ctx.get(), session_id_ctx.get(), correlation_id_ctx.get(),
+                        model_used, total_latency, total_retries, str(fallback_used), logical_api_calls, fallback_exc
+                    )
+                    logger.info(
+                        "Logical Request : 1\n"
+                        "Actual Gemini Calls : %d\n"
+                        "Verify Calls : %d\n"
+                        "Retries : %d\n"
+                        "Fallback Used : %s",
+                        logical_api_calls,
+                        logical_verify_calls,
+                        total_retries,
+                        str(fallback_used)
+                    )
+                    raise fallback_exc
+            else:
+                latency = time.time() - start_time
+                logical_api_calls = self._api_calls - start_api_calls
+                logical_verify_calls = self._verify_calls - start_verify_calls
+                total_retries = max(0, primary_attempts - 1)
+                logger.error(
+                    "Structured LLM Call FAILED - Request ID: '%s', Session ID: '%s', Conversation ID: '%s', "
+                    "Provider: 'GeminiProvider', Model: '%s', Latency: %.4fs, Retry Count: %d, Fallback Used: %s, Actual Gemini API Calls: %d, Error: %s",
+                    request_id_ctx.get(), session_id_ctx.get(), correlation_id_ctx.get(),
+                    model_used, latency, total_retries, str(fallback_used), logical_api_calls, exc
+                )
+                logger.info(
+                    "Logical Request : 1\n"
+                    "Actual Gemini Calls : %d\n"
+                    "Verify Calls : %d\n"
+                    "Retries : %d\n"
+                    "Fallback Used : %s",
+                    logical_api_calls,
+                    logical_verify_calls,
+                    total_retries,
+                    str(fallback_used)
+                )
+                raise exc
+
 
     def chat(self, user_message: str, history: Optional[List[dict]] = None) -> str:
         history = history or []
@@ -220,20 +575,39 @@ class GeminiProvider(BaseAIProvider):
                         )
                     )
 
-            def _chat_call():
+            def _chat_call(model_to_use):
+                from app.core.logging_context import request_id_ctx, session_id_ctx
+                import traceback
+                req_id = request_id_ctx.get() or "N/A"
+                sess_id = session_id_ctx.get() or "N/A"
+                
+                self._api_calls += 1
                 chat_session = self._client.chats.create(
-                    model=self._model_name,
+                    model=model_to_use,
                     history=sdk_history,
                     config=genai_types.GenerateContentConfig(
                         system_instruction=self.SYSTEM_INSTRUCTION
                     )
                 )
-                response = chat_session.send_message(user_message)
+                _log_gemini_request("chat", user_message, model_to_use)
+                logger.info(">>> Before send_message() | Request ID: %s | Session ID: %s | Model: %s", req_id, sess_id, model_to_use)
+                t_api = time.time()
+                try:
+                    response = chat_session.send_message(user_message)
+                    elapsed_api = (time.time() - t_api) * 1000
+                    logger.info("<<< After send_message() - %.2f ms | Request ID: %s | Session ID: %s", elapsed_api, req_id, sess_id)
+                except Exception as exc:
+                    elapsed_api = (time.time() - t_api) * 1000
+                    logger.error(
+                        "!!! Failure in send_message() - %.2f ms | Request ID: %s | Session ID: %s | Error: %s | Traceback: %s",
+                        elapsed_api, req_id, sess_id, exc, traceback.format_exc()
+                    )
+                    raise
                 if not response or not response.text:
                     raise ValueError("Gemini returned an empty response.")
                 return response.text.strip()
 
-            return self._execute_with_retry(_chat_call)
+            return self._execute_with_fallback(_chat_call)
         except Exception as exc:
             logger.exception("GeminiProvider.chat exception: %s", exc)
             error_class, user_msg = self._classify_and_sanitize(exc)
@@ -275,19 +649,38 @@ class GeminiProvider(BaseAIProvider):
             prompt = user_message
 
         try:
-            def _gen_call():
-                response = self._client.models.generate_content(
-                    model=self._model_name,
-                    contents=prompt,
-                    config=genai_types.GenerateContentConfig(
-                        http_options=genai_types.HttpOptions(timeout=15000)
+            def _gen_call(model_to_use):
+                from app.core.logging_context import request_id_ctx, session_id_ctx
+                import traceback
+                req_id = request_id_ctx.get() or "N/A"
+                sess_id = session_id_ctx.get() or "N/A"
+                
+                self._api_calls += 1
+                _log_gemini_request("generate_response", user_message, model_to_use)
+                logger.info(">>> Before generate_content() | Request ID: %s | Session ID: %s | Model: %s", req_id, sess_id, model_to_use)
+                t_api = time.time()
+                try:
+                    response = self._client.models.generate_content(
+                        model=model_to_use,
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            http_options=genai_types.HttpOptions(timeout=15000)
+                        )
                     )
-                )
+                    elapsed_api = (time.time() - t_api) * 1000
+                    logger.info("<<< After generate_content() - %.2f ms | Request ID: %s | Session ID: %s", elapsed_api, req_id, sess_id)
+                except Exception as exc:
+                    elapsed_api = (time.time() - t_api) * 1000
+                    logger.error(
+                        "!!! Failure in generate_content() - %.2f ms | Request ID: %s | Session ID: %s | Error: %s | Traceback: %s",
+                        elapsed_api, req_id, sess_id, exc, traceback.format_exc()
+                    )
+                    raise
                 if not response or not response.text:
                     raise ValueError("Gemini returned empty text response.")
                 return response
 
-            response = self._execute_with_retry(_gen_call)
+            response = self._execute_with_fallback(_gen_call)
 
             duration = time.time() - start_time
             try:
@@ -315,6 +708,7 @@ class GeminiProvider(BaseAIProvider):
                 logger.warning("Failed to record LLM usage metrics: %s", mex)
 
             return parsed_text
+
 
         except Exception as e:
             duration = time.time() - start_time
@@ -355,9 +749,23 @@ class ClaudeProvider(BaseAIProvider):
     )
 
     def __init__(self, model_name: str | None = None, timeout: float | None = None) -> None:
+        if anthropic is None:
+            logger.error("ClaudeProvider ERROR: anthropic package is not installed.")
+            raise ImportError(
+                "ClaudeProvider requires the 'anthropic' package. "
+                "Please install it using 'pip install anthropic'."
+            )
+
         self._api_key = os.getenv("ANTHROPIC_API_KEY", "")
         self._timeout = timeout or self.DEFAULT_TIMEOUT
         self._ready = False
+        self._verified = False
+        self._verify_lock = threading.Lock()
+        self._verify_status = "NOT_STARTED"
+        self._cached_verify_error = None
+        self._api_calls = 0
+        self._verify_calls = 0
+
 
         if not self._api_key:
             logger.error("ClaudeProvider ERROR: ANTHROPIC_API_KEY is not defined in environment variables.")
@@ -382,44 +790,58 @@ class ClaudeProvider(BaseAIProvider):
                 api_key=self._api_key,
                 timeout=self._timeout
             )
-            
-            # Verify if the configured API key and model are valid
-            try:
-                is_mock = "mock" in type(self._client).__name__.lower()
-                if not is_mock:
-                    # Perform a lightweight dry-run test call
-                    self._client.messages.create(
-                        model=self._model_name,
-                        max_tokens=1,
-                        messages=[{"role": "user", "content": "Ping"}]
-                    )
-            except Exception as vex:
-                # Check classification
-                error_class, _ = self._classify_and_sanitize(vex)
-                if error_class in ("RATE_LIMIT", "SERVICE_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"):
-                    logger.warning(
-                        "ClaudeProvider: Model verification check failed due to a temporary network/service issue (%s: %s). "
-                        "Continuing startup as non-fatal.",
-                        error_class,
-                        vex
-                    )
-                else:
-                    logger.error("ClaudeProvider ERROR: Model verification check failed: %s", vex)
-                    raise ValueError(f"ClaudeProvider: Model verification check failed: {vex}")
-
             self._ready = True
             logger.info("ClaudeProvider: Active provider: ClaudeProvider")
             logger.info("ClaudeProvider: Model name: %s", self._model_name)
             logger.info("ClaudeProvider: Timeout: %.1fs", self._timeout)
             logger.info("ClaudeProvider: Provider initialization success")
         except Exception as exc:
-            # Propagate ValueErrors directly as they represent fatal startup errors
-            if isinstance(exc, ValueError):
-                raise exc
             raise RuntimeError(f"ClaudeProvider: Generative AI SDK configuration failed: {exc}")
 
     def is_ready(self) -> bool:
         return self._ready
+
+    def verify(self) -> bool:
+        self._verify_calls += 1
+
+        if self._verify_status in ("LOCAL_VALIDATED", "READY"):
+            return True
+        if self._verify_status == "FAILED":
+            if isinstance(self._cached_verify_error, ValueError):
+                raise self._cached_verify_error
+            return False
+
+        with self._verify_lock:
+            if self._verify_status in ("LOCAL_VALIDATED", "READY"):
+                return True
+            if self._verify_status == "FAILED":
+                if isinstance(self._cached_verify_error, ValueError):
+                    raise self._cached_verify_error
+                return False
+
+            self._verify_status = "VERIFYING"
+            logger.info("ClaudeProvider: Running model verification check...")
+            try:
+                # Local validation checks only (no API network calls)
+                if not self._api_key:
+                    raise ValueError("ClaudeProvider: ANTHROPIC_API_KEY is not defined in environment variables.")
+                if not self._model_name:
+                    raise ValueError("ClaudeProvider: CLAUDE_MODEL is not defined in environment variables.")
+                if not self._ready or self._client is None:
+                    raise ValueError("ClaudeProvider: Anthropic SDK client not initialized.")
+                
+                self._verified = True
+                self._verify_status = "LOCAL_VALIDATED"
+                logger.info("ClaudeProvider: Verification check completed successfully (Local Validation).")
+                return True
+            except ValueError as vex:
+                self._verify_status = "FAILED"
+                self._cached_verify_error = vex
+                raise
+            except Exception as vex:
+                self._verify_status = "FAILED"
+                self._cached_verify_error = vex
+                raise ValueError(f"ClaudeProvider: Model verification check failed: {vex}")
 
     def _classify_and_sanitize(self, exc: Exception) -> tuple[str, str]:
         exc_str = str(exc).lower()
@@ -481,10 +903,20 @@ class ClaudeProvider(BaseAIProvider):
                     "AI Provider Call Attempt: Provider=ClaudeProvider, Model=%s, Attempt=%d/%d",
                     self._model_name, attempt + 1, max_retries + 1
                 )
-                return func(*args, **kwargs)
+                res = func(*args, **kwargs)
+                if self._verify_status in ("LOCAL_VALIDATED", "NOT_STARTED"):
+                    self._verify_status = "READY"
+                return res
             except Exception as exc:
                 error_class, _ = self._classify_and_sanitize(exc)
                 exc_type = type(exc).__name__
+                exc_str = str(exc).lower()
+                is_404 = "404" in exc_str or "not found" in exc_str or "not_found" in exc_str
+                
+                # Check for permanent configuration errors
+                if error_class == "AUTH_ERROR" or is_404:
+                    self._verify_status = "FAILED"
+                    self._cached_verify_error = ValueError(f"ClaudeProvider: Permanent configuration error: {exc}")
                 
                 # Debug logging on failure
                 logger.debug(
@@ -522,6 +954,7 @@ class ClaudeProvider(BaseAIProvider):
             })
 
             def _chat_call():
+                self._api_calls += 1
                 response = self._client.messages.create(
                     model=self._model_name,
                     messages=sdk_messages,
@@ -582,6 +1015,7 @@ class ClaudeProvider(BaseAIProvider):
 
         try:
             def _gen_call():
+                self._api_calls += 1
                 response = self._client.messages.create(
                     model=self._model_name,
                     max_tokens=2048,
@@ -656,6 +1090,9 @@ class ClaudeProvider(BaseAIProvider):
 
 class MockProvider(BaseAIProvider):
     def is_ready(self) -> bool:
+        return True
+
+    def verify(self) -> bool:
         return True
 
     def chat(self, user_message: str, history: Optional[List[dict]] = None) -> str:
@@ -966,6 +1403,8 @@ class MockProvider(BaseAIProvider):
 class OllamaProvider(BaseAIProvider):
     def is_ready(self) -> bool:
         return False
+    def verify(self) -> bool:
+        return True
     def chat(self, user_message: str, history: Optional[List[dict]] = None) -> str:
         raise NotImplementedError("OllamaProvider: Not implemented.")
     def generate_response(self, user_message: str, knowledge_context: Optional[str] = None) -> Any:
@@ -975,6 +1414,8 @@ class OllamaProvider(BaseAIProvider):
 class AzureOpenAIProvider(BaseAIProvider):
     def is_ready(self) -> bool:
         return False
+    def verify(self) -> bool:
+        return True
     def chat(self, user_message: str, history: Optional[List[dict]] = None) -> str:
         raise NotImplementedError("AzureOpenAIProvider: Not implemented.")
     def generate_response(self, user_message: str, knowledge_context: Optional[str] = None) -> Any:
@@ -984,12 +1425,15 @@ class AzureOpenAIProvider(BaseAIProvider):
 class OpenAIProvider(BaseAIProvider):
     def is_ready(self) -> bool:
         return False
+    def verify(self) -> bool:
+        return True
     def chat(self, user_message: str, history: Optional[List[dict]] = None) -> str:
         raise NotImplementedError("OpenAIProvider: Not implemented.")
     def generate_response(self, user_message: str, knowledge_context: Optional[str] = None) -> Any:
         raise NotImplementedError("OpenAIProvider: Not implemented.")
 
 
+_provider_lock = threading.Lock()
 _active_provider: Optional[BaseAIProvider] = None
 
 def get_ai_provider() -> BaseAIProvider:
@@ -997,51 +1441,63 @@ def get_ai_provider() -> BaseAIProvider:
     if _active_provider is not None:
         return _active_provider
 
-    provider_choice = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+    with _provider_lock:
+        if _active_provider is not None:
+            return _active_provider
 
-    if provider_choice == "mock":
-        logger.info("AIProvider: MockProvider explicitly selected as LLM_PROVIDER.")
-        _active_provider = MockProvider()
-    elif provider_choice == "ollama":
-        _active_provider = OllamaProvider()
-    elif provider_choice == "azure":
-        _active_provider = AzureOpenAIProvider()
-    elif provider_choice == "openai":
-        _active_provider = OpenAIProvider()
-    elif provider_choice == "gemini":
+        provider_choice = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+
+        if provider_choice == "mock":
+            logger.info("AIProvider: MockProvider explicitly selected as LLM_PROVIDER.")
+            _active_provider = MockProvider()
+        elif provider_choice == "ollama":
+            _active_provider = OllamaProvider()
+        elif provider_choice == "azure":
+            _active_provider = AzureOpenAIProvider()
+        elif provider_choice == "openai":
+            _active_provider = OpenAIProvider()
+        elif provider_choice == "gemini":
+            try:
+                logger.info("AIProvider: Initializing GeminiProvider...")
+                gemini = GeminiProvider()
+                _active_provider = gemini
+                logger.info("AIProvider: GeminiProvider successfully set as active.")
+            except Exception as exc:
+                logger.error("AIProvider: GeminiProvider initialization failed: %s", exc, exc_info=True)
+                raise RuntimeError(
+                    f"AIProvider: Gemini is configured as active provider, but initialization failed: {exc}"
+                )
+        elif provider_choice == "claude":
+            try:
+                logger.info("AIProvider: Initializing ClaudeProvider...")
+                claude = ClaudeProvider()
+                _active_provider = claude
+                logger.info("AIProvider: ClaudeProvider successfully set as active.")
+            except Exception as exc:
+                logger.error("AIProvider: ClaudeProvider initialization failed: %s", exc, exc_info=True)
+                raise RuntimeError(
+                    f"AIProvider: Claude is configured as active provider, but initialization failed: {exc}"
+                )
+        else:
+            raise ValueError(f"AIProvider: Unknown LLM_PROVIDER '{provider_choice}' specified in environment.")
+
+        # Increment provider initialization metric
         try:
-            logger.info("AIProvider: Initializing GeminiProvider...")
-            gemini = GeminiProvider()
-            _active_provider = gemini
-            logger.info("AIProvider: GeminiProvider successfully set as active.")
-        except Exception as exc:
-            logger.error("AIProvider: GeminiProvider initialization failed: %s", exc, exc_info=True)
-            raise RuntimeError(
-                f"AIProvider: Gemini is configured as active provider, but initialization failed: {exc}"
-            )
-    elif provider_choice == "claude":
-        try:
-            logger.info("AIProvider: Initializing ClaudeProvider...")
-            claude = ClaudeProvider()
-            _active_provider = claude
-            logger.info("AIProvider: ClaudeProvider successfully set as active.")
-        except Exception as exc:
-            logger.error("AIProvider: ClaudeProvider initialization failed: %s", exc, exc_info=True)
-            raise RuntimeError(
-                f"AIProvider: Claude is configured as active provider, but initialization failed: {exc}"
-            )
-    else:
-        raise ValueError(f"AIProvider: Unknown LLM_PROVIDER '{provider_choice}' specified in environment.")
+            from app.core.metrics import LLM_PROVIDER_INITIALIZATION_TOTAL
+            LLM_PROVIDER_INITIALIZATION_TOTAL.inc()
+        except Exception as mex:
+            logger.warning("Failed to increment LLM provider initialization metric: %s", mex)
 
-    # Visual logging block for the active provider and model
-    provider_name = _active_provider.__class__.__name__.replace("Provider", "")
-    model_name = getattr(_active_provider, "_model_name", "Mock Model")
-    logger.info(
-        "\n=================================================\n"
-        "Active AI Provider : %s\n"
-        "Model              : %s\n"
-        "=================================================",
-        provider_name, model_name
-    )
+        # Visual logging block for the active provider and model
+        provider_name = _active_provider.__class__.__name__.replace("Provider", "")
+        model_name = getattr(_active_provider, "_model_name", "Mock Model")
+        logger.info(
+            "\n=================================================\n"
+            "Active AI Provider : %s\n"
+            "Model              : %s\n"
+            "=================================================",
+            provider_name, model_name
+        )
 
-    return _active_provider
+        return _active_provider
+

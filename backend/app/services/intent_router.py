@@ -181,31 +181,113 @@ def detect_ticket_failure_intent(message: str) -> TicketFailureIntent:
 # Enterprise Intent Router
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _detect_explicit_category(message: str, current_category: Optional[str] = None) -> Optional[str]:
+    text = message.lower().strip()
+    # We map category names to their keywords
+    categories = {
+        "VPN": ["vpn", "globalprotect", "global protect", "remote access", "anyconnect", "cisco"],
+        "OUTLOOK": ["outlook", "email", "mailbox", "exchange", "mail"],
+        "PRINTER": ["printer", "printing", "print", "scanner"],
+        "TEAMS": ["teams", "microsoft teams"],
+        "WIFI": ["wifi", "wi-fi", "wireless", "bs-guest", "bsguest"],
+        "PASSWORD_RESET": ["password", "reset password", "forgot password", "account locked"],
+        "SOFTWARE_INSTALLATION": ["software", "install", "application", "setup", "uninstall", "download", "adobe", "citrix", "vscode"],
+        "SAP": ["sap"]
+    }
+    
+    # First, check for categories OTHER than current_category
+    for cat, keywords in categories.items():
+        if current_category and cat.upper() == current_category.upper():
+            continue
+        if any(kw in text for kw in keywords):
+            return cat
+            
+    # If no other category is found, check current_category
+    if current_category:
+        keywords = categories.get(current_category.upper())
+        if keywords and any(kw in text for kw in keywords):
+            return current_category.upper()
+            
+    return None
+
+
+def _is_generic_followup(message: str) -> bool:
+    text = message.lower().strip()
+    text = re.sub(r"\s+", " ", text)
+    # List of generic words/phrases
+    generic_words = {
+        "yes", "no", "ok", "okay", "done", "not working", "tried", "still", "still not working",
+        "working", "fixed", "disabled", "offline", "online", "not loading", "loading", "error", 
+        "failed", "success", "cancel", "abort", "stop", "never mind", "forget it", "discard", 
+        "quit", "exit", "y", "n", "it works", "it is working", "all good", "sorted", "help",
+        "restart", "start over", "new issue", "reset"
+    }
+    if text in generic_words:
+        return True
+    # If the message is short and contains only words from generic list
+    words = text.split()
+    if len(words) <= 3:
+        word_set = {
+            "yes", "no", "ok", "okay", "not", "working", "work", "fixed", "disabled", 
+            "offline", "online", "loading", "error", "failed", "success", "done", 
+            "cancel", "abort", "stop", "never", "mind", "forget", "it", "discard", 
+            "quit", "exit", "y", "n", "still", "all", "good", "sorted", "help", 
+            "restart", "start", "over", "new", "issue", "reset", "this", "that", 
+            "is", "does", "not", "tried"
+        }
+        if all(w in word_set for w in words):
+            return True
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enterprise Intent Router
+# ─────────────────────────────────────────────────────────────────────────────
+
 class IntentRouter:
     """
     Stateless, deterministic intent router.
     Regex patterns are checked in strict priority order before any LLM call.
     """
 
-    def route(self, message: str) -> RouteResult:
-        """
-        Route an incoming message to an IntentType.
+    def route(self, message: str, conversation_locked: bool = False, current_category: Optional[str] = None) -> RouteResult:
+        import time
+        from app.core.logging_context import request_id_ctx, session_id_ctx
+        t0 = time.time()
+        req_id = request_id_ctx.get() or "N/A"
+        sess_id = session_id_ctx.get() or "N/A"
+        logger.info(">>> TRACE PIPELINE: IntentRouter.route Start | Request ID: %s | Session ID: %s | Message: %r | Locked: %s | Current Category: %s", req_id, sess_id, message, conversation_locked, current_category)
+        try:
+            res = self._route_internal(message, conversation_locked, current_category)
+            elapsed = (time.time() - t0) * 1000
+            logger.info("<<< TRACE PIPELINE: IntentRouter.route End | Request ID: %s | Session ID: %s | Elapsed: %.2f ms | Category: %s | Intent: %s", req_id, sess_id, elapsed, res.category, res.intent.value)
+            return res
+        except Exception as exc:
+            elapsed = (time.time() - t0) * 1000
+            logger.error("!!! TRACE PIPELINE ERROR: IntentRouter.route | Request ID: %s | Session ID: %s | Elapsed: %.2f ms | Error: %s", req_id, sess_id, elapsed, exc, exc_info=True)
+            raise
 
-        Priority (never violated):
-          1. TICKET_COMMAND
-          2. RESTART
-          3. CANCEL
-          4. STATUS
-          5. RESOLVED_KEYWORD
-          6. IT_ISSUE  (LLM-assisted)
-          7. GENERAL
-        """
+    def _route_internal(self, message: str, conversation_locked: bool = False, current_category: Optional[str] = None) -> RouteResult:
         normalized = normalize(message)
+
+        # Generic reply guard: if conversation is locked and it's a generic follow-up, do NOT reclassify
+        if conversation_locked and _is_generic_followup(message):
+            logger.info("IntentRouter: Generic follow-up matched during locked session | input=%r", normalized)
+            if _RESOLVED_PATTERNS.search(message):
+                return RouteResult(IntentType.RESOLVED_KEYWORD, None, normalized)
+            if _CANCEL_PATTERNS.search(message):
+                return RouteResult(IntentType.CANCEL, None, normalized)
+            if _RESTART_PATTERNS.search(message):
+                return RouteResult(IntentType.RESTART, None, normalized)
+            return RouteResult(IntentType.GENERAL, None, normalized)
 
         # 1. Ticket command — highest priority
         if _TICKET_PATTERNS.search(message):
             logger.info("IntentRouter: TICKET_COMMAND matched | input=%r", normalized)
-            cat = self._classify_category(message)
+            try:
+                cat = self._classify_category(message, current_category)
+            except TypeError:
+                cat = self._classify_category(message)
             return RouteResult(IntentType.TICKET_COMMAND, cat, normalized)
 
         # 2. Password reset command — priority above restart
@@ -239,7 +321,10 @@ class IntentRouter:
             return RouteResult(IntentType.GREETING, None, normalized)
 
         # 6. IT Issue — classify via intent_service (regex + optional LLM)
-        category = self._classify_category(message)
+        try:
+            category = self._classify_category(message, current_category)
+        except TypeError:
+            category = self._classify_category(message)
         if category and category != "GENERAL":
             logger.info("IntentRouter: IT_ISSUE → %s | input=%r", category, normalized)
             return RouteResult(IntentType.IT_ISSUE, category, normalized)
@@ -248,17 +333,30 @@ class IntentRouter:
         logger.info("IntentRouter: GENERAL fallback | input=%r", normalized)
         return RouteResult(IntentType.GENERAL, None, normalized)
 
-    def _classify_category(self, message: str) -> Optional[str]:
+    def _classify_category(self, message: str, current_category: Optional[str] = None) -> Optional[str]:
         """
         Delegate to intent_service.detect_intent() for category classification.
+        Checks deterministic local scanner first before using LLM.
         Returns None on any error so callers can fall through to GENERAL.
         """
+        explicit = _detect_explicit_category(message, current_category)
+        if explicit:
+            logger.info("IntentRouter: Explicit category detected locally: %s", explicit)
+            return explicit
+
+        import time
+        t0 = time.time()
+        logger.info(">>> TRACE STAGE: IntentRouter._classify_category Start | Msg: %s", message)
         try:
             from app.services.intent_service import detect_intent
             result = detect_intent(message)
+            elapsed = (time.time() - t0) * 1000
             if isinstance(result, dict):
+                logger.info("<<< TRACE STAGE: IntentRouter._classify_category End | Result: None (dict returned) | Elapsed: %.2f ms", elapsed)
                 return None
+            logger.info("<<< TRACE STAGE: IntentRouter._classify_category End | Result: %s | Elapsed: %.2f ms", result, elapsed)
             return result or None
         except Exception as exc:
-            logger.warning("IntentRouter._classify_category error: %s", exc)
+            elapsed = (time.time() - t0) * 1000
+            logger.warning("!!! TRACE STAGE ERROR: IntentRouter._classify_category failed | Elapsed: %.2f ms | Error: %s", elapsed, exc)
             return None

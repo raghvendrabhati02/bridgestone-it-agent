@@ -1,7 +1,6 @@
 import os
 import logging
 from dotenv import load_dotenv
-from app.core.retry_helper import with_retry
 from app.services.ai_provider import get_ai_provider
 
 logger = logging.getLogger("it-agent-backend")
@@ -12,7 +11,6 @@ if not os.getenv("GEMINI_API_KEY"):
     env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
     load_dotenv(dotenv_path=env_path)
 
-@with_retry(retries=3, backoff_factor=2.0)
 def generate_response(user_message: str, knowledge_context: str | None = None) -> str | dict:
     """
     Generates a response from the active AI provider based on the user's message/prompt.
@@ -21,3 +19,4 @@ def generate_response(user_message: str, knowledge_context: str | None = None) -
     """
     provider = get_ai_provider()
     return provider.generate_response(user_message, knowledge_context)
+

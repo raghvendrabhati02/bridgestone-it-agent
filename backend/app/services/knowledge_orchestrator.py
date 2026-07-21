@@ -46,6 +46,9 @@ class KnowledgeOrchestrator:
         try:
             kb_result = knowledge_service.search(message)
             article = kb_result.get("article")
+            if article and state.category and article.get("category") != state.category:
+                article = None
+
             if not article:
                 # Fallback to category search to ensure Knowledge Base always has priority
                 article = knowledge_service.search_by_category(state.category)

@@ -33,6 +33,8 @@ interface Ticket {
   priority?: string;
   sla_hours?: number;
   servicenow_id?: string;
+  servicenow_number?: string;
+  local_ticket_id?: string;
   sla_state?: string;
   sla_breached?: boolean;
 }
@@ -131,7 +133,7 @@ export default function HomeView({
       </section>
 
       {/* PRIMARY CARDS */}
-      <section className="flex-none grid grid-cols-1 md:grid-cols-2 gap-4">
+      <section className="flex-none grid grid-cols-1 gap-4">
 
         {/* IT Support */}
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden flex flex-col hover:border-[#E30613]/30 hover:shadow-sm transition-all">
@@ -167,43 +169,6 @@ export default function HomeView({
               className="mt-auto flex items-center justify-center gap-1.5 w-full py-2 bg-[#E30613] hover:bg-[#B8050F] active:bg-[#8B0309] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
             >
               Open IT Support
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* IT Actions */}
-        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden flex flex-col hover:border-[#E30613]/30 hover:shadow-sm transition-all">
-          <div className="h-[3px] bg-[#E30613]" />
-
-          <div className="px-5 py-4 flex flex-col gap-3.5 flex-1">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-red-50 border border-red-100 flex items-center justify-center flex-shrink-0">
-                <Zap className="w-4 h-4 text-[#E30613]" />
-              </div>
-              <div>
-                <h2 className="text-sm font-bold text-gray-900 leading-none">IT Actions</h2>
-                <p className="text-[11px] text-gray-400 mt-0.5">Automated device tasks, no waiting</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 flex-1">
-              {ACTION_FEATURES.map(({ Icon, label }) => (
-                <div
-                  key={label}
-                  className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-100 rounded-lg"
-                >
-                  <Icon className="w-3.5 h-3.5 text-[#E30613] flex-shrink-0" />
-                  <span className="text-xs font-medium text-gray-700 leading-tight">{label}</span>
-                </div>
-              ))}
-            </div>
-
-            <button
-              onClick={() => setActiveView("actions")}
-              className="flex items-center justify-center gap-1.5 w-full py-2 bg-[#E30613] hover:bg-[#B8050F] active:bg-[#8B0309] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
-            >
-              Open IT Actions
               <ChevronRight className="w-3.5 h-3.5" />
             </button>
           </div>

@@ -4,17 +4,16 @@ import os
 from sqlalchemy.orm import Session
 from app.database.models.ticket import Ticket
 from app.database.models.workflow_models import TicketComment, KnowledgeDraft
-from app.core.retry_helper import with_retry
 
 logger = logging.getLogger("it-agent-backend")
 
 class KnowledgeGenerationService:
     @staticmethod
-    @with_retry(retries=3, backoff_factor=2.0)
     def generate_kb_summary(ticket_details: dict) -> dict:
         """
         Uses Gemini to generate structured knowledge article contents from a resolved ticket.
         """
+
         from app.services.ai_provider import get_ai_provider
         provider = get_ai_provider()
         

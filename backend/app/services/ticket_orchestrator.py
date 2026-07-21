@@ -21,6 +21,7 @@ Design contract:
 from __future__ import annotations
 
 import logging
+import traceback
 from typing import TYPE_CHECKING, Optional
 
 import app.services.conversation_memory as memory
@@ -51,23 +52,44 @@ class TicketOrchestrator:
         """
         from app.services.ticket_service import create_ticket
 
+        logger.info(
+            ">>> ENTRY [TicketOrchestrator.create]: session_id=%s, username=%s, "
+            "category=%s, phase=%s",
+            state.session_id,
+            username,
+            state.category,
+            getattr(state.phase, 'value', str(state.phase)),
+        )
+
         # Build issue description from conversation history
         hist = memory.get_history(state.session_id)
         if hist:
             # Use the first user message as the canonical description
             user_msgs = [m["text"] for m in hist if m.get("sender") == "user"]
             issue_desc = user_msgs[0] if user_msgs else hist[0].get("text", "IT Support Issue")
+            logger.info(
+                "[TicketOrchestrator.create] History has %d entries, %d user messages. "
+                "Using issue_desc='%.120s'",
+                len(hist),
+                len(user_msgs),
+                issue_desc,
+            )
         else:
             issue_desc = state.active_issue or "IT Support Issue"
+            logger.info(
+                "[TicketOrchestrator.create] No conversation history found — "
+                "using active_issue='%.120s'",
+                issue_desc,
+            )
 
         category = state.category or "GENERAL"
 
         logger.info(
-            "TicketOrchestrator: Creating ticket — category=%s, created_by=%s, "
-            "description='%s...'",
+            "[TicketOrchestrator.create] Calling ticket_service.create_ticket with "
+            "category=%s, created_by=%s, description='%.120s'",
             category,
             username,
-            issue_desc[:60],
+            issue_desc,
         )
 
         try:
@@ -78,16 +100,22 @@ class TicketOrchestrator:
             )
 
             logger.info(
-                "TicketOrchestrator: Ticket created — id=%s, type=%s, status=%s",
+                "<<< EXIT [TicketOrchestrator.create]: ticket_id=%s, request_type=%s, "
+                "status=%s, servicenow_number=%s, servicenow_id=%s, error=%s",
                 ticket.get("ticket_id"),
                 ticket.get("request_type"),
                 ticket.get("status"),
+                ticket.get("servicenow_number"),
+                ticket.get("servicenow_id"),
+                ticket.get("error"),
             )
             return ticket
 
         except Exception as exc:
             logger.error(
-                "TicketOrchestrator: Failed to create ticket: %s", exc
+                "!!! EXCEPTION [TicketOrchestrator.create]: %s\n%s",
+                exc,
+                traceback.format_exc(),
             )
             return {
                 "error": True,

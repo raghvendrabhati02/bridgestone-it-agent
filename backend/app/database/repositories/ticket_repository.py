@@ -18,6 +18,7 @@ class TicketRepository:
         sla_hours: int,
         status: str = "NEW",
         servicenow_id: str = None,
+        servicenow_number: str = None,
         created_by: str = None,
         request_type: str = None,
         manager: str = None,
@@ -37,6 +38,8 @@ class TicketRepository:
         ticket.sla_hours = sla_hours
         ticket.status = status
         ticket.servicenow_id = servicenow_id
+        if servicenow_number:
+            ticket.servicenow_number = servicenow_number
         ticket.created_by = created_by
         ticket.created_at = datetime.utcnow()
 

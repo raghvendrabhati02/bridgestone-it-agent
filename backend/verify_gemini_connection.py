@@ -9,8 +9,10 @@ def test_connection():
         print("Error: GEMINI_API_KEY is not defined in backend/.env.")
         return
 
+    model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
     print(f"Loaded API key with prefix: {api_key[:6]}...")
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    print(f"Using model: {model}")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     
     print(f"Sending POST request to: {url}")
     payload = {

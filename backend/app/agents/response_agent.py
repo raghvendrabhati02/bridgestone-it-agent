@@ -119,7 +119,7 @@ class ResponseAgent:
             "1. Empathy first: Acknowledge the user's issue and pain point warmly before discussing diagnostics or next steps.\n"
             "2. Keep it conversational: NEVER say robotic phrases like 'I see you are having an issue with X.', 'Troubleshooting was unsuccessful', or dump raw diagnostic keys.\n"
             "3. Reference history: Scan the conversation history. If the user already answered a question (e.g., they are on home Wi-Fi or getting Error 809), acknowledge and refer to it naturally (e.g., 'Since you mentioned you are on home Wi-Fi...'). Do NOT ask it again.\n"
-            "4. Explain the check: Tell the user what system or tool you are currently checking (e.g., 'I'm querying Active Directory to check for any lockouts...').\n"
+            "4. Guide the check: Guide the user to check their status or perform steps collaboratively. Never claim to check, run diagnostics, or verify anything yourself (e.g. use 'Let's check your VPN status together' or 'Could you tell me what status your VPN client currently shows?').\n"
             "5. Present options: When asking for details like error codes, offer clear multiple-choice options to make it easy for the user.\n"
             "6. Summarize first: Always provide a clear, user-friendly summary of observations and hypotheses before recommending a fix, asking for approval, or initiating a support ticket.\n"
             "7. Write 2-4 sentences maximum. Be direct, helpful, and colleague-like.\n"
@@ -329,46 +329,42 @@ class ResponseAgent:
         if plan_action == "REQUEST_APPROVAL" or approval_needed:
             hyp_reason = ""
             if hypotheses:
-                hyp_reason = f" Based on the diagnostics, {hypotheses[0].lower().rstrip('.')}."
+                hyp_reason = f" Based on what you've described, {hypotheses[0].lower().rstrip('.')}."
             if recommended_action == "VPN_ACCESS_RESTORATION":
-                obs_summary = "I've checked the VPN connection and gateway. The gateway is online, but your account access permissions are set to disabled."
+                obs_summary = "Based on what you've told me, we can submit a VPN access restoration request to re-enable your account."
                 return (
-                    f"{obs_summary}{hyp_reason} I can submit an access restoration request to re-enable your account. "
-                    f"Would you like me to proceed?"
+                    f"{obs_summary}{hyp_reason} Would you like me to proceed with this request?"
                 )
             if recommended_action == "SOFTWARE_INSTALLATION":
                 target_software = sw_name or "requested software"
-                obs_summary = f"I've verified the software catalog and your local device privileges for {target_software}. It is approved, but your account lacks administrative installation permissions."
+                obs_summary = f"For installing {target_software}, since standard installations require manager approval and administrator permissions, we should submit an installation request."
                 return (
-                    f"{obs_summary}{hyp_reason} I can submit an installation request on your behalf through the IT portal. "
-                    f"Shall I go ahead?"
+                    f"{obs_summary}{hyp_reason} I can submit this request on your behalf through the IT portal. Shall I go ahead?"
                 )
             if recommended_action == "OUTLOOK_RECONFIGURATION":
-                obs_summary = "I've completed the Outlook diagnostics. The Exchange server is online, but your local mail profile appears out of sync."
+                obs_summary = "Based on the Outlook sync symptoms you described, reconfiguring your local Outlook mail profile should restore proper sync."
                 return (
-                    f"{obs_summary}{hyp_reason} I recommend reconfiguring your local Outlook mail profile to restore proper sync. "
-                    f"Would you like me to initiate this?"
+                    f"{obs_summary}{hyp_reason} We can submit a request to assist with this reconfiguration. Would you like me to initiate this?"
                 )
             if recommended_action == "NETWORK_RESET":
-                obs_summary = "I've analyzed your network interface. The connection shows latency or packet loss."
+                obs_summary = "If you are seeing latency or packet loss, I recommend resetting your local network adapter configuration to clear the routing cache."
                 return (
-                    f"{obs_summary}{hyp_reason} I recommend resetting your local network adapter configuration to clear the routing cache. "
-                    f"Shall I run the network reset?"
+                    f"{obs_summary}{hyp_reason} Could you try resetting your adapter, or would you like me to raise a ticket for network assistance?"
                 )
             obs_desc = f" {observations[0].lower()}" if observations else ""
             return (
-                f"I've checked the system diagnostics and found that{obs_desc}.{hyp_reason} "
+                f"Based on what you've described,{obs_desc}.{hyp_reason} "
                 f"I recommend proceeding with {recommended_action.replace('_', ' ').lower() if recommended_action else 'a corrective action'}. "
                 f"Shall I initiate the request?"
             )
 
         # 2. Escalation — explain what was found before escalating
         if plan_action == "CREATE_TICKET" or escalation_needed:
-            obs_summary = f" Diagnostics check showed: {observations[0].lower().rstrip('.')}." if observations else ""
+            obs_summary = f" Reported issue: {observations[0].lower().rstrip('.')}." if observations else ""
             hyp_summary = f" This is likely caused by {hypotheses[0].lower().rstrip('.')}." if hypotheses else ""
             return (
-                f"I've run through the initial troubleshooting steps, but it looks like we need support from our L2 IT engineering team to resolve this.{obs_summary}{hyp_summary} "
-                f"I'm going to create a ServiceNow support ticket and assign it to the correct group so they can follow up with you directly."
+                f"It looks like we need support from our L2 IT engineering team to resolve this.{obs_summary}{hyp_summary} "
+                f"I can create a ServiceNow support ticket and assign it to the correct group so they can follow up with you directly. Shall we proceed?"
             )
 
         # 3. Execute Action (post-approval)
@@ -390,7 +386,7 @@ class ResponseAgent:
         if observations or findings:
             explanation = ""
             if observations:
-                explanation = f"I ran the diagnostic checks and found that "
+                explanation = f"Based on what you've described, "
                 if len(observations) >= 2:
                     explanation += f"{observations[0].lower().rstrip('.')} and {observations[1].lower()}"
                 else:
@@ -416,14 +412,14 @@ class ResponseAgent:
 
         if cat_key == "VPN":
             ack = "I'm sorry you're running into VPN connection issues. Let's get that resolved."
-            checking = "I'm going to run a quick check on the corporate VPN gateway status and check your user account permissions."
+            checking = "Let's verify your VPN status and account permissions together."
             
             if vpn_error and vpn_conn:
-                return f"{ack} Since you mentioned you are seeing a {vpn_error} while connected via {vpn_conn}, {checking} Let's verify the gateway access."
+                return f"{ack} Since you mentioned you are seeing a {vpn_error} while connected via {vpn_conn}, {checking} Could you check if the VPN client is fully updated?"
             elif vpn_error:
-                return f"{ack} Since you are getting a {vpn_error}, {checking} While I verify the gateway access, are you connected via Wi-Fi or wired ethernet?"
+                return f"{ack} Since you are getting a {vpn_error}, {checking} Could you tell me if you are connected via Wi-Fi or wired ethernet?"
             elif vpn_conn:
-                return f"{ack} Since you are connected to {vpn_conn}, {checking} While I do that, are you getting a specific error message, like a Connection Timeout (Error 809 / 868) or Authentication Denied?"
+                return f"{ack} Since you are connected to {vpn_conn}, {checking} Could you tell me if you are getting a specific error message, like a Connection Timeout (Error 809 / 868) or Authentication Denied?"
             else:
                 return (
                     f"{ack} {checking} In the meantime, could you tell me: are you seeing a specific error or symptom?\n"
@@ -435,10 +431,10 @@ class ResponseAgent:
 
         elif cat_key == "OUTLOOK":
             ack = "I understand Outlook is giving you trouble. Let's get your email sync working."
-            checking = "I will query your mailbox sync status and check our Exchange server connectivity."
+            checking = "Let's check your Outlook profile settings and connection status."
             
             if outlook_symptom and outlook_mode:
-                return f"{ack} Since you are experiencing Outlook {outlook_symptom} on your {outlook_mode}, {checking} Let's inspect the server logs."
+                return f"{ack} Since you are experiencing Outlook {outlook_symptom} on your {outlook_mode}, {checking} Could you tell me if you are able to access Outlook on the web?"
             elif outlook_symptom:
                 return f"{ack} Since Outlook is {outlook_symptom}, {checking} Are you using the desktop app, web version (OWA), or mobile app?"
             elif outlook_mode:
@@ -451,10 +447,10 @@ class ResponseAgent:
         elif cat_key == "SOFTWARE_INSTALLATION":
             target = sw_name or "the application"
             ack = f"Getting {target} installed should be quick and easy."
-            checking = f"I'm going to search our approved software catalog and check if you have local admin permissions."
+            checking = f"Let's look up {target} in our approved software catalog."
             
             if sw_error == "admin":
-                return f"{ack} Since you are seeing an administrator privilege warning, {checking} Let me check if your machine has self-service privileges enabled."
+                return f"{ack} Since you are seeing an administrator privilege warning, {checking} Let me guide you to request administrative privileges or raise a request."
             elif sw_name:
                 return f"{ack} {checking} Let's verify if the installation is allowed on your device."
             else:
@@ -462,40 +458,39 @@ class ResponseAgent:
 
         elif cat_key == "NETWORK":
             ack = "I'm sorry your network connection is running slow or dropping; that is always a hassle."
-            checking = "I will check your network interface status and test for packet loss."
+            checking = "Let's test the network speed and connection stability."
             
             if net_symptom and net_scope == "down":
-                return f"{ack} Since your entire connection is {net_scope} with {net_symptom}, {checking} Let's check the gateway response."
+                return f"{ack} Since your entire connection is {net_scope} with {net_symptom}, {checking} Could you check if your router is powered on and cables are secure?"
             elif net_symptom:
                 return f"{ack} Since you are experiencing {net_symptom}, {checking} Are you able to access any external websites (like google.com) normally?"
             elif net_scope:
-                return f"{ack} Since your connection is {net_scope}, {checking} Let's verify if we detect network packet loss."
+                return f"{ack} Since your connection is {net_scope}, {checking} Could you run a quick ping test to see if there is packet loss?"
             else:
                 return f"{ack} {checking} In the meantime, are other websites loading normally (like google.com), or is all internet access down?"
 
         elif cat_key == "PASSWORD_RESET":
             ack = "I can definitely help reset your password or unlock your account."
-            checking = "I am querying our Active Directory domain controllers to inspect your account lockout status."
+            checking = "Let's verify your identity and locate the correct system for reset."
             return f"{ack} {checking} Is this password reset for your primary Windows laptop login, or for a specific application like SAP?"
 
         elif cat_key == "SAP":
             ack = "I understand SAP is throwing errors. Let's look into it."
-            checking = "I'm checking the SAP Basis server health and database connectivity."
+            checking = "Let's look into the error together."
             return f"{ack} {checking} Could you let me know: what is the exact error code or transaction code (T-code) you are attempting to run?"
 
         elif cat_key == "PRINTER":
             ack = "I'm sorry you're dealing with printer issues."
-            checking = "I will query the print spooler service and check the active printer queue status."
+            checking = "Let's check the print spooler status and settings."
             return f"{ack} {checking} Is the printer showing as 'Offline' in your settings, or are your print jobs getting stuck in the queue?"
 
         elif cat_key == "HARDWARE":
             ack = "I'm sorry you're experiencing hardware trouble with your device."
-            checking = "I'll query our device asset inventory database to check your device type and warranty."
+            checking = "Let's verify the device details together."
             return f"{ack} {checking} Could you let me know: is there physical damage, or is a component like the display screen or keyboard failing?"
 
         # Default GENERAL
         return (
-            "I understand you're experiencing an IT issue. Let's get that diagnosed and fixed. "
-            "I'm going to run a general system health check on your workstation. "
+            "I understand you're experiencing an IT issue. Let's get that diagnosed and fixed together. "
             "Could you share a bit more detail about what error messages or symptoms you are seeing?"
         )

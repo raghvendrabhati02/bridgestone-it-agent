@@ -62,6 +62,32 @@ from app.services.troubleshooting_service import TroubleshootingSession
 logger = logging.getLogger("it-agent-backend")
 
 
+def _contains_category_keyword(message: str, category: str) -> bool:
+    text = message.lower()
+    category = category.upper()
+    if category == "VPN":
+        return any(kw in text for kw in ["vpn", "globalprotect", "global protect", "remote access", "anyconnect", "cisco"])
+    if category == "OUTLOOK":
+        return any(kw in text for kw in ["outlook", "email", "mail", "exchange", "mailbox", "calendar"])
+    if category == "PRINTER":
+        return any(kw in text for kw in ["printer", "printing", "print", "scanner", "spooler"])
+    if category == "TEAMS":
+        return any(kw in text for kw in ["teams", "microsoft teams", "teams call", "teams meeting", "teams chat"])
+    if category == "WIFI":
+        return any(kw in text for kw in ["wifi", "wi-fi", "wireless", "bs-guest", "bsguest", "guest wifi"])
+    if category == "PASSWORD_RESET":
+        return any(kw in text for kw in ["password", "reset", "forgot", "expired", "unlock", "account locked"])
+    if category == "SOFTWARE_INSTALLATION":
+        return any(kw in text for kw in ["software", "install", "application", "setup", "uninstall", "download", "adobe", "citrix", "vs code", "vscode"])
+    if category == "SAP":
+        return "sap" in text
+    if category == "DEVICE_HEALTH":
+        return any(kw in text for kw in ["slow", "sluggish", "lagging", "freezing", "frozen", "hang", "cpu", "memory", "performance", "disk"])
+    if category == "IT_ASSET_ALLOCATION":
+        return any(kw in text for kw in ["laptop", "hardware request", "asset", "joining kit"])
+    return False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase enum — single source of truth for conversation state
 # ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +164,45 @@ class SessionState:
         self.attempted_actions = []
         self.clarifying_questions_asked = 0
         self.troubleshooting_steps_suggested = 0
+        self.ticket_offered = False
+        self.ticket_declined = False
+        self.conversation_locked = False
+
+    @property
+    def ticket_offered(self) -> bool:
+        if not isinstance(self.tool_result, dict):
+            self.tool_result = {}
+        return self.tool_result.get("ticket_offered", False)
+
+    @ticket_offered.setter
+    def ticket_offered(self, val: bool) -> None:
+        if not isinstance(self.tool_result, dict):
+            self.tool_result = {}
+        self.tool_result["ticket_offered"] = val
+
+    @property
+    def ticket_declined(self) -> bool:
+        if not isinstance(self.tool_result, dict):
+            self.tool_result = {}
+        return self.tool_result.get("ticket_declined", False)
+
+    @ticket_declined.setter
+    def ticket_declined(self, val: bool) -> None:
+        if not isinstance(self.tool_result, dict):
+            self.tool_result = {}
+        self.tool_result["ticket_declined"] = val
+
+    @property
+    def conversation_locked(self) -> bool:
+        if not isinstance(self.tool_result, dict):
+            self.tool_result = {}
+        return self.tool_result.get("conversation_locked", False)
+
+    @conversation_locked.setter
+    def conversation_locked(self, val: bool) -> None:
+        if not isinstance(self.tool_result, dict):
+            self.tool_result = {}
+        self.tool_result["conversation_locked"] = val
 
     @property
     def is_troubleshooting(self) -> bool:
@@ -282,12 +347,77 @@ class ConversationService:
         keywords = ["ticket", "incident", "escalate", "support request", "sr"]
         return any(kw in normalized for kw in keywords)
 
+    def _save_category_state(self, state) -> None:
+        if not isinstance(state.tool_result, dict):
+            state.tool_result = {}
+        if "_category_states" not in state.tool_result:
+            state.tool_result["_category_states"] = {}
+            
+        current_step = 1
+        if state.troubleshooting_session:
+            current_step = state.troubleshooting_session.current_step
+            
+        state.tool_result["_category_states"][state.category] = {
+            "phase": state.phase.value if hasattr(state.phase, 'value') else state.phase,
+            "active_issue": state.active_issue or "",
+            "current_step": current_step,
+            "ticket_offered": state.ticket_offered,
+            "ticket_declined": state.ticket_declined,
+            "conversation_locked": state.conversation_locked,
+        }
+
+    def _restore_category_state(self, state, category: str) -> bool:
+        if not isinstance(state.tool_result, dict):
+            return False
+        states = state.tool_result.get("_category_states", {})
+        cached = states.get(category)
+        if not cached:
+            state.reset_troubleshooting()
+            return False
+            
+        try:
+            state.phase = ConversationPhase(cached["phase"])
+        except ValueError:
+            state.phase = ConversationPhase.UNDERSTANDING
+            
+        state.active_issue = cached.get("active_issue", "")
+        state.ticket_offered = cached.get("ticket_offered", False)
+        state.ticket_declined = cached.get("ticket_declined", False)
+        state.conversation_locked = cached.get("conversation_locked", False)
+        
+        step = cached.get("current_step", 1)
+        from app.services.knowledge_service import search_by_category
+        article = search_by_category(category)
+        if article:
+            from app.services.troubleshooting_service import start
+            session = start(article.get("article_id"))
+            if session:
+                session.current_step = step
+                state.troubleshooting_session = session
+            else:
+                state.troubleshooting_session = None
+        else:
+            state.troubleshooting_session = None
+            
+        return True
+
     def _transition(self, state: SessionState, next_phase: ConversationPhase, reason: str) -> None:
         self._tl.log_transition(state.session_id, state.phase, next_phase, reason)
         state.phase = next_phase
         from app.services.observability_service import log_event
         p_val = next_phase.value if hasattr(next_phase, 'value') else str(next_phase)
         log_event("Conversation phase transition", phase=p_val, escalation_reason=reason)
+        
+        # State machine flag updates
+        if next_phase in (ConversationPhase.TROUBLESHOOTING, ConversationPhase.AI_TROUBLESHOOTING):
+            state.conversation_locked = True
+        elif next_phase == ConversationPhase.WAITING_TICKET_CONFIRMATION:
+            state.ticket_offered = True
+        elif next_phase in (ConversationPhase.RESOLVED, ConversationPhase.ESCALATED):
+            state.conversation_locked = False
+            state.ticket_offered = False
+            state.ticket_declined = False
+
         if p_val in ("RESOLVED", "ESCALATED"):
             log_event("Conversation completed", category=state.category, phase=p_val, ticket_id=state.active_ticket)
 
@@ -346,6 +476,16 @@ class ConversationService:
 
 
     def _handle_understanding_or_diagnosing(self, state, message, username):
+        if state.ticket_declined:
+            # User previously declined a ticket, but the issue still exists.
+            bot_text = (
+                f"I understand the {state.category} issue still exists. "
+                f"However, we have exhausted all recommended troubleshooting steps and you previously declined creating a ticket. "
+                f"Would you like me to go ahead and create a ServiceNow ticket now, or is there anything else I can assist you with?"
+            )
+            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "offering ticket again after decline")
+            return self._reply(state, message, bot_text, "ASK_MORE_INFO")
+
         """
         Gemini-first reasoning handler (UNDERSTANDING / DIAGNOSING phases).
 
@@ -473,7 +613,11 @@ class ConversationService:
                                  f"Gemini signalled {intent} — offering ticket")
                 prompt = format_ticket_prompt()
                 if gemini_response:
-                    prompt = f"{gemini_response}\n\n{format_ticket_prompt()}"
+                    has_ticket_offering = any(kw in gemini_response.lower() for kw in ["create a ticket", "create a servicenow ticket", "open a ticket", "escalate to", "support ticket", "raise a ticket", "would you like me to"])
+                    if has_ticket_offering:
+                        prompt = gemini_response
+                    else:
+                        prompt = f"{gemini_response}\n\n{format_ticket_prompt()}"
                 return self._reply(state, message, prompt, "ASK_MORE_INFO")
 
         # Log questions/steps if any
@@ -668,7 +812,11 @@ class ConversationService:
             )
             ticket_prompt = format_ticket_prompt()
             if response:
-                ticket_prompt = f"{response}\n\n{format_ticket_prompt()}"
+                has_ticket_offering = any(kw in response.lower() for kw in ["create a ticket", "create a servicenow ticket", "open a ticket", "escalate to", "support ticket", "raise a ticket", "would you like me to"])
+                if has_ticket_offering:
+                    ticket_prompt = response
+                else:
+                    ticket_prompt = f"{response}\n\n{format_ticket_prompt()}"
             return self._reply(state, message, ticket_prompt, "ASK_MORE_INFO")
 
         # ── Privileged operation detected mid-troubleshooting ─────────────────
@@ -801,8 +949,27 @@ class ConversationService:
 
     def _handle_waiting_ticket(self, state, message, username):
         approval = approval_service.detect_approval(message)
+        logger.info(
+            ">>> ENTRY [ConversationService._handle_waiting_ticket]: "
+            "session=%s, username=%s, category=%s, phase=%s, "
+            "user_message='%s', approval_status=%s",
+            state.session_id,
+            username,
+            state.category,
+            getattr(state.phase, 'value', str(state.phase)),
+            message,
+            approval.status,
+        )
         if approval.status == approval_service.ApprovalStatus.APPROVED:
-            ticket = self._tickets.create(state, username)
+            logger.info(">>> APPROVED BRANCH: Proceeding with ticket creation for session=%s (username=%s, category=%s)", state.session_id, username, state.category)
+            try:
+                ticket = self._tickets.create(state, username)
+                logger.info("<<< EXIT [ConversationService._handle_waiting_ticket]: Ticket creation returned: %s", ticket)
+            except Exception as exc:
+                import traceback
+                logger.error("!!! ERROR [ConversationService._handle_waiting_ticket]: Ticket creation failed with exception: %s\n%s", exc, traceback.format_exc())
+                raise
+
             if not ticket or ticket.get("error"):
                 # ServiceNow unavailable — transition to recovery phase
                 self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure — offering recovery")
@@ -836,7 +1003,7 @@ class ConversationService:
             return self._reply(state, message, bot_text, "TICKET_CREATED", ticket_created=True, ticket_id=tid, ticket_details=ticket)
         if approval.status == approval_service.ApprovalStatus.REJECTED:
             self._transition(state, ConversationPhase.UNDERSTANDING, "ticket declined by user")
-            state.reset_troubleshooting()
+            state.ticket_declined = True
             return self._reply(state, message, format_ticket_declined(), "ASK_MORE_INFO")
         return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
 
@@ -904,7 +1071,15 @@ class ConversationService:
             self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "user requested ticket creation")
             return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
 
-        ticket = self._tickets.create(state, username)
+        logger.info(">>> ENTRY [ConversationService._handle_ticket_command]: Creating ticket for session=%s (username=%s, category=%s)", state.session_id, username, state.category)
+        try:
+            ticket = self._tickets.create(state, username)
+            logger.info("<<< EXIT [ConversationService._handle_ticket_command]: Ticket creation returned: %s", ticket)
+        except Exception as exc:
+            import traceback
+            logger.error("!!! ERROR [ConversationService._handle_ticket_command]: Ticket creation failed with exception: %s\n%s", exc, traceback.format_exc())
+            raise
+
         if not ticket or ticket.get("error"):
             # ServiceNow unavailable — transition to recovery phase
             self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure — offering recovery")
@@ -1049,6 +1224,55 @@ class ConversationService:
         user_role: Optional[str] = None,
     ) -> dict:
         import time
+        from app.core.logging_context import request_id_ctx
+        t0 = time.time()
+        req_id = request_id_ctx.get() or "N/A"
+        logger.info(">>> TRACE PIPELINE START: ConversationService.handle_chat_turn | Request ID: %s | Session ID: %s | Msg: %s", req_id, session_id, message)
+        try:
+            res = self._handle_chat_turn_internal(session_id, message, username, user_role)
+            
+            # Log conversation state after the turn
+            try:
+                state = self._session_mgr.get(res.get("session_id"))
+                if state:
+                    ts = state.troubleshooting_session
+                    logger.info(
+                        "\n=== Conversation State ===\n"
+                        "Issue: %s\n"
+                        "Playbook: %s\n"
+                        "Step: %s\n"
+                        "Workflow: %s\n"
+                        "Locked: %s\n"
+                        "Ticket Offered: %s\n"
+                        "Ticket Declined: %s\n"
+                        "==========================",
+                        state.active_issue or "GENERAL",
+                        f"{state.category.lower()}_guide" if state.category else "N/A",
+                        ts.current_step if ts else "N/A",
+                        state.phase.value if hasattr(state.phase, 'value') else state.phase,
+                        state.conversation_locked,
+                        state.ticket_offered,
+                        state.ticket_declined
+                    )
+            except Exception as dbg_ex:
+                logger.warning("Debug logging conversation state failed: %s", dbg_ex)
+
+            elapsed = (time.time() - t0) * 1000
+            logger.info("<<< TRACE PIPELINE END: ConversationService.handle_chat_turn | Request ID: %s | Session ID: %s | Elapsed: %.2f ms", req_id, res.get("session_id"), elapsed)
+            return res
+        except Exception as exc:
+            elapsed = (time.time() - t0) * 1000
+            logger.error("!!! TRACE PIPELINE ERROR: ConversationService.handle_chat_turn | Request ID: %s | Session ID: %s | Elapsed: %.2f ms | Error: %s", req_id, session_id, elapsed, exc, exc_info=True)
+            raise
+
+    def _handle_chat_turn_internal(
+        self,
+        session_id: Optional[str],
+        message: str,
+        username: Optional[str] = None,
+        user_role: Optional[str] = None,
+    ) -> dict:
+        import time
         from app.core.logging_context import session_id_ctx, user_ctx, role_ctx, turn_start_time_ctx
         from app.services.observability_service import log_event
 
@@ -1058,11 +1282,28 @@ class ConversationService:
         from app.services.intent_router import IntentRouter, IntentType
 
         # 1. Route message — deterministic, priority-ordered
-        route = IntentRouter().route(message)
+        logger.info(">>> TRACE STAGE: Message Routing Start")
+        t_route = time.time()
+        
+        conversation_locked = False
+        current_cat = None
+        if session_id:
+            state_temp = self._session_mgr.get(session_id)
+            if state_temp:
+                conversation_locked = state_temp.conversation_locked
+        router = IntentRouter()
+        try:
+            route = router.route(message, conversation_locked, current_cat)
+        except TypeError:
+            route = router.route(message)
+        logger.info("<<< TRACE STAGE: Message Routing End | Category: %s | Intent: %s | Elapsed: %.2f ms", route.category, route.intent.value, (time.time() - t_route) * 1000)
 
         # 2. Session load or create (use route category for new sessions)
         detected_category = route.category or "GENERAL"
+        logger.info(">>> TRACE STAGE: Session Load/Create Start | Detected Category: %s", detected_category)
+        t_session = time.time()
         session_id, state = self._session_mgr.load_or_create(session_id, detected_category)
+        logger.info("<<< TRACE STAGE: Session Load/Create End | Session ID: %s | Phase: %s | Elapsed: %.2f ms", session_id, state.phase.value, (time.time() - t_session) * 1000)
 
 
 
@@ -1639,46 +1880,65 @@ class ConversationService:
         if route.intent == IntentType.IT_ISSUE:
             detected = route.category or "GENERAL"
             if detected != "GENERAL" and detected != state.category:
-                old = state.category
-                state.category = detected
-                state.reset_troubleshooting()
-                self._tl.log_transition(state.session_id, old, detected, "category switch")
-                # Transition to UNDERSTANDING, then immediately open the new session.
-                # _handle_understanding_or_diagnosing() will go through Gemini (or DiagnosticEngine
-                # fallback) and start KB TROUBLESHOOTING if confidence is high — preserving
-                # backward compatibility with existing category-switch tests.
-                self._transition(state, ConversationPhase.UNDERSTANDING, "Category switch — reset to UNDERSTANDING")
-                return self._handle_understanding_or_diagnosing(state, message, username)
+                should_switch = False
+                if not state.conversation_locked:
+                    should_switch = True
+                else:
+                    from app.services.intent_router import _is_generic_followup
+                    is_generic = _is_generic_followup(message)
+                    if not is_generic and _contains_category_keyword(message, detected):
+                        should_switch = True
+
+                if should_switch:
+                    old = state.category
+                    self._save_category_state(state)
+                    state.category = detected
+                    state.active_issue = detected
+                    self._restore_category_state(state, detected)
+                    self._tl.log_transition(state.session_id, old, detected, "category switch")
+                    
+                    if state.phase == ConversationPhase.UNDERSTANDING or not state.troubleshooting_session:
+                        self._transition(state, ConversationPhase.UNDERSTANDING, "Category switch — reset to UNDERSTANDING")
+                        return self._handle_understanding_or_diagnosing(state, message, username)
+                        
+                    # Immediately return the restored troubleshooting step to avoid executing
+                    # the phase handler on the correction message itself
+                    ts = state.troubleshooting_session
+                    step_details = troubleshooting_service.current_step(ts)
+                    if step_details:
+                        return self._reply(state, message, format_step(step_details), "ASK_MORE_INFO")
 
 
         # 6. Phase dispatch
         phase = state.phase
-
-        if phase in (ConversationPhase.UNDERSTANDING, ConversationPhase.DIAGNOSING):
-            return self._handle_understanding_or_diagnosing(state, message, username)
-
-        if phase == ConversationPhase.AI_TROUBLESHOOTING:
-            return self._handle_ai_troubleshooting(state, message, username)
-
-        if phase == ConversationPhase.TROUBLESHOOTING:
-            if not state.troubleshooting_session:
-                self._transition(state, ConversationPhase.UNDERSTANDING, "guard: ts lost — reset")
-                return self._handle_understanding_or_diagnosing(state, message, username)
-            return self._handle_troubleshooting(state, message, username)
-
-        if phase == ConversationPhase.VERIFYING:
-            return self._handle_verifying(state, message, username)
-
-        if phase == ConversationPhase.WAITING_ACTION_CONFIRMATION:
-            return self._handle_waiting_action(state, message, username)
-
-        if phase == ConversationPhase.WAITING_TICKET_CONFIRMATION:
-            return self._handle_waiting_ticket(state, message, username)
-
-        if phase == ConversationPhase.WAITING_SN_RECOVERY:
-            return self._handle_sn_recovery(state, message, username)
-
-        return self._handle_terminal(state, message, username)
+        logger.info(">>> TRACE STAGE: Phase Dispatch Start | Phase: %s", phase.value if hasattr(phase, 'value') else phase)
+        t_phase = time.time()
+        try:
+            if phase in (ConversationPhase.UNDERSTANDING, ConversationPhase.DIAGNOSING):
+                res = self._handle_understanding_or_diagnosing(state, message, username)
+            elif phase == ConversationPhase.AI_TROUBLESHOOTING:
+                res = self._handle_ai_troubleshooting(state, message, username)
+            elif phase == ConversationPhase.TROUBLESHOOTING:
+                if not state.troubleshooting_session:
+                    self._transition(state, ConversationPhase.UNDERSTANDING, "guard: ts lost — reset")
+                    res = self._handle_understanding_or_diagnosing(state, message, username)
+                else:
+                    res = self._handle_troubleshooting(state, message, username)
+            elif phase == ConversationPhase.VERIFYING:
+                res = self._handle_verifying(state, message, username)
+            elif phase == ConversationPhase.WAITING_ACTION_CONFIRMATION:
+                res = self._handle_waiting_action(state, message, username)
+            elif phase == ConversationPhase.WAITING_TICKET_CONFIRMATION:
+                res = self._handle_waiting_ticket(state, message, username)
+            elif phase == ConversationPhase.WAITING_SN_RECOVERY:
+                res = self._handle_sn_recovery(state, message, username)
+            else:
+                res = self._handle_terminal(state, message, username)
+            logger.info("<<< TRACE STAGE: Phase Dispatch End | Phase: %s | Elapsed: %.2f ms", phase.value if hasattr(phase, 'value') else phase, (time.time() - t_phase) * 1000)
+            return res
+        except Exception as exc:
+            logger.error("!!! TRACE STAGE ERROR: Phase Dispatch Failed | Phase: %s | Elapsed: %.2f ms | Error: %s", phase.value if hasattr(phase, 'value') else phase, (time.time() - t_phase) * 1000, exc, exc_info=True)
+            raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────

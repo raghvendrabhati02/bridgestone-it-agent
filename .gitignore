@@ -41,3 +41,6 @@ node_modules/
 out/
 dist/
 build/
+
+pg_data/
+pg_portable/

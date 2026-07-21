@@ -49,11 +49,16 @@ def format_step(step_details: Dict[str, Any]) -> str:
 def format_verification(verification_questions: Optional[List[str]] = None) -> str:
     """Format the solution verification prompt after all KB steps are complete."""
     base = "I've guided you through all the recommended troubleshooting steps."
-    question = (
-        verification_questions[0]
-        if verification_questions
-        else "Did that resolve your issue?"
-    )
+    if verification_questions:
+        check = verification_questions[0]
+        if not check.endswith("?"):
+            if check.lower().endswith("."):
+                check = check[:-1]
+            question = f"Can you confirm whether {check[0].lower() + check[1:]}? Did that resolve your issue?"
+        else:
+            question = f"{check} Did that resolve your issue?"
+    else:
+        question = "Did that resolve your issue?"
     return f"{base} {question}"
 
 

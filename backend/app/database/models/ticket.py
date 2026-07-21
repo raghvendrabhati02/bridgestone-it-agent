@@ -28,6 +28,7 @@ class Ticket(Base):
     sla_hours = Column(Integer, nullable=True)
     status = Column(String(50), default="NEW")  # Default to NEW
     servicenow_id = Column(String(100), nullable=True)
+    servicenow_number = Column(String(100), nullable=True)
     created_by = Column(String(100), nullable=True)  # Username of the creator
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

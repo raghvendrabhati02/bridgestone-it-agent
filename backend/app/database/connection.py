@@ -39,6 +39,21 @@ except Exception as e:
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# Automatic lightweight schema migration check for servicenow_number column
+try:
+    with engine.begin() as conn:
+        from sqlalchemy import text
+        if "sqlite" in DATABASE_URL:
+            cursor = conn.execute(text("PRAGMA table_info(tickets)"))
+            cols = [row[1] for row in cursor.fetchall()]
+            if cols and "servicenow_number" not in cols:
+                logger.info("Migrating SQLite DB: Adding column 'servicenow_number' to 'tickets' table.")
+                conn.execute(text("ALTER TABLE tickets ADD COLUMN servicenow_number VARCHAR(100)"))
+        elif "postgresql" in DATABASE_URL:
+            conn.execute(text("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS servicenow_number VARCHAR(100)"))
+except Exception as exc:
+    logger.debug("Database column migration check skipped: %s", exc)
+
 # ==============================================================================
 # Database Observability Hooks (SQLAlchemy event listeners)
 # ==============================================================================

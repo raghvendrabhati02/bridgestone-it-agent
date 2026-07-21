@@ -451,15 +451,9 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
     e.preventDefault();
     if (!editingArticle) return;
     const isNew = !editingArticle.article_id;
-<<<<<<< HEAD
     const url = isNew 
       ? "/api/admin/knowledge/articles" 
       : `/api/admin/knowledge/articles/${editingArticle.article_id}`;
-=======
-    const url = isNew
-      ? `${apiBaseUrl}/api/admin/knowledge/articles`
-      : `${apiBaseUrl}/api/admin/knowledge/articles/${editingArticle.article_id}`;
->>>>>>> 0faacec8 (Ignore local PostgreSQL portable files)
     const method = isNew ? "POST" : "PUT";
 
     try {
@@ -1185,7 +1179,6 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
                     { name: "Redis Memory Cache", state: healthStatus?.redis || "healthy", icon: <HardDrive className="w-4 h-4 text-orange-600" />, desc: "State machine tracking and lock buffers." },
                     { name: "ServiceNow Sync Gateway", state: healthStatus?.adapters?.ServiceNow?.status || "healthy", icon: <Terminal className="w-4 h-4 text-green-600" />, desc: "Bidirectional enterprise ticketing synchronization." },
                     { name: "Microsoft Entra ID Adapter", state: healthStatus?.adapters?.["Active Directory"]?.status || "healthy", icon: <Users className="w-4 h-4 text-indigo-600" />, desc: "Workforce directory and authentication state." },
-                    { name: "Enterprise Device Agent", state: "healthy", icon: <Activity className="w-4 h-4 text-red-600" />, desc: "Local workstation diagnostics (IT Actions module)." },
                   ].map((healthItem, idx) => (
                     <div key={idx} className="bg-white p-5 border border-[#E2E8F0] rounded-2xl shadow-xs space-y-3">
                       <div className="flex items-center justify-between">
@@ -1275,7 +1268,6 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
                     <div className="text-xs space-y-1 text-[#334155] font-bold uppercase">
                       <div className="flex justify-between"><span className="text-[#64748B]">Name:</span><span className="text-[#0F172A]">{selectedTicket.created_by}</span></div>
                       <div className="flex justify-between"><span className="text-[#64748B]">Department:</span><span className="text-[#0F172A]">Bridgestone Corporate IT</span></div>
-                      <div className="flex justify-between"><span className="text-[#64748B]">Linked Device:</span><span className="font-mono text-[#0F172A]">BS-EMP-WS09 (Windows 11 Enterprise)</span></div>
                     </div>
                   </div>
 

@@ -10,8 +10,6 @@ import { NetworkError, apiFetch, HttpError } from "@/lib/apiClient";
 
 // ── Existing modular components (unchanged) ───────────────────
 import AiAssistant from "@/components/AiAssistant";
-import DeviceDashboard from "@/components/DeviceDashboard";
-import ExecutionCenter from "@/components/ExecutionCenter";
 import AnalyticsView from "@/components/AnalyticsView";
 import KnowledgeBase from "@/components/KnowledgeBase";
 
@@ -19,7 +17,6 @@ import KnowledgeBase from "@/components/KnowledgeBase";
 import AppShell from "@/components/AppShell";
 import HomeView from "@/components/HomeView";
 import SupportChatView from "@/components/SupportChatView";
-import ActionsView from "@/components/ActionsView";
 import MyTicketsView from "@/components/MyTicketsView";
 import ITSMQueueView from "@/components/ITSMQueueView";
 import ManagerPortal from "@/components/ManagerPortal";
@@ -206,7 +203,6 @@ export default function Home() {
   backendOnlineRef.current = backendOnline;
 
   // ── Settings Configuration States ───────────────────────────
-  const [deviceAgentUrl, setDeviceAgentUrl] = useState("https://agent.bridgestone.local/api");
   const [serviceNowSubdomain, setServiceNowSubdomain] = useState("bridgestone.service-now.com");
   const [graphTenantId, setGraphTenantId] = useState("e8b839f2-28e4-4ba9-b3a1-ef17b96e6259");
   const [graphClientId, setGraphClientId] = useState("3b29c991-8fa4-46c5-8bc2-a27929cb91a2");
@@ -728,12 +724,7 @@ export default function Home() {
             />
           )}
 
-          {/* ══════════════════════════════════════════════════════ */}
-          {/* 3. IT ACTIONS — automated task launcher                */}
-          {/* ══════════════════════════════════════════════════════ */}
-          {activeView === "actions" && (
-            <ActionsView user={user} token={token} />
-          )}
+
 
           {/* ══════════════════════════════════════════════════════ */}
           {/* 4. MY TICKETS — employee ticket tracker                */}
@@ -787,23 +778,7 @@ export default function Home() {
             </div>
           )}
 
-          {/* ══════════════════════════════════════════════════════ */}
-          {/* 6. EXECUTION CENTER (admin)                           */}
-          {/* ══════════════════════════════════════════════════════ */}
-          {activeView === "execution_center" && (
-            <div className="h-full">
-              <ExecutionCenter user={user} token={token} />
-            </div>
-          )}
 
-          {/* ══════════════════════════════════════════════════════ */}
-          {/* 7. ENTERPRISE DEVICES (admin)                         */}
-          {/* ══════════════════════════════════════════════════════ */}
-          {activeView === "devices" && (
-            <div className="h-full">
-              <DeviceDashboard user={user} token={token} />
-            </div>
-          )}
 
           {/* ══════════════════════════════════════════════════════ */}
           {/* 8. KNOWLEDGE BASE (admin)                             */}
@@ -845,17 +820,7 @@ export default function Home() {
                     API Configurations
                   </span>
                   <div className="space-y-3.5 text-xs font-bold text-[#475569]">
-                    <div className="space-y-1">
-                      <label className="text-[10px] text-[#64748B] block font-bold uppercase">
-                        Enterprise Device Agent
-                      </label>
-                      <input
-                        type="text"
-                        value={deviceAgentUrl}
-                        onChange={(e) => setDeviceAgentUrl(e.target.value)}
-                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 focus:outline-none"
-                      />
-                    </div>
+
 
                     <div className="space-y-1">
                       <label className="text-[10px] text-[#64748B] block font-bold uppercase">

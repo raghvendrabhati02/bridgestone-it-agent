@@ -91,6 +91,24 @@ LLM_LATENCY_SECONDS = Histogram(
     "LLM API response latency in seconds"
 )
 
+LLM_REQUEST_DURATION_SECONDS = Histogram(
+    "llm_request_duration_seconds",
+    "LLM Request processing latency in seconds",
+    ["model", "fallback_used"]
+)
+
+LLM_VERIFY_DURATION_SECONDS = Histogram(
+    "llm_verify_duration_seconds",
+    "LLM Verification processing latency in seconds"
+)
+
+LLM_FALLBACK_DURATION_SECONDS = Histogram(
+    "llm_fallback_duration_seconds",
+    "LLM Fallback request processing latency in seconds",
+    ["target_model", "fallback_model"]
+)
+
+
 LLM_TOKEN_USAGE_TOTAL = Counter(
     "llm_token_usage_total",
     "Total LLM tokens consumed",
@@ -106,6 +124,34 @@ LLM_FALLBACK_EVENTS_TOTAL = Counter(
     "llm_fallback_events_total",
     "Total agent fallback trigger occurrences"
 )
+
+# Verification, initialization, and fallback metrics
+LLM_VERIFY_TOTAL = Counter(
+    "llm_verify_total",
+    "Total verification attempts"
+)
+
+LLM_VERIFY_SUCCESS_TOTAL = Counter(
+    "llm_verify_success_total",
+    "Total successful verification attempts"
+)
+
+LLM_VERIFY_FAILURE_TOTAL = Counter(
+    "llm_verify_failure_total",
+    "Total failed verification attempts"
+)
+
+LLM_PROVIDER_INITIALIZATION_TOTAL = Counter(
+    "llm_provider_initialization_total",
+    "Total provider initialization occurrences"
+)
+
+LLM_MODEL_FALLBACK_TOTAL = Counter(
+    "llm_model_fallback_total",
+    "Total fallback events to secondary models",
+    ["target_model", "fallback_model", "reason"]
+)
+
 
 # ==============================================================================
 # 5. BUSINESS OPERATIONS METRICS
