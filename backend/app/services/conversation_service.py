@@ -50,10 +50,11 @@ _CONTINUATION_PATTERNS = re.compile(
 _EXPLICIT_YES_PATTERNS = re.compile(
     r"\b("
     r"yes|yeah|yep|y|ok|okay|sure|please\s+do|go\s+ahead|do\s+it|approved|approve|proceed|"
+    r"create|create\s+it|yes\s+create|yes\s+please\s+create|please\s+create|"
     r"create\s+ticket|create\s+a\s+ticket|create\s+incident|create\s+an\s+incident|"
     r"raise\s+ticket|raise\s+a\s+ticket|raise\s+incident|raise\s+an\s+incident|"
     r"open\s+ticket|open\s+a\s+ticket|open\s+incident|open\s+an\s+incident|"
-    r"okay\s+create|please\s+create|escalate"
+    r"okay\s+create|escalate"
     r")\b",
     re.IGNORECASE,
 )
@@ -368,15 +369,45 @@ class ConversationService:
         except Exception:
             return None
 
-    def _is_ticket_request(self, message: str) -> bool:
-        from app.services.intent_router import IntentRouter, IntentType
-        route = IntentRouter().route(message)
-        if route.intent == IntentType.TICKET_COMMAND:
-            return True
-        # Fallback keyword checks for context-specific ticket requests
-        normalized = message.lower().strip()
-        keywords = ["ticket", "incident", "escalate", "support request", "sr"]
-        return any(kw in normalized for kw in keywords)
+    def _create_ticket_with_logging(self, state, username: Optional[str] = None) -> dict:
+        """Helper to invoke TicketOrchestrator with phase assertion, entry logging, and execution tracking."""
+        import time, uuid
+        from app.core.logging_context import correlation_id_ctx
+        t_start = time.monotonic()
+        corr_id = correlation_id_ctx.get()
+        if not corr_id:
+            corr_id = f"corr-{uuid.uuid4().hex[:8]}"
+            correlation_id_ctx.set(corr_id)
+
+        allowed_creation_phases = (
+            ConversationPhase.WAITING_TICKET_CONFIRMATION,
+            ConversationPhase.AI_TROUBLESHOOTING,
+            ConversationPhase.DIAGNOSING,
+            ConversationPhase.UNDERSTANDING,
+            ConversationPhase.TROUBLESHOOTING,
+            ConversationPhase.ESCALATED,
+        )
+        if state.phase not in allowed_creation_phases:
+            logger.warning("[PHASE ASSERTION WARN]: Calling TicketOrchestrator.create() from phase %s | Correlation ID: %s", state.phase, corr_id)
+
+        phase_str = state.phase.value if hasattr(state.phase, 'value') else str(state.phase)
+        logger.info(
+            ">>> ENTRY [ConversationService._create_ticket_with_logging] | Correlation ID: %s | Session: %s | Phase: %s | Intent: CREATE_TICKET | Category: %s | User: %s",
+            corr_id, state.session_id, phase_str, state.category, username or "anonymous"
+        )
+        state._ticket_orchestrator_executed = True
+        try:
+            res = self._tickets.create(state, username)
+            elapsed_ms = int((time.monotonic() - t_start) * 1000)
+            logger.info(
+                "<<< EXIT [ConversationService._create_ticket_with_logging] | Correlation ID: %s | Elapsed: %dms | Result ticket_id: %s",
+                corr_id, elapsed_ms, res.get("ticket_id") or res.get("number")
+            )
+            return res
+        except Exception as exc:
+            elapsed_ms = int((time.monotonic() - t_start) * 1000)
+            logger.error("!!! EXCEPTION [ConversationService._create_ticket_with_logging] | Correlation ID: %s | Elapsed: %dms | Error: %s", corr_id, elapsed_ms, exc)
+            raise
 
     def _save_category_state(self, state) -> None:
         if not isinstance(state.tool_result, dict):
@@ -432,7 +463,16 @@ class ConversationService:
             
         return True
 
-    def _transition(self, state: SessionState, next_phase: ConversationPhase, reason: str) -> None:
+    def _transition(self, state: SessionState, next_phase: ConversationPhase, reason: str, intent: str = "", user_message: str = "") -> None:
+        curr_p = state.phase.value if hasattr(state.phase, 'value') else str(state.phase)
+        next_p = next_phase.value if hasattr(next_phase, 'value') else str(next_phase)
+
+        logger.info(
+            "[STATE TRANSITION PRE]: Current Phase: %s | Target Phase: %s | "
+            "ticket_offered=%s | ticket_declined=%s | conversation_locked=%s | intent=%s | user_message=%r | reason=%r",
+            curr_p, next_p, state.ticket_offered, state.ticket_declined, state.conversation_locked, intent, user_message, reason
+        )
+
         self._tl.log_transition(state.session_id, state.phase, next_phase, reason)
         state.phase = next_phase
         from app.services.observability_service import log_event
@@ -444,10 +484,18 @@ class ConversationService:
             state.conversation_locked = True
         elif next_phase == ConversationPhase.WAITING_TICKET_CONFIRMATION:
             state.ticket_offered = True
+            state.ticket_declined = False
+            state.conversation_locked = False
         elif next_phase in (ConversationPhase.RESOLVED, ConversationPhase.ESCALATED):
             state.conversation_locked = False
             state.ticket_offered = False
             state.ticket_declined = False
+
+        logger.info(
+            "[STATE TRANSITION POST]: Current Phase: %s | Target Phase: %s | "
+            "ticket_offered=%s | ticket_declined=%s | conversation_locked=%s",
+            next_p, next_p, state.ticket_offered, state.ticket_declined, state.conversation_locked
+        )
 
         if p_val in ("RESOLVED", "ESCALATED"):
             log_event("Conversation completed", category=state.category, phase=p_val, ticket_id=state.active_ticket)
@@ -977,16 +1025,21 @@ class ConversationService:
         norm = message.lower().strip()
         if _CONTINUATION_PATTERNS.search(norm):
             return False
+        if bool(_EXPLICIT_YES_PATTERNS.search(norm)):
+            return True
+        from app.services.intent_router import IntentRouter, IntentType
+        route = IntentRouter().route(message)
+        if route.intent == IntentType.TICKET_COMMAND:
+            return True
         ticket_phrases = re.compile(
             r"\b("
+            r"create|create\s+it|yes\s+create|yes\s+please\s+create|please\s+create|"
             r"create\s+ticket|create\s+a\s+ticket|raise\s+ticket|raise\s+a\s+ticket|open\s+ticket|open\s+a\s+ticket|"
             r"log\s+ticket|submit\s+ticket|make\s+ticket|escalate|create\s+incident|raise\s+incident"
             r")\b",
             re.IGNORECASE,
         )
-        if ticket_phrases.search(norm):
-            return True
-        return norm in {"yes", "yes please", "yep", "yeah", "please do", "go ahead", "do it"}
+        return bool(ticket_phrases.search(norm))
 
     def _handle_waiting_ticket(self, state, message, username):
         norm = message.lower().strip()
@@ -1011,9 +1064,12 @@ class ConversationService:
         )
 
         if is_explicit_yes or (approval.status == approval_service.ApprovalStatus.APPROVED and not is_continuation):
+            state.ticket_declined = False
+            state.ticket_offered = False
+            state.conversation_locked = False
             logger.info(">>> APPROVED BRANCH: Proceeding with ticket creation for session=%s (username=%s, category=%s)", state.session_id, username, state.category)
             try:
-                ticket = self._tickets.create(state, username)
+                ticket = self._create_ticket_with_logging(state, username)
                 logger.info("<<< EXIT [ConversationService._handle_waiting_ticket]: Ticket creation returned: %s", ticket)
             except Exception as exc:
                 import traceback
@@ -1115,6 +1171,10 @@ class ConversationService:
 
     def _handle_ticket_command(self, state, message, username):
         """User explicitly asked to create a ticket — prompt for confirmation or create it."""
+        state.ticket_declined = False
+        state.ticket_offered = False
+        state.conversation_locked = False
+
         if state.phase == ConversationPhase.ESCALATED and state.active_ticket:
             return self._reply(state, message, format_status_response(state.active_ticket), "ASK_MORE_INFO")
 
@@ -1124,12 +1184,12 @@ class ConversationService:
             ConversationPhase.AI_TROUBLESHOOTING,
             ConversationPhase.TROUBLESHOOTING,
         ):
-            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "user requested ticket creation")
+            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "user requested ticket creation", intent="TICKET_COMMAND", user_message=message)
             return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
 
         logger.info(">>> ENTRY [ConversationService._handle_ticket_command]: Creating ticket for session=%s (username=%s, category=%s)", state.session_id, username, state.category)
         try:
-            ticket = self._tickets.create(state, username)
+            ticket = self._create_ticket_with_logging(state, username)
             logger.info("<<< EXIT [ConversationService._handle_ticket_command]: Ticket creation returned: %s", ticket)
         except Exception as exc:
             import traceback
@@ -1312,6 +1372,27 @@ class ConversationService:
                     )
             except Exception as dbg_ex:
                 logger.warning("Debug logging conversation state failed: %s", dbg_ex)
+
+            # Fail loudly assertion (Item 8)
+            try:
+                state_chk = self._session_mgr.get(res.get("session_id"))
+                bot_msg = res.get("response", "")
+                ticket_created = res.get("ticket_created", False)
+                executed = getattr(state_chk, "_ticket_orchestrator_executed", False) if state_chk else False
+                if not executed and not ticket_created:
+                    trigger_phrases = [
+                        "I am submitting a request to the ticketing system",
+                        "submitting a request to the ticketing system",
+                        "I'm creating your ticket",
+                        "opening an IT support ticket"
+                    ]
+                    if any(phrase in bot_msg for phrase in trigger_phrases):
+                        logger.error(
+                            "!!! FAIL LOUDLY ERROR: Ticket submission message was returned ('%s...') but TicketOrchestrator.create() was NOT executed!",
+                            bot_msg[:60]
+                        )
+            except Exception as check_ex:
+                logger.warning("Fail loudly assertion check encountered exception: %s", check_ex)
 
             elapsed = (time.time() - t0) * 1000
             logger.info("<<< TRACE PIPELINE END: ConversationService.handle_chat_turn | Request ID: %s | Session ID: %s | Elapsed: %.2f ms", req_id, res.get("session_id"), elapsed)
@@ -1595,7 +1676,7 @@ class ConversationService:
             classification = classify_request(detected_category, message)
             
             if classification.request_type == "SERVICE_REQUEST":
-                ticket = self._tickets.create(state, username)
+                ticket = self._create_ticket_with_logging(state, username)
                 if not ticket or ticket.get("error"):
                     self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure")
                     bot_text = "Ticketing system is currently unavailable. Please try again later."
@@ -1662,7 +1743,7 @@ class ConversationService:
                 return payload
             
             elif requires_admin_privileges(detected_category, message):
-                ticket = self._tickets.create(state, username)
+                ticket = self._create_ticket_with_logging(state, username)
                 if not ticket or ticket.get("error"):
                     self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure")
                     bot_text = "Ticketing system is currently unavailable. Please try again later."
@@ -1758,7 +1839,7 @@ class ConversationService:
             step_req_admin = any(kw in t_l or kw in i_l for kw in ["admin", "administrator", "elevate", "elevation", "privilege", "registry", "regedit", "driver", "install driver", "spooler", "service restart"])
             
             if requires_admin_privileges(state.category, message) or step_req_admin:
-                ticket = self._tickets.create(state, username)
+                ticket = self._create_ticket_with_logging(state, username)
                 if not ticket or ticket.get("error"):
                     self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure")
                     bot_text = "Ticketing system is currently unavailable. Please try again later."

@@ -412,20 +412,54 @@ class ServiceNowClient:
         if self.client_secret and self.client_secret in safe_url:
             safe_url = safe_url.replace(self.client_secret, "********")
 
+        import time, json
+        from app.core.logging_context import correlation_id_ctx
+        t_exec_start = time.monotonic()
+        corr_id = correlation_id_ctx.get() or "<none>"
+
+        headers_to_log = dict(kwargs.get("headers") or {})
+        if "Authorization" in headers_to_log:
+            auth_val = str(headers_to_log["Authorization"])
+            headers_to_log["Authorization"] = "Bearer ********" if auth_val.startswith("Bearer") else "Basic ********"
+
+        json_payload_str = "<none>"
+        if "json" in kwargs and kwargs["json"] is not None:
+            try:
+                json_payload_str = json.dumps(kwargs["json"], indent=2)
+            except Exception:
+                json_payload_str = str(kwargs["json"])
+
         logger.info(
-            ">>> ENTRY [ServiceNowClient._execute_request]: %s %s (timeout=%.1fs, retry=%s)",
+            "\n========== SERVICENOW REQUEST ==========\n"
+            "Correlation ID: %s\n"
+            "Method: %s\n"
+            "Complete URL: %s\n"
+            "Base URL: %s\n"
+            "Table: %s\n"
+            "Auth Type: %s\n"
+            "Use Mock: %s\n"
+            "Headers: %s\n"
+            "Payload:\n%s\n"
+            "=======================================",
+            corr_id,
+            method.upper(),
+            safe_url,
+            self.base_url,
+            self.table,
+            self.auth_type,
+            self.use_mock,
+            headers_to_log,
+            json_payload_str,
+        )
+
+        logger.info(
+            ">>> ENTRY [ServiceNowClient._execute_request] | Correlation ID: %s | %s %s (timeout=%.1fs, retry=%s)",
+            corr_id,
             method.upper(),
             safe_url,
             kwargs.get("timeout", self.default_timeout),
             is_auth_retry,
         )
-
-        if "json" in kwargs:
-            payload_preview = kwargs["json"]
-            logger.info(
-                "[ServiceNowClient._execute_request]: Request JSON payload: %s",
-                payload_preview,
-            )
 
         try:
             method_lower = method.lower()
@@ -443,15 +477,33 @@ class ServiceNowClient:
                 response = self.session.request(method, url, **kwargs)
 
             status_code = response.status_code
+            raw_body = response.text
+
             try:
-                body_preview = response.text[:2000]
+                parsed_json = response.json()
+                parsed_json_str = json.dumps(parsed_json, indent=2)
             except Exception:
-                body_preview = "<unreadable>"
+                parsed_json_str = "<failed to parse JSON>"
+
             logger.info(
-                "[ServiceNowClient._execute_request]: HTTP %d response from %s \n  Body: %s",
+                "\n========== SERVICENOW RESPONSE ==========\n"
+                "Correlation ID: %s\n"
+                "HTTP Status: %d\n\n"
+                "Raw Body:\n%s\n\n"
+                "Parsed JSON:\n%s\n"
+                "========================================",
+                corr_id,
                 status_code,
-                safe_url,
-                body_preview,
+                raw_body,
+                parsed_json_str,
+            )
+
+            exec_elapsed_ms = int((time.monotonic() - t_exec_start) * 1000)
+            logger.info(
+                "<<< EXIT [ServiceNowClient._execute_request] | Correlation ID: %s | Elapsed: %dms | Status: %d",
+                corr_id,
+                exec_elapsed_ms,
+                status_code,
             )
 
             # Retry on 401 Unauthorized for OAuth mode (exactly once, sanitized kwargs)
@@ -547,8 +599,14 @@ class ServiceNowClient:
 
     def _safe_request(self, method: str, url: str, **kwargs) -> Dict[str, Any]:
         """Perform request safely returning structured result dictionary."""
+        import time
+        from app.core.logging_context import correlation_id_ctx
+        t_safe_start = time.monotonic()
+        corr_id = correlation_id_ctx.get() or "<none>"
+
         logger.info(
-            ">>> ENTRY [ServiceNowClient._safe_request]: %s %s",
+            ">>> ENTRY [ServiceNowClient._safe_request] | Correlation ID: %s | %s %s",
+            corr_id,
             method.upper(),
             url,
         )
@@ -558,8 +616,9 @@ class ServiceNowClient:
             result = data.get("result", {})
 
             logger.info(
-                "[ServiceNowClient._safe_request]: Parsed result keys: %s",
+                "[ServiceNowClient._safe_request]: Parsed result keys: %s | Correlation ID: %s",
                 list(result.keys()) if isinstance(result, dict) else type(result).__name__,
+                corr_id,
             )
 
             sys_id = ""
@@ -580,8 +639,11 @@ class ServiceNowClient:
                 "message": "Request completed successfully",
                 "result": result,
             }
+            safe_elapsed_ms = int((time.monotonic() - t_safe_start) * 1000)
             logger.info(
-                "<<< EXIT [ServiceNowClient._safe_request]: success=True, number=%s, sys_id=%s",
+                "<<< EXIT [ServiceNowClient._safe_request] | Correlation ID: %s | Elapsed: %dms | success=True, number=%s, sys_id=%s",
+                corr_id,
+                safe_elapsed_ms,
                 number,
                 sys_id,
             )
@@ -667,7 +729,12 @@ class ServiceNowClient:
         **kwargs,
     ) -> Dict[str, Any]:
         """Create a new incident in ServiceNow including caller_id when provided."""
-        logger.info(">>> ENTRY [ServiceNowClient.create_incident]")
+        import time
+        from app.core.logging_context import correlation_id_ctx
+        t_create_start = time.monotonic()
+        corr_id = correlation_id_ctx.get() or "<none>"
+
+        logger.info(">>> ENTRY [ServiceNowClient.create_incident] | Correlation ID: %s", corr_id)
 
         desc = description or kwargs.get("description", "")
         cat = category or kwargs.get("category", "")
@@ -676,10 +743,12 @@ class ServiceNowClient:
         assignment_group = kwargs.get("assignment_group", "IT Support")
 
         logger.info(
-            "[ServiceNowClient.create_incident]: use_mock=%s, base_url='%s', table='%s'",
+            "[ServiceNowClient.create_incident]: use_mock=%s, base_url='%s', table='%s', auth_type='%s' | Correlation ID: %s",
             self.use_mock,
             self.base_url,
             self.table,
+            self.auth_type,
+            corr_id,
         )
 
         if self.use_mock:
@@ -693,7 +762,7 @@ class ServiceNowClient:
             mock_incident["severity"] = severity
             if caller:
                 mock_incident["caller_id"] = caller
-            logger.info("[ServiceNowClient.create_incident]: Mock incident created (number=%s)", mock_incident["number"])
+            logger.info("[ServiceNowClient.create_incident]: Mock incident created (number=%s) | Correlation ID: %s", mock_incident["number"], corr_id)
             return {
                 "success": True,
                 "ticket_id": mock_incident["number"],
@@ -709,8 +778,9 @@ class ServiceNowClient:
             logger.error(
                 "!!! [ServiceNowClient.create_incident]: base_url is empty! "
                 "SERVICENOW_INSTANCE_URL env var is not set or not resolved. "
-                "instance='%s'",
+                "instance='%s' | Correlation ID: %s",
                 self.instance,
+                corr_id,
             )
             return {
                 "success": False,
@@ -735,18 +805,22 @@ class ServiceNowClient:
         if "assignment_group" in kwargs and kwargs["assignment_group"]:
             payload["assignment_group"] = self._format_assignment_group(kwargs["assignment_group"])
 
+        for extra_key in ("contact_type", "u_type", "subcategory"):
+            if extra_key in kwargs and kwargs[extra_key]:
+                payload[extra_key] = kwargs[extra_key]
+
         logger.info(
-            "[ServiceNowClient.create_incident]: About to POST to URL: %s",
+            "[ServiceNowClient.create_incident]: About to POST to URL: %s | Correlation ID: %s",
             url,
-        )
-        logger.info(
-            "[ServiceNowClient.create_incident]: JSON payload: %s",
-            payload,
+            corr_id,
         )
 
         res = self._safe_request("POST", url, json=payload)
+        create_elapsed_ms = int((time.monotonic() - t_create_start) * 1000)
         logger.info(
-            "<<< EXIT [ServiceNowClient.create_incident]: success=%s, number=%s, sys_id=%s, message='%s'",
+            "<<< EXIT [ServiceNowClient.create_incident] | Correlation ID: %s | Elapsed: %dms | success=%s, number=%s, sys_id=%s, message='%s'",
+            corr_id,
+            create_elapsed_ms,
             res.get("success"),
             res.get("number"),
             res.get("sys_id"),

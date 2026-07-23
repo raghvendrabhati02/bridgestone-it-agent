@@ -166,26 +166,30 @@ class ServiceNowService:
                 message=f"ServiceNow unconfigured: {err_msg}"
             )
 
+        import time
+        from app.core.logging_context import correlation_id_ctx
+        t_start = time.monotonic()
+        corr_id = correlation_id_ctx.get() or "<none>"
+
+        logger.info(
+            ">>> ENTRY [ServiceNowService.create_incident] | Correlation ID: %s | short_desc='%s', category=%s, caller_id=%s",
+            corr_id,
+            request.short_description,
+            request.category,
+            request.caller_id,
+        )
+
         base_url = getattr(self._client, "base_url", "")
         table = getattr(self._client, "table", "incident")
         target_url = f"{base_url}/api/now/table/{table}"
         logger.info(
-            "[ServiceNowService.create_incident]: Target URL: %s",
+            "[ServiceNowService.create_incident]: Target URL: %s | Correlation ID: %s",
             target_url,
-        )
-        logger.info(
-            "[ServiceNowService.create_incident]: Full request payload (no password): "
-            "short_description='%s', description='%.150s', category=%s, "
-            "severity=%s, assignment_group=%s, caller_id=%s",
-            request.short_description,
-            request.description,
-            request.category,
-            request.severity,
-            request.assignment_group,
-            request.caller_id,
+            corr_id,
         )
 
         try:
+            extra = request.extra_fields or {}
             res_dict = self._client.create_incident(
                 short_description=request.short_description,
                 description=request.description,
@@ -193,22 +197,26 @@ class ServiceNowService:
                 severity=request.severity,
                 assignment_group=request.assignment_group,
                 caller_id=request.caller_id,
+                **extra,
             )
 
+            elapsed_ms = int((time.monotonic() - t_start) * 1000)
+
             logger.info(
-                "[ServiceNowService.create_incident]: Raw response from client: %s",
+                "[ServiceNowService.create_incident]: Raw response from client: %s | Correlation ID: %s",
                 res_dict,
+                corr_id,
             )
 
             if isinstance(res_dict, dict) and not res_dict.get("success", False):
                 msg = res_dict.get("message", "API request failed")
                 if "auth" in msg.lower() or "401" in msg or "403" in msg:
                     logger.error(
-                        "[ServiceNowService.create_incident]: Authentication failure: %s", msg
+                        "[ServiceNowService.create_incident]: Authentication failure: %s | Correlation ID: %s", msg, corr_id
                     )
                     raise ServiceNowAuthenticationError(message=msg)
                 logger.error(
-                    "[ServiceNowService.create_incident]: API returned success=False: %s", msg
+                    "[ServiceNowService.create_incident]: API returned success=False: %s | Correlation ID: %s", msg, corr_id
                 )
                 raise ServiceNowAPIError(message=msg)
 
@@ -218,7 +226,9 @@ class ServiceNowService:
             caller = res_dict.get("caller_id") or request.caller_id
 
             logger.info(
-                "<<< EXIT [ServiceNowService.create_incident]: sys_id=%s, number=%s, state=%s",
+                "<<< EXIT [ServiceNowService.create_incident] | Correlation ID: %s | Elapsed: %dms | sys_id=%s, number=%s, state=%s",
+                corr_id,
+                elapsed_ms,
                 sys_id,
                 number,
                 state_val,

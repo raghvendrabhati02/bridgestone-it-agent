@@ -75,6 +75,7 @@ _TICKET_PATTERNS = re.compile(
     r"\b(create|raise|open|log|submit|make|need)\s+"
     r"(an?\s+)?(the\s+)?(support\s+)?"
     r"(ticket|incident|case|support\s+request|sr)\b"
+    r"|\b(create|create\s+it|yes\s+create|yes\s+please\s+create|please\s+create)\b"
     r"|\bopen\s+incident\b"
     r"|\bescalate(\s+(this|issue|now))?\b",
     re.IGNORECASE,
@@ -270,6 +271,15 @@ class IntentRouter:
     def _route_internal(self, message: str, conversation_locked: bool = False, current_category: Optional[str] = None) -> RouteResult:
         normalized = normalize(message)
 
+        # 1. Ticket command — highest priority
+        if _TICKET_PATTERNS.search(message):
+            logger.info("IntentRouter: TICKET_COMMAND matched | input=%r", normalized)
+            try:
+                cat = self._classify_category(message, current_category)
+            except TypeError:
+                cat = self._classify_category(message)
+            return RouteResult(IntentType.TICKET_COMMAND, cat, normalized)
+
         # Generic reply guard: if conversation is locked and it's a generic follow-up, do NOT reclassify
         if conversation_locked and _is_generic_followup(message):
             logger.info("IntentRouter: Generic follow-up matched during locked session | input=%r", normalized)
@@ -280,15 +290,6 @@ class IntentRouter:
             if _RESTART_PATTERNS.search(message):
                 return RouteResult(IntentType.RESTART, None, normalized)
             return RouteResult(IntentType.GENERAL, None, normalized)
-
-        # 1. Ticket command — highest priority
-        if _TICKET_PATTERNS.search(message):
-            logger.info("IntentRouter: TICKET_COMMAND matched | input=%r", normalized)
-            try:
-                cat = self._classify_category(message, current_category)
-            except TypeError:
-                cat = self._classify_category(message)
-            return RouteResult(IntentType.TICKET_COMMAND, cat, normalized)
 
         # 2. Password reset command — priority above restart
         if _PASSWORD_RESET_PATTERNS.search(message):

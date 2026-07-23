@@ -45,6 +45,7 @@ from app.database.session import get_db
 from app.database.repositories.ticket_repository import TicketRepository
 from app.services.servicenow_service import ServiceNowService
 from app.models.servicenow_models import IncidentCreateRequest
+from app.services.field_mapping_service import FieldMappingService, FieldMappingError
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -180,6 +181,7 @@ def create_ticket(
     issue_description: str,
     created_by: str = None,
     servicenow_service: Optional[ServiceNowService] = None,
+    **kwargs,
 ) -> dict:
     """
     Creates an enterprise ticket with:
@@ -219,7 +221,7 @@ def create_ticket(
 
     # ── Allocate local ticket ID (thread-safe, DB-driven) ─────────────────────
     local_ticket_id = _allocate_local_ticket_id()
-    assigned_team = get_assignment_team(category)
+    assigned_team = kwargs.get("assigned_team") or kwargs.get("assignment_group") or get_assignment_team(category)
     created_at = datetime.datetime.utcnow().isoformat() + "Z"
 
     logger.info(
@@ -293,6 +295,69 @@ def create_ticket(
                 "servicenow_id": "",
             }
 
+        # ── ServiceNow Field Mapping Engine Integration ────────────────────────
+        mapped_category = category
+        mapped_assignment_group = assigned_team
+        extra_fields: dict = {}
+
+        try:
+            field_mapper = FieldMappingService(auto_load=True)
+            classified_u_type = "issue" if getattr(classification, "request_type", None) == "INCIDENT" else "request"
+            u_type_input = kwargs.get("u_type") or classified_u_type
+
+            # Derive subcategory if applicable
+            subcat_input = kwargs.get("subcategory") or kwargs.get("sub_category")
+
+            mapped_fields = field_mapper.build_servicenow_fields(
+                contact_type="chat",
+                u_type=u_type_input,
+                category=category,
+                subcategory=subcat_input,
+                assignment_group=assigned_team,
+                caller_id=created_by or "",
+            )
+
+            if mapped_fields.get("category"):
+                mapped_category = mapped_fields["category"]
+            if mapped_fields.get("assignment_group"):
+                mapped_assignment_group = mapped_fields["assignment_group"]
+
+            extra_fields = {
+                "contact_type": mapped_fields.get("contact_type", "chat"),
+                "u_type": mapped_fields.get("u_type", ""),
+                "subcategory": mapped_fields.get("subcategory", ""),
+            }
+
+            logger.info(
+                "\n========== FIELD MAPPING PIPELINE ==========\n"
+                "Correlation ID   : %s\n"
+                "Classified Values: u_type='%s', category='%s', subcategory='%s', assignment_group='%s', caller_id='%s'\n"
+                "Mapped SN Values : contact_type='%s', u_type='%s', category='%s', subcategory='%s', assignment_group='%s', caller_id='%s'\n"
+                "===========================================",
+                corr_id or "<none>",
+                classified_u_type, category, subcat_input or "", assigned_team, created_by,
+                mapped_fields.get("contact_type"), mapped_fields.get("u_type"), mapped_fields.get("category"),
+                mapped_fields.get("subcategory"), mapped_fields.get("assignment_group"), mapped_fields.get("caller_id"),
+            )
+
+        except FieldMappingError as f_err:
+            elapsed_ms = int((time.monotonic() - t_start) * 1000)
+            logger.error(
+                "[ticket_service.create_ticket]: ABORT — ServiceNow field mapping failed: %s (elapsed=%dms, correlation_id=%s)",
+                f_err, elapsed_ms, corr_id or "<none>"
+            )
+            return {
+                "error": True,
+                "success": False,
+                "servicenow_error": True,
+                "message": f"Unable to create ServiceNow Incident.\n\nField Mapping Failure:\n{f_err}",
+                "ticket_id": "",
+                "servicenow_number": "",
+                "servicenow_id": "",
+            }
+        except Exception as map_ex:
+            logger.warning("[ticket_service.create_ticket]: Field mapping notice: %s", map_ex)
+
         logger.info(
             "[ticket_service.create_ticket]: Initiating ServiceNow POST "
             "(local_id=%s, correlation_id=%s)",
@@ -302,23 +367,25 @@ def create_ticket(
         try:
             req = IncidentCreateRequest(
                 short_description=(
-                    f"{category} Issue - {issue_description[:_SHORT_DESC_MAX_LEN]}"
+                    f"{mapped_category.upper()} Issue - {issue_description[:_SHORT_DESC_MAX_LEN]}"
                 ),
                 description=issue_description,
-                category=category,
+                category=mapped_category,
                 severity=_DEFAULT_SEVERITY,
-                assignment_group=assigned_team,
+                assignment_group=mapped_assignment_group,
                 caller_id=created_by,
+                extra_fields=extra_fields,
             )
             logger.info(
-                "[ticket_service.create_ticket]: SN request payload — "
+                "[ticket_service.create_ticket]: Final Payload Sent to ServiceNow — "
                 "short_description='%s', category=%s, severity=%d, "
-                "assignment_group=%s, caller_id=%s, description='%.100s'",
+                "assignment_group=%s, caller_id=%s, extra_fields=%s, description='%.100s'",
                 req.short_description,
                 req.category,
                 req.severity,
                 req.assignment_group,
                 req.caller_id,
+                req.extra_fields,
                 req.description,
             )
 
@@ -364,6 +431,22 @@ def create_ticket(
             # ServiceNow incident number is the user-visible canonical ID.
             presentation_id   = servicenow_number
 
+            # Requirement 5: Check if ServiceNow returned an incident number that already exists locally
+            if servicenow_number:
+                try:
+                    from app.database.models.ticket import Ticket
+                    with get_db() as db_chk:
+                        existing_local = db_chk.query(Ticket).filter(
+                            (Ticket.servicenow_number == servicenow_number) | (Ticket.ticket_id == servicenow_number)
+                        ).first()
+                        if existing_local:
+                            logger.warning(
+                                "WARNING: ServiceNow returned an incident number (%s) that already exists locally in DB (Local ID: %s, Created At: %s).",
+                                servicenow_number, existing_local.ticket_id, existing_local.created_at
+                            )
+                except Exception as dup_ex:
+                    logger.warning("[ticket_service.create_ticket]: Local duplicate check exception: %s", dup_ex)
+
             logger.info(
                 "[ticket_service.create_ticket]: SN incident created — "
                 "local_id=%s, sn_number=%s, sys_id=%s, sn_latency=%dms, "
@@ -407,6 +490,7 @@ def create_ticket(
 
     # ── Build ticket dict ──────────────────────────────────────────────────────
     ticket: dict = {
+        "success":            True,
         "ticket_id":          presentation_id,
         "local_ticket_id":    local_ticket_id,
         "servicenow_number":  servicenow_number,
