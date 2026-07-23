@@ -115,20 +115,8 @@ class ServiceNowService:
         elif self.auth_type == "oauth":
             if not self.client_id or not self.client_secret:
                 return False, "OAuth authentication requires SERVICENOW_CLIENT_ID and SERVICENOW_CLIENT_SECRET"
-            # The current implementation uses a pre-obtained bearer token rather than
-            # performing the client-credentials exchange at runtime.  The token is read
-            # from SERVICENOW_OAUTH_TOKEN and injected as "Authorization: Bearer <token>"
-            # in every request (_get_auth_headers in ServiceNowClient).
-            # Without this variable the request is sent unauthenticated and ServiceNow
-            # returns 401 — even though client_id/client_secret are present.
-            oauth_token = os.getenv("SERVICENOW_OAUTH_TOKEN", "").strip()
-            if not oauth_token:
-                return False, (
-                    "OAuth authentication requires SERVICENOW_OAUTH_TOKEN to be set. "
-                    "Obtain a bearer token from the ServiceNow OAuth token endpoint "
-                    "(/oauth_token.do) using SERVICENOW_CLIENT_ID and "
-                    "SERVICENOW_CLIENT_SECRET, then set it in SERVICENOW_OAUTH_TOKEN."
-                )
+            if not self.username or not self.password:
+                return False, "OAuth authentication requires SERVICENOW_USERNAME and SERVICENOW_PASSWORD"
 
         if self.assignment_group_mode not in ("name", "sys_id"):
             return False, f"Invalid SERVICENOW_ASSIGNMENT_GROUP_MODE '{self.assignment_group_mode}'. Must be 'name' or 'sys_id'."

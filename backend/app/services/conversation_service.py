@@ -29,11 +29,42 @@ Design contracts (MUST NOT be violated)
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+_CONTINUATION_PATTERNS = re.compile(
+    r"\b("
+    r"help\s+me|guide\s+me|continue|another\s+solution|keep\s+troubleshooting|"
+    r"what\s+else\s+can\s+i\s+do|give\s+more\s+steps|explain|try\s+another\s+fix|"
+    r"what\s+else|troubleshoot|how\s+to\s+fix|what\s+should\s+i\s+do|other\s+options|"
+    r"next\s+step|keep\s+going|try\s+something\s+else|more\s+help|what\s+can\s+i\s+do|"
+    r"any\s+other\s+ideas|what\s+now|give\s+me\s+more|diagnose"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_EXPLICIT_YES_PATTERNS = re.compile(
+    r"\b("
+    r"yes|yeah|yep|y|ok|okay|sure|please\s+do|go\s+ahead|do\s+it|approved|approve|proceed|"
+    r"create\s+ticket|create\s+a\s+ticket|create\s+incident|create\s+an\s+incident|"
+    r"raise\s+ticket|raise\s+a\s+ticket|raise\s+incident|raise\s+an\s+incident|"
+    r"open\s+ticket|open\s+a\s+ticket|open\s+incident|open\s+an\s+incident|"
+    r"okay\s+create|please\s+create|escalate"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_EXPLICIT_NO_PATTERNS = re.compile(
+    r"\b("
+    r"no|nope|don'?t|do\s+not|cancel|abort|stop|reject|never\s+mind|"
+    r"don'?t\s+create|do\s+not\s+create|no\s+ticket|don'?t\s+open|do\s+not\s+open"
+    r")\b",
+    re.IGNORECASE,
+)
 
 import app.services.approval_service as approval_service
 import app.services.conversation_memory as memory
@@ -476,15 +507,9 @@ class ConversationService:
 
 
     def _handle_understanding_or_diagnosing(self, state, message, username):
-        if state.ticket_declined:
-            # User previously declined a ticket, but the issue still exists.
-            bot_text = (
-                f"I understand the {state.category} issue still exists. "
-                f"However, we have exhausted all recommended troubleshooting steps and you previously declined creating a ticket. "
-                f"Would you like me to go ahead and create a ServiceNow ticket now, or is there anything else I can assist you with?"
-            )
-            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "offering ticket again after decline")
-            return self._reply(state, message, bot_text, "ASK_MORE_INFO")
+        if state.ticket_declined and self._is_ticket_request(message):
+            self._transition(state, ConversationPhase.WAITING_TICKET_CONFIRMATION, "user requested ticket creation after decline")
+            return self._handle_ticket_command(state, message, username)
 
         """
         Gemini-first reasoning handler (UNDERSTANDING / DIAGNOSING phases).
@@ -569,8 +594,8 @@ class ConversationService:
             escalation_reason = decision.get("escalation_reason", "")
             
             is_justified = (
-                state.troubleshooting_steps_suggested > 0
-                or escalation_reason in ("ADMIN_REQUIRED", "HARDWARE_FAILURE", "USER_REQUESTED", "POLICY_REQUIRED")
+                (state.troubleshooting_steps_suggested > 0 and not state.ticket_declined)
+                or (escalation_reason in ("ADMIN_REQUIRED", "HARDWARE_FAILURE", "POLICY_REQUIRED") and not state.ticket_declined)
                 or self._is_ticket_request(message)
             )
 
@@ -762,8 +787,8 @@ class ConversationService:
             escalation_reason = decision.get("escalation_reason", "")
             
             is_justified = (
-                state.troubleshooting_steps_suggested > 0
-                or escalation_reason in ("ADMIN_REQUIRED", "HARDWARE_FAILURE", "USER_REQUESTED", "POLICY_REQUIRED")
+                (state.troubleshooting_steps_suggested > 0 and not state.ticket_declined)
+                or (escalation_reason in ("ADMIN_REQUIRED", "HARDWARE_FAILURE", "POLICY_REQUIRED") and not state.ticket_declined)
                 or self._is_ticket_request(message)
             )
 
@@ -947,20 +972,45 @@ class ConversationService:
         prompt_msg = f"I can attempt to {action.name} for you. Shall I proceed?"
         return self._reply(state, message, prompt_msg, "ASK_MORE_INFO")
 
+    @staticmethod
+    def _is_ticket_request(message: str) -> bool:
+        norm = message.lower().strip()
+        if _CONTINUATION_PATTERNS.search(norm):
+            return False
+        ticket_phrases = re.compile(
+            r"\b("
+            r"create\s+ticket|create\s+a\s+ticket|raise\s+ticket|raise\s+a\s+ticket|open\s+ticket|open\s+a\s+ticket|"
+            r"log\s+ticket|submit\s+ticket|make\s+ticket|escalate|create\s+incident|raise\s+incident"
+            r")\b",
+            re.IGNORECASE,
+        )
+        if ticket_phrases.search(norm):
+            return True
+        return norm in {"yes", "yes please", "yep", "yeah", "please do", "go ahead", "do it"}
+
     def _handle_waiting_ticket(self, state, message, username):
+        norm = message.lower().strip()
+        is_continuation = bool(_CONTINUATION_PATTERNS.search(norm))
+        is_explicit_yes = bool(_EXPLICIT_YES_PATTERNS.search(norm)) and not is_continuation
+        is_explicit_no = bool(_EXPLICIT_NO_PATTERNS.search(norm)) and not is_explicit_yes
+
         approval = approval_service.detect_approval(message)
         logger.info(
             ">>> ENTRY [ConversationService._handle_waiting_ticket]: "
             "session=%s, username=%s, category=%s, phase=%s, "
-            "user_message='%s', approval_status=%s",
+            "user_message='%s', approval_status=%s, is_continuation=%s, is_yes=%s, is_no=%s",
             state.session_id,
             username,
             state.category,
             getattr(state.phase, 'value', str(state.phase)),
             message,
             approval.status,
+            is_continuation,
+            is_explicit_yes,
+            is_explicit_no,
         )
-        if approval.status == approval_service.ApprovalStatus.APPROVED:
+
+        if is_explicit_yes or (approval.status == approval_service.ApprovalStatus.APPROVED and not is_continuation):
             logger.info(">>> APPROVED BRANCH: Proceeding with ticket creation for session=%s (username=%s, category=%s)", state.session_id, username, state.category)
             try:
                 ticket = self._tickets.create(state, username)
@@ -1001,11 +1051,17 @@ class ConversationService:
                 status_label=ticket.get("status_label", ""),
             )
             return self._reply(state, message, bot_text, "TICKET_CREATED", ticket_created=True, ticket_id=tid, ticket_details=ticket)
-        if approval.status == approval_service.ApprovalStatus.REJECTED:
-            self._transition(state, ConversationPhase.UNDERSTANDING, "ticket declined by user")
+
+        if is_explicit_no or approval.status == approval_service.ApprovalStatus.REJECTED:
+            self._transition(state, ConversationPhase.AI_TROUBLESHOOTING, "ticket declined by user")
             state.ticket_declined = True
             return self._reply(state, message, format_ticket_declined(), "ASK_MORE_INFO")
-        return self._reply(state, message, format_ticket_prompt(), "ASK_MORE_INFO")
+
+        # Continuation request ("guide me", "help me", "continue", "another solution", "what else", "keep troubleshooting", etc.)
+        # Classify as continue troubleshooting and resume with AI reasoning
+        state.ticket_declined = True
+        self._transition(state, ConversationPhase.AI_TROUBLESHOOTING, "user chose to continue troubleshooting")
+        return self._handle_ai_troubleshooting(state, message, username)
 
     def _handle_sn_recovery(self, state, message, username):
         """Handle user's chosen recovery path after a ServiceNow failure."""

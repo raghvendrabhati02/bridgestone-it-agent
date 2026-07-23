@@ -50,7 +50,7 @@ _EXPLICIT_APPROVALS = {
 }
 
 _WEAK_APPROVALS = {
-    "yes", "y", "yeah", "yep", "ok", "okay", "sure", "you can", "continue",
+    "yes", "y", "yeah", "yep", "ok", "okay", "sure", "you can",
 }
 
 _EXPLICIT_REJECTIONS = {

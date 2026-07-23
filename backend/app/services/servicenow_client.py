@@ -1,15 +1,18 @@
 """
 servicenow_client.py
 ─────────────────────────────────────────────────────────────────────────────
-ServiceNow REST Table API client. Handles authentication, retries, timeouts,
-assignment group payload modes, and ensures credentials are never exposed in logs.
+ServiceNow REST Table API client. Handles OAuth Password Grant & Refresh Token
+authentication with thread-safe locking, token rotation, pre-request pipeline
+checks, sanitized 401 retries, and masked credential logging.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import time
 import traceback
+from threading import RLock
 from typing import Optional, Dict, Any
 import requests
 from requests.auth import HTTPBasicAuth
@@ -29,8 +32,19 @@ from app.models.servicenow_models import extract_sn_field
 logger = logging.getLogger("it-agent-backend")
 
 
+def _mask_secret(secret: Optional[str], visible_chars: int = 4) -> str:
+    """Helper to mask sensitive credentials in logs."""
+    if not secret:
+        return "********"
+    if len(secret) <= visible_chars:
+        return "********"
+    return f"{secret[:visible_chars]}***"
+
+
 class ServiceNowClient:
-    """REST API client for ServiceNow Table API."""
+    """REST API client for ServiceNow Table API with OAuth Password Grant & Refresh Token support."""
+
+    TOKEN_REFRESH_BUFFER: int = 60  # Safety buffer in seconds before token expiration
 
     def __init__(
         self,
@@ -42,9 +56,14 @@ class ServiceNowClient:
         auth_type: Optional[str] = None,
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
+        token_url: Optional[str] = None,
         assignment_group_mode: Optional[str] = None,
     ) -> None:
-        self.instance = instance or os.getenv("SERVICENOW_INSTANCE_URL") or os.getenv("SERVICENOW_INSTANCE", "")
+        self.instance = (
+            instance
+            or os.getenv("SERVICENOW_INSTANCE_URL")
+            or os.getenv("SERVICENOW_INSTANCE", "")
+        )
         self.username = username or os.getenv("SERVICENOW_USERNAME", "")
         self.password = password or os.getenv("SERVICENOW_PASSWORD", "")
         self.auth_type = (auth_type or os.getenv("SERVICENOW_AUTH_TYPE", "basic")).strip().lower()
@@ -61,7 +80,11 @@ class ServiceNowClient:
         if self.use_mock:
             logger.info("ServiceNowClient: Mock mode enabled (USE_MOCK_SERVICENOW=true)")
         else:
-            logger.info("ServiceNowClient: Real API mode enabled (auth_type=%s, assignment_group_mode=%s)", self.auth_type, self.assignment_group_mode)
+            logger.info(
+                "ServiceNowClient: Real API mode enabled (auth_type=%s, assignment_group_mode=%s)",
+                self.auth_type,
+                self.assignment_group_mode,
+            )
 
         # Determine configurable timeout
         if timeout is None:
@@ -83,9 +106,33 @@ class ServiceNowClient:
         else:
             self.base_url = f"https://{instance_clean}.service-now.com"
 
+        # Determine OAuth token endpoint URL
+        raw_token_url = token_url or os.getenv("SERVICENOW_TOKEN_URL", "")
+        if raw_token_url.strip():
+            self.token_url = raw_token_url.strip()
+        elif self.base_url:
+            self.token_url = f"{self.base_url}/oauth_token.do"
+        else:
+            self.token_url = ""
+
+        # Thread-safety lock for authentication and token refresh
+        self._token_lock = RLock()
+
+        # OAuth token state
+        self.access_token: Optional[str] = None
+        self.refresh_token: Optional[str] = None
+        self.token_expiry: float = 0.0
+
+        # Validate OAuth configuration early during initialization
+        if not self.use_mock and self.auth_type == "oauth":
+            self._validate_oauth_config()
+
+        # Requests session initialization
         self.session = requests.Session()
         if self.auth_type == "basic" and self.username and self.password:
             self.session.auth = HTTPBasicAuth(self.username, self.password)
+        else:
+            self.session.auth = None
 
         # Connection pooling and retries
         retries = Retry(
@@ -97,10 +144,29 @@ class ServiceNowClient:
         adapter = HTTPAdapter(
             pool_connections=10,
             pool_maxsize=10,
-            max_retries=retries
+            max_retries=retries,
         )
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
+
+    def _validate_oauth_config(self) -> None:
+        """Validate required OAuth parameters. Raises ServiceNowAuthError if invalid."""
+        missing = []
+        if not self.client_id:
+            missing.append("SERVICENOW_CLIENT_ID")
+        if not self.client_secret:
+            missing.append("SERVICENOW_CLIENT_SECRET")
+        if not self.username:
+            missing.append("SERVICENOW_USERNAME")
+        if not self.password:
+            missing.append("SERVICENOW_PASSWORD")
+        if not self.token_url:
+            missing.append("SERVICENOW_TOKEN_URL / SERVICENOW_INSTANCE_URL")
+
+        if missing:
+            msg = f"OAuth configuration invalid. Missing required parameter(s): {', '.join(missing)}"
+            logger.error("[ServiceNowClient._validate_oauth_config]: %s", msg)
+            raise ServiceNowAuthError(400, msg)
 
     def is_configured(self) -> bool:
         """Return True if required configuration fields are set."""
@@ -109,23 +175,212 @@ class ServiceNowClient:
         if self.auth_type == "basic":
             return bool(self.username and self.password)
         elif self.auth_type == "oauth":
-            return bool(self.client_id and self.client_secret) or bool(self.username and self.password)
+            return bool(
+                self.client_id
+                and self.client_secret
+                and self.username
+                and self.password
+                and self.token_url
+            )
         return False
 
+    def _is_token_expired(self) -> bool:
+        """Check if access token is missing or within the refresh safety buffer."""
+        if not self.access_token:
+            return True
+        return time.time() >= (self.token_expiry - self.TOKEN_REFRESH_BUFFER)
+
+    def authenticate(self) -> None:
+        """
+        Perform initial OAuth Password Grant authentication against /oauth_token.do.
+        Thread-safe under self._token_lock to prevent race conditions & double authentication.
+        """
+        with self._token_lock:
+            # Double-check inside lock to ensure concurrent requests reuse newly acquired token
+            if not self._is_token_expired():
+                logger.info("[ServiceNowClient.authenticate]: Valid token already acquired by another thread.")
+                return
+
+            logger.info(">>> ENTRY [ServiceNowClient.authenticate]: Requesting OAuth password grant token")
+            self._validate_oauth_config()
+
+            payload = {
+                "grant_type": "password",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "username": self.username,
+                "password": self.password,
+            }
+
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+
+            try:
+                response = self.session.post(
+                    self.token_url,
+                    data=payload,
+                    headers=headers,
+                    timeout=self.default_timeout,
+                    auth=None,
+                )
+                status_code = response.status_code
+                logger.info("[ServiceNowClient.authenticate]: HTTP %d response from token URL", status_code)
+
+                if status_code != 200:
+                    err_text = response.text[:500]
+                    msg = f"OAuth authentication failed (HTTP {status_code}): {err_text}"
+                    logger.error("[ServiceNowClient.authenticate]: %s", msg)
+                    raise ServiceNowAuthError(status_code, msg)
+
+                data = response.json()
+                access_token = data.get("access_token")
+                if not access_token:
+                    msg = "OAuth response missing access_token"
+                    logger.error("[ServiceNowClient.authenticate]: %s", msg)
+                    raise ServiceNowAuthError(status_code, msg)
+
+                self.access_token = access_token
+                if data.get("refresh_token"):
+                    self.refresh_token = data.get("refresh_token")
+
+                expires_in = float(data.get("expires_in", 1800))
+                self.token_expiry = time.time() + expires_in
+
+                logger.info(
+                    "<<< EXIT [ServiceNowClient.authenticate]: OAuth authentication successful (access_token=%s, expires in %ss)",
+                    _mask_secret(self.access_token),
+                    expires_in,
+                )
+            except ServiceNowAuthError:
+                raise
+            except requests.exceptions.Timeout as e:
+                logger.error(
+                    "!!! TIMEOUT [ServiceNowClient.authenticate]: Token request timed out\n%s",
+                    traceback.format_exc(),
+                )
+                raise ServiceNowTimeoutError("OAuth token request timed out") from e
+            except requests.exceptions.ConnectionError as e:
+                logger.error(
+                    "!!! CONNECTION ERROR [ServiceNowClient.authenticate]: Cannot reach token URL\n%s",
+                    traceback.format_exc(),
+                )
+                raise ServiceNowConnectionError("OAuth token connection failed") from e
+            except Exception as e:
+                logger.error(
+                    "!!! EXCEPTION [ServiceNowClient.authenticate]: %s\n%s",
+                    e,
+                    traceback.format_exc(),
+                )
+                raise ServiceNowAuthError(500, f"OAuth authentication error: {e}") from e
+
+    def refresh_access_token(self) -> None:
+        """
+        Refresh access token using stored refresh_token against /oauth_token.do.
+        Thread-safe under self._token_lock.
+        Falls back to authenticate() if no refresh_token exists or if refresh fails.
+        """
+        with self._token_lock:
+            # Double-check inside lock to ensure concurrent requests reuse newly refreshed token
+            if not self._is_token_expired():
+                logger.info("[ServiceNowClient.refresh_access_token]: Valid token already acquired by another thread.")
+                return
+
+            logger.info(">>> ENTRY [ServiceNowClient.refresh_access_token]")
+            if not self.refresh_token:
+                logger.info("[ServiceNowClient.refresh_access_token]: No refresh_token available, calling authenticate()")
+                self.authenticate()
+                return
+
+            self._validate_oauth_config()
+
+            payload = {
+                "grant_type": "refresh_token",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "refresh_token": self.refresh_token,
+            }
+
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+
+            try:
+                response = self.session.post(
+                    self.token_url,
+                    data=payload,
+                    headers=headers,
+                    timeout=self.default_timeout,
+                    auth=None,
+                )
+                status_code = response.status_code
+                logger.info("[ServiceNowClient.refresh_access_token]: HTTP %d response from token URL", status_code)
+
+                if status_code != 200:
+                    logger.warning(
+                        "[ServiceNowClient.refresh_access_token]: Refresh request failed (HTTP %d). Falling back to authenticate()...",
+                        status_code,
+                    )
+                    self.authenticate()
+                    return
+
+                data = response.json()
+                access_token = data.get("access_token")
+                if not access_token:
+                    logger.warning("[ServiceNowClient.refresh_access_token]: Refresh response missing access_token. Falling back to authenticate()...")
+                    self.authenticate()
+                    return
+
+                self.access_token = access_token
+                if data.get("refresh_token"):
+                    self.refresh_token = data.get("refresh_token")
+
+                expires_in = float(data.get("expires_in", 1800))
+                self.token_expiry = time.time() + expires_in
+
+                logger.info(
+                    "<<< EXIT [ServiceNowClient.refresh_access_token]: Successfully refreshed access token (access_token=%s, expires in %ss)",
+                    _mask_secret(self.access_token),
+                    expires_in,
+                )
+            except ServiceNowAuthError:
+                try:
+                    self.authenticate()
+                except Exception:
+                    raise
+            except Exception as e:
+                logger.warning("[ServiceNowClient.refresh_access_token]: Token refresh failed (%s). Falling back to authenticate()...", e)
+                self.authenticate()
+
+    def ensure_authenticated(self) -> None:
+        """
+        Verify that a valid OAuth token exists before making an API request.
+        Triggers authenticate() if missing, or refresh_access_token() if expired.
+        Thread-safe double-checked locking prevents concurrent authentication calls.
+        """
+        if self.use_mock or self.auth_type != "oauth":
+            return
+
+        if self._is_token_expired():
+            with self._token_lock:
+                if self._is_token_expired():
+                    if self.refresh_token:
+                        logger.info("[ServiceNowClient.ensure_authenticated]: Access token expired. Refreshing token...")
+                        self.refresh_access_token()
+                    else:
+                        logger.info("[ServiceNowClient.ensure_authenticated]: No access_token found. Authenticating...")
+                        self.authenticate()
+
     def _get_auth_headers(self) -> dict:
-        """
-        Construct authentication headers.
-        Clean extension point for OAuth Bearer token injection in future implementations.
-        """
+        """Construct authentication headers."""
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-        if self.auth_type == "oauth":
-            # Extension point for OAuth Bearer token header injection
-            token = os.getenv("SERVICENOW_OAUTH_TOKEN", "")
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
+        if self.auth_type == "oauth" and self.access_token:
+            headers["Authorization"] = f"Bearer {self.access_token}"
         return headers
 
     def _format_assignment_group(self, group_identifier: str) -> Any:
@@ -135,25 +390,36 @@ class ServiceNowClient:
         return group_identifier
 
     def _execute_request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """Perform request with support for GET, POST, PUT, PATCH and mapped HTTP status exceptions."""
+        """Perform request with support for GET, POST, PUT, PATCH, DELETE and mapped HTTP status exceptions."""
+        # Fix 1 & Fix 7: Extract internal retry metadata flag so it NEVER leaks into requests kwargs
+        is_auth_retry = kwargs.pop("_is_auth_retry", False)
+
+        self.ensure_authenticated()
+
         if "timeout" not in kwargs:
             kwargs["timeout"] = self.default_timeout
-        if "headers" not in kwargs:
-            kwargs["headers"] = self._get_auth_headers()
 
-        # Log method + URL + payload (mask password in URL if present)
+        # Ensure authorization headers are updated
+        req_headers = self._get_auth_headers()
+        if "headers" in kwargs and kwargs["headers"]:
+            req_headers.update(kwargs["headers"])
+        kwargs["headers"] = req_headers
+
+        # Mask password or client secret if present in URL
         safe_url = url
         if self.password and self.password in safe_url:
             safe_url = safe_url.replace(self.password, "********")
+        if self.client_secret and self.client_secret in safe_url:
+            safe_url = safe_url.replace(self.client_secret, "********")
 
         logger.info(
-            ">>> ENTRY [ServiceNowClient._execute_request]: %s %s (timeout=%.1fs)",
+            ">>> ENTRY [ServiceNowClient._execute_request]: %s %s (timeout=%.1fs, retry=%s)",
             method.upper(),
             safe_url,
             kwargs.get("timeout", self.default_timeout),
+            is_auth_retry,
         )
 
-        # Log the JSON payload if present (mask nothing — passwords are in headers, not body)
         if "json" in kwargs:
             payload_preview = kwargs["json"]
             logger.info(
@@ -171,11 +437,12 @@ class ServiceNowClient:
                 response = self.session.put(url, **kwargs)
             elif method_lower == "patch":
                 response = self.session.patch(url, **kwargs)
+            elif method_lower == "delete":
+                response = self.session.delete(url, **kwargs)
             else:
                 response = self.session.request(method, url, **kwargs)
 
             status_code = response.status_code
-            # Always log HTTP status + first 2000 chars of response body
             try:
                 body_preview = response.text[:2000]
             except Exception:
@@ -186,6 +453,25 @@ class ServiceNowClient:
                 safe_url,
                 body_preview,
             )
+
+            # Retry on 401 Unauthorized for OAuth mode (exactly once, sanitized kwargs)
+            if status_code == 401 and self.auth_type == "oauth" and not is_auth_retry:
+                logger.warning(
+                    "[ServiceNowClient._execute_request]: Received HTTP 401 Unauthorized in OAuth mode. "
+                    "Refreshing token and retrying request once..."
+                )
+                try:
+                    # Invalidate existing token and refresh
+                    self.access_token = None
+                    self.refresh_access_token()
+                    kwargs["headers"] = self._get_auth_headers()
+                    kwargs["_is_auth_retry"] = True
+                    return self._execute_request(method, url, **kwargs)
+                except ServiceNowAuthError:
+                    raise
+                except Exception as refresh_err:
+                    logger.error("!!! REFRESH ERROR [ServiceNowClient._execute_request]: Token refresh failed during 401 retry: %s", refresh_err)
+                    raise ServiceNowAuthError(401, f"Authentication failed (HTTP 401): {refresh_err}") from refresh_err
 
             if status_code not in (200, 201):
                 msg = f"HTTP Error {status_code}"
@@ -237,6 +523,8 @@ class ServiceNowClient:
             err_msg = str(e)
             if self.password and self.password in err_msg:
                 err_msg = err_msg.replace(self.password, "********")
+            if self.client_secret and self.client_secret in err_msg:
+                err_msg = err_msg.replace(self.client_secret, "********")
             logger.error(
                 "!!! CONNECTION ERROR [ServiceNowClient._execute_request]: Cannot reach '%s'\n  Error: %s\n%s",
                 safe_url,
@@ -248,6 +536,8 @@ class ServiceNowClient:
             err_msg = str(e)
             if self.password and self.password in err_msg:
                 err_msg = err_msg.replace(self.password, "********")
+            if self.client_secret and self.client_secret in err_msg:
+                err_msg = err_msg.replace(self.client_secret, "********")
             logger.error(
                 "!!! REQUEST EXCEPTION [ServiceNowClient._execute_request]: %s\n%s",
                 err_msg,
@@ -277,14 +567,9 @@ class ServiceNowClient:
             state = ""
 
             if isinstance(result, dict):
-                # Use extract_sn_field() rather than str() so that reference
-                # fields returned as link-value objects
-                # (e.g. {"value": "INC001", "display_value": "INC001"})
-                # are unwrapped correctly instead of producing a Python repr
-                # string that would fail downstream INC-number checks.
                 sys_id = extract_sn_field(result, "sys_id")
                 number = extract_sn_field(result, "number")
-                state  = extract_sn_field(result, "state")
+                state = extract_sn_field(result, "state")
 
             ret = {
                 "success": True,
@@ -293,7 +578,7 @@ class ServiceNowClient:
                 "sys_id": sys_id,
                 "state": state,
                 "message": "Request completed successfully",
-                "result": result
+                "result": result,
             }
             logger.info(
                 "<<< EXIT [ServiceNowClient._safe_request]: success=True, number=%s, sys_id=%s",
@@ -313,7 +598,7 @@ class ServiceNowClient:
                 "number": "",
                 "sys_id": "",
                 "state": "",
-                "message": "Invalid JSON response from ServiceNow"
+                "message": "Invalid JSON response from ServiceNow",
             }
         except ServiceNowAuthError as e:
             logger.error(
@@ -327,7 +612,7 @@ class ServiceNowClient:
                 "number": "",
                 "sys_id": "",
                 "state": "",
-                "message": f"Authentication failed: {e.message}"
+                "message": f"Authentication failed: {e.message}",
             }
         except ServiceNowHTTPError as e:
             logger.error(
@@ -341,7 +626,7 @@ class ServiceNowClient:
                 "number": "",
                 "sys_id": "",
                 "state": "",
-                "message": f"API request failed: {e.message}"
+                "message": f"API request failed: {e.message}",
             }
         except ServiceNowTimeoutError as e:
             logger.error(
@@ -355,7 +640,7 @@ class ServiceNowClient:
                 "number": "",
                 "sys_id": "",
                 "state": "",
-                "message": "Request timed out"
+                "message": "Request timed out",
             }
         except ServiceNowException as e:
             logger.error(
@@ -369,7 +654,7 @@ class ServiceNowClient:
                 "number": "",
                 "sys_id": "",
                 "state": "",
-                "message": str(e)
+                "message": str(e),
             }
 
     def create_incident(
@@ -379,7 +664,7 @@ class ServiceNowClient:
         category: Optional[str] = None,
         severity: int = 3,
         caller_id: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> Dict[str, Any]:
         """Create a new incident in ServiceNow including caller_id when provided."""
         logger.info(">>> ENTRY [ServiceNowClient.create_incident]")
@@ -402,7 +687,7 @@ class ServiceNowClient:
             mock_incident = servicenow_mock_db.create(
                 category=cat,
                 description=desc,
-                assignment_group=assignment_group
+                assignment_group=assignment_group,
             )
             mock_incident["short_description"] = short_desc
             mock_incident["severity"] = severity
@@ -417,7 +702,7 @@ class ServiceNowClient:
                 "state": "1",
                 "caller_id": caller,
                 "message": "Mock incident created successfully",
-                "result": mock_incident
+                "result": mock_incident,
             }
 
         if not self.base_url:
@@ -433,7 +718,7 @@ class ServiceNowClient:
                 "number": "",
                 "sys_id": "",
                 "state": "",
-                "message": "ServiceNow instance URL is not configured."
+                "message": "ServiceNow instance URL is not configured.",
             }
 
         url = f"{self.base_url}/api/now/table/{self.table}"
@@ -481,7 +766,7 @@ class ServiceNowClient:
                     "number": "",
                     "sys_id": "",
                     "state": "",
-                    "message": f"Incident with sys_id {sys_id} not found."
+                    "message": f"Incident with sys_id {sys_id} not found.",
                 }
             return {
                 "success": True,
@@ -490,7 +775,7 @@ class ServiceNowClient:
                 "sys_id": mock_incident["sys_id"],
                 "state": "1" if mock_incident.get("state") == "OPEN" else "7",
                 "message": "Mock incident retrieved successfully",
-                "result": mock_incident
+                "result": mock_incident,
             }
 
         if not self.base_url:
@@ -500,7 +785,7 @@ class ServiceNowClient:
                 "number": "",
                 "sys_id": "",
                 "state": "",
-                "message": "ServiceNow instance URL is not configured."
+                "message": "ServiceNow instance URL is not configured.",
             }
 
         url = f"{self.base_url}/api/now/table/{self.table}/{sys_id}"
@@ -519,7 +804,7 @@ class ServiceNowClient:
                     "number": "",
                     "sys_id": "",
                     "state": "",
-                    "message": f"Incident with sys_id {sys_id} not found."
+                    "message": f"Incident with sys_id {sys_id} not found.",
                 }
             logger.info("ServiceNowClient: Incident update completed (Mock sys_id=%s)", sys_id)
             return {
@@ -529,7 +814,7 @@ class ServiceNowClient:
                 "sys_id": mock_incident["sys_id"],
                 "state": "1" if mock_incident.get("state") == "OPEN" else "7",
                 "message": "Mock incident updated successfully",
-                "result": mock_incident
+                "result": mock_incident,
             }
 
         if not self.base_url:
@@ -539,7 +824,7 @@ class ServiceNowClient:
                 "number": "",
                 "sys_id": "",
                 "state": "",
-                "message": "ServiceNow instance URL is not configured."
+                "message": "ServiceNow instance URL is not configured.",
             }
 
         url = f"{self.base_url}/api/now/table/{self.table}/{sys_id}"
@@ -562,6 +847,6 @@ class ServiceNowClient:
         """Add a work note to an incident."""
         logger.info("ServiceNowClient: Work note added to sys_id=%s", sys_id)
         payload = {
-            "work_notes": work_note
+            "work_notes": work_note,
         }
         return self.update_incident(sys_id, payload, use_patch=True)
