@@ -33,6 +33,7 @@ def disabled_env():
     old_env = os.environ.copy()
     os.environ["SERVICENOW_ENABLED"] = "false"
     os.environ["SERVICENOW_INSTANCE_URL"] = ""
+    os.environ["USE_MOCK_SERVICENOW"] = "true"
     yield
     os.environ.clear()
     os.environ.update(old_env)
@@ -42,6 +43,7 @@ def disabled_env():
 def enabled_env():
     """Environment fixture with ServiceNow enabled and configured with Basic Auth."""
     old_env = os.environ.copy()
+    os.environ["USE_MOCK_SERVICENOW"] = "false"
     os.environ["SERVICENOW_ENABLED"] = "true"
     os.environ["SERVICENOW_INSTANCE_URL"] = "https://dev12345.service-now.com"
     os.environ["SERVICENOW_AUTH_TYPE"] = "basic"
@@ -135,11 +137,18 @@ def test_create_incident_success_with_caller_id(enabled_env):
     mock_client.create_incident.assert_called_once_with(
         short_description="Outlook crash",
         description="Outlook crashes on launch",
-        category="OUTLOOK",
+        category="Software",
+        subcategory=None,
+        u_type=None,
+        contact_type=None,
         severity=2,
         assignment_group="IT Support",
         caller_id="john.doe",
+        urgency=3,
+        impact=3,
+        priority=None,
     )
+
 
 
 def test_update_incident_uses_patch(enabled_env):

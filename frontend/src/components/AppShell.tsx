@@ -298,7 +298,7 @@ export default function AppShell({
         {/* Desktop/Tablet Sidebar aside */}
         <aside 
           className={`hidden md:flex flex-col justify-between pt-3 pb-4 bg-white border-r border-[#E2E8F0] z-10 flex-shrink-0 transition-all duration-300 ${
-            isCollapsed ? "w-16" : "w-52"
+            isCollapsed ? "w-16" : "w-60"
           }`}
         >
           <div>

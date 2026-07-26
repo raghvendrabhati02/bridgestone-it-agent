@@ -1,6 +1,7 @@
 # =========================
 # Python
 # =========================
+**/__pycache__/
 __pycache__/
 *.py[cod]
 *.pyo
@@ -17,6 +18,8 @@ backend/venv_312/
 
 # Databases
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
 
 # Environment Files
@@ -44,3 +47,30 @@ build/
 
 pg_data/
 pg_portable/
+
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.pyc
+
+node_modules/
+
+.venv/
+venv/
+
+dist/
+build/
+
+coverage/
+
+*.log
+
+.idea/
+.vscode/
+
+.DS_Store
+Thumbs.db
+*.sqlite3
+*.db

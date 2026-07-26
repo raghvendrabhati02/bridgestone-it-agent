@@ -401,17 +401,33 @@ class GeminiProvider(BaseAIProvider):
             # Try configured model with default retries according to the centralized retry policy
             res = self._execute_with_retry(lambda: wrap_call(self._model_name), max_retries=3)
             latency = time.time() - start_time
-            
+
             logical_api_calls = self._api_calls - start_api_calls
             logical_verify_calls = self._verify_calls - start_verify_calls
             total_retries = max(0, primary_attempts - 1)
-            
-            # Observe request duration metric
+
+            # Observe per-provider + per-model metrics
             try:
-                from app.core.metrics import LLM_REQUEST_DURATION_SECONDS
+                from app.core.metrics import (
+                    LLM_REQUEST_DURATION_SECONDS,
+                    PROVIDER_REQUESTS_TOTAL,
+                    PROVIDER_RETRIES_TOTAL,
+                    PROVIDER_LATENCY_SECONDS,
+                )
                 LLM_REQUEST_DURATION_SECONDS.labels(
+                    model=model_used, fallback_used=str(fallback_used)
+                ).observe(latency)
+                PROVIDER_REQUESTS_TOTAL.labels(
+                    provider="GeminiProvider", model=model_used
+                ).inc()
+                if total_retries > 0:
+                    PROVIDER_RETRIES_TOTAL.labels(
+                        provider="GeminiProvider", model=model_used
+                    ).inc(total_retries)
+                PROVIDER_LATENCY_SECONDS.labels(
+                    provider="GeminiProvider",
                     model=model_used,
-                    fallback_used=str(fallback_used)
+                    fallback_used=str(fallback_used),
                 ).observe(latency)
             except Exception:
                 pass
@@ -443,6 +459,14 @@ class GeminiProvider(BaseAIProvider):
             is_503 = "503" in exc_str or "unavailable" in exc_str or "overloaded" in exc_str or error_class == "SERVICE_UNAVAILABLE"
             is_429 = "429" in exc_str or "quota" in exc_str or "limit" in exc_str or error_class == "RATE_LIMIT"
 
+            # Record quota/rate-limit failure per provider
+            if is_429:
+                try:
+                    from app.core.metrics import PROVIDER_QUOTA_FAILURES_TOTAL
+                    PROVIDER_QUOTA_FAILURES_TOTAL.labels(provider="GeminiProvider").inc()
+                except Exception:
+                    pass
+
             if is_404 or is_503 or is_429:
                 fallback_model = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite").strip()
                 fallback_used = True
@@ -451,7 +475,7 @@ class GeminiProvider(BaseAIProvider):
                     "Falling back to '%s'...",
                     self._model_name, error_class, fallback_model
                 )
-                
+
                 # Increment fallback metric
                 try:
                     from app.core.metrics import LLM_MODEL_FALLBACK_TOTAL

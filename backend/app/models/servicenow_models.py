@@ -26,11 +26,15 @@ class IncidentCreateRequest(BaseModel):
     short_description: str = Field(..., description="Short summary of the issue")
     description: str = Field(..., description="Detailed description of the issue")
     category: Optional[str] = Field("GENERAL", description="Category of the ticket")
+    subcategory: Optional[str] = Field(None, description="Subcategory of the ticket")
+    u_type: Optional[str] = Field(None, description="ServiceNow incident type (u_type)")
+    contact_type: Optional[str] = Field(None, description="Channel / contact type (e.g. virtual_agent)")
     severity: int = Field(3, description="Incident severity level (1-High, 2-Medium, 3-Low)")
     assignment_group: Optional[str] = Field("IT Support", description="Assigned support team group")
     caller_id: Optional[str] = Field(None, description="Username or ID of the caller")
     urgency: Optional[int] = Field(3, description="Urgency level")
     impact: Optional[int] = Field(3, description="Impact level")
+    priority: Optional[int] = Field(None, description="Priority level")
     extra_fields: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional custom fields")
 
 

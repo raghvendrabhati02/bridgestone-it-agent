@@ -102,7 +102,7 @@ def test_explicit_ticket_decisions():
     state2.phase = ConversationPhase.WAITING_TICKET_CONFIRMATION
     service._session_mgr.save_to_cache(state2)
     
-    res2 = service.handle_chat_turn(state2.session_id, "no don't create")
+    res2 = service.handle_chat_turn(state2.session_id, "no thanks")
     curr_state2 = service._session_mgr.get(state2.session_id)
     assert curr_state2.ticket_declined is True
     assert curr_state2.phase in (ConversationPhase.AI_TROUBLESHOOTING, ConversationPhase.UNDERSTANDING)

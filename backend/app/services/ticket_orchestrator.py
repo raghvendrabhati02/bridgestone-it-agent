@@ -68,45 +68,94 @@ class TicketOrchestrator:
             getattr(state.phase, 'value', str(state.phase)),
         )
 
-        # Build issue description from conversation history
-        hist = memory.get_history(state.session_id)
-        if hist:
-            # Use the first user message as the canonical description
-            user_msgs = [m["text"] for m in hist if m.get("sender") == "user"]
-            issue_desc = user_msgs[0] if user_msgs else hist[0].get("text", "IT Support Issue")
-            logger.info(
-                "[TicketOrchestrator.create] History has %d entries, %d user messages. "
-                "Using issue_desc='%.120s' | Correlation ID: %s",
-                len(hist),
-                len(user_msgs),
-                issue_desc,
-                corr_id,
-            )
-        else:
-            issue_desc = state.active_issue or "IT Support Issue"
-            logger.info(
-                "[TicketOrchestrator.create] No conversation history found — "
-                "using active_issue='%.120s' | Correlation ID: %s",
-                issue_desc,
-                corr_id,
-            )
+        # Build issue description & intelligent ticket summary from conversation history and state
+        hist = memory.get_history(state.session_id) or []
 
-        category = state.category or "GENERAL"
+        # Generate intelligent, grounded TicketSummary via TicketSummaryService
+        from app.services.ticket_summary_service import generate_ticket_summary
+        summary = generate_ticket_summary(
+            conversation_history=hist,
+            troubleshooting_state=state,
+        )
 
         logger.info(
-            "[TicketOrchestrator.create] Calling ticket_service.create_ticket with "
-            "category=%s, created_by=%s, description='%.120s' | Correlation ID: %s",
-            category,
-            username,
-            issue_desc,
-            corr_id,
+            "\n===== STAGE 1: TICKET SUMMARY =====\n"
+            "Source           : %s\n"
+            "Short Description: %s\n"
+            "Description      : %.150s...\n"
+            "===================================",
+            summary.source,
+            summary.short_description,
+            summary.description,
+        )
+
+        # Run ClassificationService on TicketSummary.description as canonical input
+        from app.services.classification_service import ClassificationService
+        from app.models.classification_models import ClassificationRequest
+
+        classifier = ClassificationService()
+        cls_req = ClassificationRequest(
+            description=summary.description or summary.short_description,
+            category_hint=None,
+        )
+        classification = classifier.classify(cls_req)
+
+        logger.info(
+            "\n===== STAGE 2: CLASSIFICATION RESULT =====\n"
+            "u_type          : %s\n"
+            "category        : %s\n"
+            "subcategory     : %s\n"
+            "assignment_group: %s\n"
+            "confidence      : %.2f\n"
+            "reasoning       : %s\n"
+            "==========================================",
+            classification.u_type,
+            classification.category,
+            classification.subcategory,
+            classification.assignment_group,
+            classification.confidence,
+            classification.reasoning,
+        )
+
+        # Generate fully-enriched IncidentMetadata using classification as primary source of truth
+        from app.services.incident_enrichment_service import IncidentEnrichmentService
+        enrichment_service = IncidentEnrichmentService()
+        incident_metadata = enrichment_service.enrich(
+            category=classification.category,
+            classification=classification,
+            troubleshooting_state=state,
+        )
+
+        logger.info(
+            "\n===== STAGE 3: ENRICHMENT RESULT (IncidentMetadata) =====\n"
+            "category        : %s\n"
+            "subcategory     : %s\n"
+            "assignment_group: %s\n"
+            "impact          : %d\n"
+            "urgency         : %d\n"
+            "priority        : %d (%s)\n"
+            "cmdb_ci         : %s\n"
+            "incident_type   : %s\n"
+            "=========================================================",
+            incident_metadata.category,
+            incident_metadata.subcategory,
+            incident_metadata.assignment_group,
+            incident_metadata.impact,
+            incident_metadata.urgency,
+            incident_metadata.priority,
+            incident_metadata.priority_label,
+            incident_metadata.configuration_item,
+            incident_metadata.incident_type,
         )
 
         try:
             ticket = create_ticket(
-                category=category,
-                issue_description=issue_desc,
+                category=incident_metadata.category,
+                issue_description=summary.description,
                 created_by=username,
+                short_description=summary.short_description,
+                description=summary.description,
+                incident_metadata=incident_metadata,
             )
             elapsed_ms = int((time.monotonic() - t_start) * 1000)
 

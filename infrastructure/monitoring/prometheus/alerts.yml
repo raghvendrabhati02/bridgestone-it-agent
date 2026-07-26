@@ -60,3 +60,43 @@ groups:
         annotations:
           summary: "Spike in failed authentication requests"
           description: "Spike of over 5 failed logins within 5 minutes. Potential brute-force attack on /auth/login."
+
+      # 7. Alert if ServiceNow API failure rate is high
+      - alert: ServiceNowHighFailRate
+        expr: (increase(servicenow_failures_total[5m]) / (increase(servicenow_requests_total[5m]) + 1)) > 0.2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ServiceNow API failure rate is high"
+          description: "Over 20% of ServiceNow API calls are failing in the last 5 minutes. Incident creation may be blocked."
+
+      # 8. Alert if ServiceNow API latency is high (p95 > 10s)
+      - alert: ServiceNowHighLatency
+        expr: histogram_quantile(0.95, rate(servicenow_latency_seconds_bucket[5m])) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ServiceNow API latency is elevated"
+          description: "95th percentile ServiceNow API latency exceeds 10 seconds. User-facing ticket creation will be slow."
+
+      # 9. Alert if AI provider model fallback rate is high
+      - alert: AIProviderFallbackSpike
+        expr: increase(llm_model_fallback_total[5m]) > 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI provider fallback rate is elevated"
+          description: "More than 3 AI provider model fallbacks occurred in the last 5 minutes. Primary model may be degraded."
+
+      # 10. Alert if end-to-end HTTP request latency p95 exceeds 20 seconds
+      - alert: HighEndToEndLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{path="/chat"}[5m])) > 20
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High end-to-end request latency detected"
+          description: "95th percentile end-to-end request latency on /chat exceeds 20 seconds. No single component may be failing, but user experience is degraded."

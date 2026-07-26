@@ -122,13 +122,15 @@ class TestITSMClassifier:
 class TestTicketServiceClassification:
     """Tests that ticket_service.create_ticket correctly uses classify_request."""
 
-    @patch("app.services.ticket_service.servicenow_client")
+    @patch("app.services.ticket_service.get_servicenow_service")
     @patch("app.services.ticket_service.get_db")
     @patch("app.services.ticket_service.create_notification")
     @patch("app.services.ticket_service.store_sla_record")
-    def test_incident_ticket_status_is_new(self, mock_sla, mock_notif, mock_db, mock_snow):
+    def test_incident_ticket_status_is_new(self, mock_sla, mock_notif, mock_db, mock_snow_get):
         from app.services.ticket_service import create_ticket
-        mock_snow.create_incident.return_value = {"success": True, "sys_id": "SNOW001"}
+        mock_snow_get.return_value.enabled = True
+        mock_snow_get.return_value.validate_configuration.return_value = (True, "")
+        mock_snow_get.return_value.create_incident.return_value = {"success": True, "sys_id": "SNOW001"}
         mock_db_ctx = MagicMock()
         mock_db_ctx.__enter__ = MagicMock(return_value=MagicMock())
         mock_db_ctx.__exit__ = MagicMock(return_value=False)
@@ -141,13 +143,15 @@ class TestTicketServiceClassification:
         assert ticket["status"] == "NEW"
         assert ticket["manager"] is None
 
-    @patch("app.services.ticket_service.servicenow_client")
+    @patch("app.services.ticket_service.get_servicenow_service")
     @patch("app.services.ticket_service.get_db")
     @patch("app.services.ticket_service.create_notification")
     @patch("app.services.ticket_service.store_sla_record")
-    def test_service_request_ticket_status_is_pending(self, mock_sla, mock_notif, mock_db, mock_snow):
+    def test_service_request_ticket_status_is_pending(self, mock_sla, mock_notif, mock_db, mock_snow_get):
         from app.services.ticket_service import create_ticket
-        mock_snow.create_incident.return_value = {"success": True, "sys_id": "SNOW002"}
+        mock_snow_get.return_value.enabled = True
+        mock_snow_get.return_value.validate_configuration.return_value = (True, "")
+        mock_snow_get.return_value.create_incident.return_value = {"success": True, "sys_id": "SNOW002"}
         mock_db_ctx = MagicMock()
         mock_db_ctx.__enter__ = MagicMock(return_value=MagicMock())
         mock_db_ctx.__exit__ = MagicMock(return_value=False)
@@ -160,13 +164,15 @@ class TestTicketServiceClassification:
         assert ticket["status"] == "WAITING_MANAGER"
         assert ticket["manager"] == "manager"
 
-    @patch("app.services.ticket_service.servicenow_client")
+    @patch("app.services.ticket_service.get_servicenow_service")
     @patch("app.services.ticket_service.get_db")
     @patch("app.services.ticket_service.create_notification")
     @patch("app.services.ticket_service.store_sla_record")
-    def test_privileged_action_ticket_status_is_pending(self, mock_sla, mock_notif, mock_db, mock_snow):
+    def test_privileged_action_ticket_status_is_pending(self, mock_sla, mock_notif, mock_db, mock_snow_get):
         from app.services.ticket_service import create_ticket
-        mock_snow.create_incident.return_value = {"success": True, "sys_id": "SNOW003"}
+        mock_snow_get.return_value.enabled = True
+        mock_snow_get.return_value.validate_configuration.return_value = (True, "")
+        mock_snow_get.return_value.create_incident.return_value = {"success": True, "sys_id": "SNOW003"}
         mock_db_ctx = MagicMock()
         mock_db_ctx.__enter__ = MagicMock(return_value=MagicMock())
         mock_db_ctx.__exit__ = MagicMock(return_value=False)
@@ -178,13 +184,15 @@ class TestTicketServiceClassification:
         assert ticket["approval_status"] == "PENDING"
         assert ticket["status"] == "WAITING_MANAGER"
 
-    @patch("app.services.ticket_service.servicenow_client")
+    @patch("app.services.ticket_service.get_servicenow_service")
     @patch("app.services.ticket_service.get_db")
     @patch("app.services.ticket_service.create_notification")
     @patch("app.services.ticket_service.store_sla_record")
-    def test_manager_notified_for_service_request(self, mock_sla, mock_notif, mock_db, mock_snow):
+    def test_manager_notified_for_service_request(self, mock_sla, mock_notif, mock_db, mock_snow_get):
         from app.services.ticket_service import create_ticket
-        mock_snow.create_incident.return_value = {"success": True, "sys_id": "SNOW004"}
+        mock_snow_get.return_value.enabled = True
+        mock_snow_get.return_value.validate_configuration.return_value = (True, "")
+        mock_snow_get.return_value.create_incident.return_value = {"success": True, "sys_id": "SNOW004"}
         mock_db_ctx = MagicMock()
         mock_db_ctx.__enter__ = MagicMock(return_value=MagicMock())
         mock_db_ctx.__exit__ = MagicMock(return_value=False)

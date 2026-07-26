@@ -340,6 +340,7 @@ class ConversationService:
         repo=None,
         transition_logger=None,
         action_engine=None,
+        troubleshooting_orchestrator=None,
     ) -> None:
         from app.services.session_manager import SessionManager
         from app.services.knowledge_orchestrator import KnowledgeOrchestrator
@@ -356,6 +357,8 @@ class ConversationService:
         self._repo = repo or ConversationRepository()
         self._tl = transition_logger or stl
         self._actions = action_engine or ActionEngine()
+        # TroubleshootingOrchestrator — optional; falls back to legacy flow if None
+        self._troubleshooting_orchestrator = troubleshooting_orchestrator
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -755,9 +758,19 @@ class ConversationService:
         """
         Multi-turn AI-guided troubleshooting handler (AI_TROUBLESHOOTING phase).
 
-        Called on every turn after the initial UNDERSTANDING→AI_TROUBLESHOOTING transition.
+        Integration Order
+        -----------------
+        1. If TroubleshootingOrchestrator is injected → attempt new orchestration path.
+           a. If OrchestrationResult.is_resolved       → transition to RESOLVED.
+           b. If OrchestrationResult.requires_escalation → transition to
+              WAITING_TICKET_CONFIRMATION (preserves the existing TicketService flow).
+           c. Otherwise                                → return conversational reply.
+        2. If the orchestrator raises *any* exception  → log structured warning and
+           fall through to the legacy implementation (unchanged code below).
+        3. If no orchestrator is injected              → legacy implementation runs.
 
-        Behaviour:
+        Legacy behaviour (preserved verbatim)
+        --------------------------------------
           - Injects a continuation instruction so Gemini knows it's mid-session.
           - Gemini reviews full history, does NOT repeat previous steps.
           - Adapts its next step to the user's latest response.
@@ -765,8 +778,99 @@ class ConversationService:
           - Transitions to TROUBLESHOOTING (KB+LAPS) for privileged intent mid-session.
           - Falls back to LlmOrchestrator.converse() if Gemini unavailable.
         """
-        import app.services.orchestrator_service as orchestrator_service
         import app.services.conversation_memory as mem
+
+        # ══════════════════════════════════════════════════════════════════════
+        # PATH 1: TroubleshootingOrchestrator (new enterprise path)
+        # ══════════════════════════════════════════════════════════════════════
+        if self._troubleshooting_orchestrator is not None:
+            try:
+                from app.services.troubleshooting_orchestrator import OrchestrationRequest
+                from app.services.classification_service import ClassificationService
+
+                # Reuse or derive classification from session state
+                classification = self._derive_classification(state)
+
+                history = mem.get_history(state.session_id)
+                # Normalise history format for the orchestrator
+                orch_history = [
+                    {
+                        "role": "user" if t.get("sender") == "user" else "model",
+                        "text": t.get("text", ""),
+                    }
+                    for t in history
+                    if t.get("text")
+                ]
+
+                request = OrchestrationRequest(
+                    session_id=state.session_id,
+                    user_message=message,
+                    classification=classification,
+                    conversation_history=orch_history,
+                )
+
+                orch_result = self._troubleshooting_orchestrator.handle(request)
+
+                from app.services.observability_service import log_event
+                log_event(
+                    "TroubleshootingOrchestrator called",
+                    category=state.category,
+                    phase=state.phase.value,
+                    is_resolved=orch_result.is_resolved,
+                    requires_escalation=orch_result.requires_escalation,
+                    turn_count=orch_result.state.turn_count,
+                )
+
+                # ── Resolution ────────────────────────────────────────────────
+                if orch_result.is_resolved:
+                    self._transition(
+                        state, ConversationPhase.RESOLVED,
+                        "TroubleshootingOrchestrator: issue resolved",
+                    )
+                    state.troubleshooting_session = None
+                    return self._reply(
+                        state, message, orch_result.response_text, "RESOLVED"
+                    )
+
+                # ── Escalation ────────────────────────────────────────────────
+                # Hand off to the existing WAITING_TICKET_CONFIRMATION flow so
+                # all existing TicketService / ServiceNow / audit logic runs.
+                if orch_result.requires_escalation:
+                    self._transition(
+                        state, ConversationPhase.WAITING_TICKET_CONFIRMATION,
+                        "TroubleshootingOrchestrator: escalation required",
+                    )
+                    # Persist orchestration context for TicketService to use
+                    if orch_result.escalation_context:
+                        if not isinstance(state.tool_result, dict):
+                            state.tool_result = {}
+                        state.tool_result["orchestration_context"] = orch_result.escalation_context
+                    # Build the escalation prompt exactly as the legacy path does
+                    ticket_prompt = f"{orch_result.response_text}\n\n{format_ticket_prompt()}"
+                    return self._reply(
+                        state, message, ticket_prompt, "ASK_MORE_INFO"
+                    )
+
+                # ── Continue troubleshooting ───────────────────────────────────
+                state.troubleshooting_steps_suggested += 1
+                return self._reply(
+                    state, message, orch_result.response_text, "ASK_MORE_INFO"
+                )
+
+            except Exception as orch_exc:
+                logger.warning(
+                    "[ConversationService._handle_ai_troubleshooting]: "
+                    "TroubleshootingOrchestrator raised %s: %s — "
+                    "falling back to legacy AI troubleshooting flow.",
+                    type(orch_exc).__name__,
+                    orch_exc,
+                )
+                # Fall through to PATH 2 (legacy) below
+
+        # ══════════════════════════════════════════════════════════════════════
+        # PATH 2: Legacy AI troubleshooting (preserved verbatim)
+        # ══════════════════════════════════════════════════════════════════════
+        import app.services.orchestrator_service as orchestrator_service
         from app.services.prompt_builder import build_troubleshooting_continuation_prompt
 
         history = mem.get_history(state.session_id)
@@ -788,7 +892,7 @@ class ConversationService:
             intent = decision.get("intent", "GENERAL_SUPPORT")
             response = decision.get("assistant_message", "")
             requires_confirmation = decision.get("requires_confirmation", False)
-            
+
             from app.services.observability_service import log_event
             log_event(
                 "Intent detected",
@@ -833,14 +937,12 @@ class ConversationService:
 
         if intent in self._TICKET_INTENTS:
             escalation_reason = decision.get("escalation_reason", "")
-            
+
             is_justified = (
                 (state.troubleshooting_steps_suggested > 0 and not state.ticket_declined)
                 or (escalation_reason in ("ADMIN_REQUIRED", "HARDWARE_FAILURE", "POLICY_REQUIRED") and not state.ticket_declined)
                 or self._is_ticket_request(message)
             )
-
-
 
             from app.services.observability_service import log_event
             log_event(
@@ -855,7 +957,7 @@ class ConversationService:
             if not is_justified:
                 logger.info("Blocked premature escalation. Insufficient evidence of troubleshooting.")
                 intent = "GENERAL_SUPPORT"
-                
+
                 log_event(
                     "Premature escalation blocked",
                     intent=intent,
@@ -864,17 +966,15 @@ class ConversationService:
                     escalation_reason=escalation_reason,
                     escalation_blocked=True
                 )
-                
+
                 # Context-Preserving Response Modification
                 import re
-                # Strip out ticket creation phrasing but preserve troubleshooting context
                 ticket_phrases = r"(?i)\b(I (will|can) (create|raise|open|submit) a ticket|Let me (create|raise|open) a ticket|I'm going to escalate|I'll escalate|I'll raise a support request|Would you like me to create a ticket)\b[^.]*\.?"
                 cleaned_response = re.sub(ticket_phrases, "", response).strip()
-                
+
                 if cleaned_response and len(cleaned_response.split()) > 5:
                     response = cleaned_response
                 else:
-                    # Fallback only if the entire message was about a ticket
                     response = "I need to ask a few more questions to diagnose this properly before we escalate. Could you provide a bit more detail about what you're experiencing?"
 
         # ── Escalation: Gemini signals ticket creation ────────────────────────
@@ -910,6 +1010,32 @@ class ConversationService:
 
         # ── LLM fallback ──────────────────────────────────────────────────────
         return self._reply(state, message, self._llm.converse(state, message), "ASK_MORE_INFO")
+
+    def _derive_classification(self, state):
+        """
+        Derive a minimal ITSMClassification from existing session state.
+
+        Used by _handle_ai_troubleshooting() to produce a classification for
+        TroubleshootingOrchestrator without calling ClassificationService again
+        (category is already known from the initial session setup).
+        """
+        class _MinimalClassification:
+            """Duck-type compatible with ITSMClassification."""
+            def __init__(self, category: str, subcategory: str, assignment_group: str) -> None:
+                self.category = category
+                self.subcategory = subcategory
+                self.assignment_group = assignment_group
+                self.confidence = 0.80
+                self.issue_type = "INCIDENT"
+                self.urgency = "MEDIUM"
+                self.impact = "MEDIUM"
+
+        category = (state.category or "General IT").replace("_", " ").title()
+        return _MinimalClassification(
+            category=category,
+            subcategory=getattr(state, "active_issue", "") or "",
+            assignment_group="IT Support",
+        )
 
 
     def _handle_troubleshooting(self, state, message, username):
@@ -1678,8 +1804,10 @@ class ConversationService:
             if classification.request_type == "SERVICE_REQUEST":
                 ticket = self._create_ticket_with_logging(state, username)
                 if not ticket or ticket.get("error"):
-                    self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure")
-                    bot_text = "Ticketing system is currently unavailable. Please try again later."
+                    err_msg = ticket.get("message") if (isinstance(ticket, dict) and ticket.get("message")) else "Ticketing system is currently unavailable. Please try again later."
+                    logger.error("!!! SERVICE REQUEST CREATION FAILURE | Session: %s | Error Details: %s", state.session_id, err_msg, exc_info=True)
+                    self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, f"Ticket creation error: {err_msg[:60]}")
+                    bot_text = err_msg
                     self._repo.persist(state, message, bot_text)
                     return self._build_payload(state, bot_text, "ERROR")
                     
@@ -1745,8 +1873,10 @@ class ConversationService:
             elif requires_admin_privileges(detected_category, message):
                 ticket = self._create_ticket_with_logging(state, username)
                 if not ticket or ticket.get("error"):
-                    self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure")
-                    bot_text = "Ticketing system is currently unavailable. Please try again later."
+                    err_msg = ticket.get("message") if (isinstance(ticket, dict) and ticket.get("message")) else "Ticketing system is currently unavailable. Please try again later."
+                    logger.error("!!! PRIVILEGED TICKET CREATION FAILURE | Session: %s | Error Details: %s", state.session_id, err_msg, exc_info=True)
+                    self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, f"Ticket creation error: {err_msg[:60]}")
+                    bot_text = err_msg
                     self._repo.persist(state, message, bot_text)
                     return self._build_payload(state, bot_text, "ERROR")
                     
@@ -1841,8 +1971,10 @@ class ConversationService:
             if requires_admin_privileges(state.category, message) or step_req_admin:
                 ticket = self._create_ticket_with_logging(state, username)
                 if not ticket or ticket.get("error"):
-                    self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, "ServiceNow failure")
-                    bot_text = "Ticketing system is currently unavailable. Please try again later."
+                    err_msg = ticket.get("message") if (isinstance(ticket, dict) and ticket.get("message")) else "Ticketing system is currently unavailable. Please try again later."
+                    logger.error("!!! TROUBLESHOOTING STEP TICKET CREATION FAILURE | Session: %s | Error Details: %s", state.session_id, err_msg, exc_info=True)
+                    self._transition(state, ConversationPhase.WAITING_SN_RECOVERY, f"Ticket creation error: {err_msg[:60]}")
+                    bot_text = err_msg
                     self._repo.persist(state, message, bot_text)
                     return self._build_payload(state, bot_text, "ERROR")
                     

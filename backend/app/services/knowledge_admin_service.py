@@ -255,12 +255,55 @@ def get_version_content(article_id: str, version: str) -> Optional[Dict[str, Any
         return None
 
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Upload constants (Phase 4 security hardening)
+# ──────────────────────────────────────────────────────────────────────────────
+_ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+_MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
 def upload_screenshot(article_id: str, filename: str, content: bytes) -> str:
-    """Save screenshot binary content to both frontend public and backend storage."""
-    # Ensure safe slug/filename
-    safe_filename = "".join([c if c.isalnum() or c in (".", "_", "-") else "_" for c in filename])
-    
-    # 1. Save to frontend public/images/
+    """
+    Save screenshot binary content to both frontend public and backend storage.
+
+    Security (Phase 4):
+      • Validates file extension against an image-only allowlist.
+      • Enforces a 5 MB maximum file size.
+      • Uses os.path.basename() to prevent path traversal in filenames.
+      • Applies an alphanumeric slug filter on top of basename.
+
+    Raises:
+        ValueError: if the file extension is not allowed or size exceeds limit.
+    """
+    import os as _os
+
+    # 1. Size guard (before any I/O)
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"File size {len(content):,} bytes exceeds the maximum allowed "
+            f"{_MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+        )
+
+    # 2. Path traversal guard — extract bare filename
+    safe_basename = _os.path.basename(filename)
+
+    # 3. Extension allowlist check
+    _, ext = _os.path.splitext(safe_basename.lower())
+    if ext not in _ALLOWED_IMAGE_EXTENSIONS:
+        raise ValueError(
+            f"File type '{ext}' is not allowed. Permitted types: "
+            f"{', '.join(sorted(_ALLOWED_IMAGE_EXTENSIONS))}."
+        )
+
+    # 4. Character-level slug sanitisation (alphanumeric + safe punctuation)
+    safe_filename = "".join(
+        [c if c.isalnum() or c in (".", "_", "-") else "_" for c in safe_basename]
+    )
+    if not safe_filename or safe_filename.startswith("."):
+        safe_filename = f"upload_{article_id}{ext}"
+
+    # 5. Save to frontend public/images/
     try:
         os.makedirs(FRONTEND_IMAGES_DIR, exist_ok=True)
         frontend_path = os.path.join(FRONTEND_IMAGES_DIR, safe_filename)
@@ -270,7 +313,7 @@ def upload_screenshot(article_id: str, filename: str, content: bytes) -> str:
     except Exception as e:
         logger.warning("Admin KB: Failed to save to frontend directory: %s", e)
 
-    # 2. Save to backend knowledge_base/images/
+    # 6. Save to backend knowledge_base/images/
     os.makedirs(IMAGES_DIR, exist_ok=True)
     backend_path = os.path.join(IMAGES_DIR, safe_filename)
     with open(backend_path, "wb") as f:

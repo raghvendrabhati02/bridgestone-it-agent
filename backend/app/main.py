@@ -1,8 +1,9 @@
 import logging
 import os
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Body
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.services.conversation_service import handle_chat_turn
@@ -49,8 +50,22 @@ logger = logging.getLogger("it-agent-backend")
 
 from contextlib import asynccontextmanager
 
+# ── Phase 5: Readiness flag ───────────────────────────────────────────────────
+# Toggled True once startup is complete, False when shutdown begins.
+# Used by GET /ready for lightweight Kubernetes/load-balancer probing.
+_app_ready: bool = False
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _app_ready
+
+    # ── Phase 3: Activate structured JSON logging on startup ─────────────────
+    import logging as _logging
+    _json_logging_enabled = os.getenv("JSON_LOGGING", "true").lower() in ("1", "true", "yes")
+    if _json_logging_enabled:
+        from app.core.json_logger import setup_json_logging
+        setup_json_logging(_logging.INFO)
+
     # Phase 7 Startup Validation
     if os.getenv("SERVICENOW_ENABLED", "false").lower() == "true":
         logger.info("ServiceNow Integration: Validating production configuration during startup...")
@@ -67,11 +82,31 @@ async def lifespan(app: FastAPI):
                 print(f"[OK] ServiceNow Connected ({health.get('instance')})")
             else:
                 logger.error("❌ ServiceNow Authentication Failed: %s", health.get("message"))
-                print(f"[X] ServiceNow Authentication Failed: {health.get('message')}")
+                print(f"[X] ServiceNow Authentication Failed: {health.get('message')})")
     else:
         logger.info("ServiceNow Integration is disabled (SERVICENOW_ENABLED=false)")
 
+    # Phase 6.2 ServiceNow Metadata Cache Startup Sync & Validation
+    try:
+        from app.services.servicenow_metadata_cache import ServiceNowMetadataCache
+        cache = ServiceNowMetadataCache.get_instance()
+        synced = cache.sync()
+        if synced and cache.source == "live_servicenow":
+            logger.info("✓ ServiceNow Metadata Synchronized from Live Instance (%s)", cache.last_refresh_iso)
+        else:
+            logger.info("WARNING: ServiceNow Metadata using local configuration fallback (%s)", cache.last_refresh_iso)
+    except Exception as meta_err:
+        logger.warning("WARNING: ServiceNow Metadata startup sync exception (%s)", meta_err)
+
+    # ── Phase 5: Mark application as ready ───────────────────────────────────
+    _app_ready = True
+    logger.info("Application startup complete. Readiness probe: READY.")
+
     yield
+
+    # ── Phase 5: Mark application as not-ready during graceful shutdown ───────
+    _app_ready = False
+    logger.info("Application shutdown initiated. Readiness probe: NOT READY.")
 
 app = FastAPI(
     title="Bridgestone IT Agent",
@@ -88,6 +123,41 @@ def servicenow_health_check_endpoint():
     from app.services.servicenow_service import get_servicenow_service
     sn_service = get_servicenow_service()
     return sn_service.health_check()
+
+
+@app.get("/metadata/health")
+def servicenow_metadata_health_check_endpoint():
+    """
+    Phase 6.2: ServiceNow Metadata Cache & Health Endpoint.
+    Returns JSON status, source, last_refresh, cache_age_seconds, and record counts.
+    """
+    from app.services.servicenow_metadata_cache import ServiceNowMetadataCache
+    cache = ServiceNowMetadataCache.get_instance()
+    return cache.get_stats()
+
+
+@app.get("/ready")
+def readiness_probe():
+    """
+    Phase 5: Kubernetes / load-balancer readiness probe.
+
+    Returns 200 once the application has completed startup and is ready to
+    accept traffic.  Returns 503 during startup or graceful shutdown.
+
+    This endpoint is intentionally lightweight — it does NOT query the database,
+    Redis, or any external API.  Use GET /health for a deep health check.
+    """
+    from fastapi.responses import JSONResponse
+    if _app_ready:
+        return JSONResponse(
+            status_code=200,
+            content={"status": "ready", "message": "Application is ready to accept traffic."},
+        )
+    return JSONResponse(
+        status_code=503,
+        content={"status": "not_ready", "message": "Application is still starting up or shutting down."},
+    )
+
 
 # Mount static files for screenshots
 from fastapi.staticfiles import StaticFiles
@@ -110,17 +180,22 @@ else:
     ]
 
 
+# ── Phase 4: Security Middleware ─────────────────────────────────────────────
+from app.core.security_middleware import SecurityHeadersMiddleware, RequestSizeLimitMiddleware
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestSizeLimitMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Correlation-ID", "X-Request-ID", "X-Session-ID", "Accept"],
+    # ── Phase 5: Expose correlation/request IDs so browser clients can read them ──
+    expose_headers=["X-Correlation-ID", "X-Request-ID"],
 )
 
 import time
-from fastapi import Request
-from fastapi.responses import Response
 
 SESSION_CORRELATION_CACHE = {}
 
@@ -172,8 +247,8 @@ async def monitor_requests(request: Request, call_next):
     method = request.method
     path = request.url.path
     
-    # Exclude /metrics, /system-status, /health from polluting metrics
-    if path in ("/metrics", "/system-status", "/health"):
+    # Exclude probe/diagnostic endpoints from polluting metrics
+    if path in ("/metrics", "/system-status", "/health", "/ready", "/health/servicenow"):
         return await call_next(request)
         
     clear_logging_context()
@@ -239,62 +314,78 @@ async def monitor_requests(request: Request, call_next):
     cutoff = now - 60.0
     while REQUEST_TIMESTAMPS and REQUEST_TIMESTAMPS[0] < cutoff:
         REQUEST_TIMESTAMPS.pop(0)
-        
+
     try:
         HTTP_REQUESTS_TOTAL.labels(method=method, path=path).inc()
     except Exception:
         pass
-        
+
+    # ── Phase 5: Import async_trace_span for root HTTP span ────────────────────
+    from app.core.tracing import async_trace_span
     start_time = time.time()
     status_code = 500
-    try:
-        response = await call_next(request)
-        status_code = response.status_code
-        return response
-    except Exception as e:
-        tb = traceback.format_exc()
-        error_stack_ctx.set(tb)
-        
-        ERROR_TIMESTAMPS.append(now)
-        while ERROR_TIMESTAMPS and ERROR_TIMESTAMPS[0] < cutoff:
-            ERROR_TIMESTAMPS.pop(0)
-            
-        raise e
-    finally:
-        duration = time.time() - start_time
-        
-        # Save latency
-        API_LATENCIES.append({
+    # ── Phase 5: Root HTTP span — wraps entire request lifecycle ──────────────
+    async with async_trace_span(
+        name="http_request",
+        attributes={
+            "provider": "none",
             "method": method,
             "path": path,
-            "duration": duration,
-            "timestamp": now
-        })
-        if len(API_LATENCIES) > 1000:
-            API_LATENCIES.pop(0)
-            
-        if status_code >= 400:
+            "correlation_id": corr_id,
+        },
+    ):
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            # ── Phase 5: Propagate Correlation ID back to the client ──────────
+            response.headers["X-Correlation-ID"] = corr_id
+            response.headers["X-Request-ID"] = req_id
+            return response
+        except Exception as e:
+            tb = traceback.format_exc()
+            error_stack_ctx.set(tb)
+
             ERROR_TIMESTAMPS.append(now)
             while ERROR_TIMESTAMPS and ERROR_TIMESTAMPS[0] < cutoff:
                 ERROR_TIMESTAMPS.pop(0)
-                
-        try:
-            HTTP_REQUEST_DURATION_SECONDS.labels(method=method, path=path).observe(duration)
-            if status_code >= 400:
-                HTTP_FAILURES_TOTAL.labels(method=method, path=path, status_code=str(status_code)).inc()
-        except Exception:
-            pass
-            
-        logger.info(
-            "Request processing complete.",
-            extra={
-                "execution_time": duration,
-                "status_code": status_code,
+
+            raise e
+        finally:
+            duration = time.time() - start_time
+
+            # Save latency
+            API_LATENCIES.append({
                 "method": method,
-                "path": path
-            }
-        )
-        clear_logging_context()
+                "path": path,
+                "duration": duration,
+                "timestamp": now
+            })
+            if len(API_LATENCIES) > 1000:
+                API_LATENCIES.pop(0)
+
+            if status_code >= 400:
+                ERROR_TIMESTAMPS.append(now)
+                while ERROR_TIMESTAMPS and ERROR_TIMESTAMPS[0] < cutoff:
+                    ERROR_TIMESTAMPS.pop(0)
+
+            try:
+                HTTP_REQUEST_DURATION_SECONDS.labels(method=method, path=path).observe(duration)
+                if status_code >= 400:
+                    HTTP_FAILURES_TOTAL.labels(method=method, path=path, status_code=str(status_code)).inc()
+            except Exception:
+                pass
+
+            logger.info(
+                "Request processing complete.",
+                extra={
+                    "execution_time": duration,
+                    "status_code": status_code,
+                    "method": method,
+                    "path": path
+                }
+            )
+            clear_logging_context()
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -329,12 +420,46 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 @app.get("/metrics")
-def get_metrics():
+def get_metrics(request: Request, db: Session = Depends(get_db_context)):
+    """
+    Prometheus metrics endpoint.
+
+    Access control is configurable via METRICS_PROTECTION env var:
+      network  (default) — no auth required; restrict at network/proxy level
+      auth               — requires ADMIN role Bearer token
+    """
+    protection = os.getenv("METRICS_PROTECTION", "network").lower()
+    if protection == "auth":
+        try:
+            from app.core.security import get_current_user as _get_user, RoleChecker, get_db_context as _get_db
+            admin_checker = RoleChecker(["ADMIN"])
+            auth_header = request.headers.get("authorization", "")
+            if not auth_header.startswith("Bearer "):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Authentication required for metrics access",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            from app.core.security import decode_token
+            payload = decode_token(auth_header.split(" ", 1)[1])
+            username = payload.get("sub")
+            if not username:
+                raise HTTPException(status_code=401, detail="Invalid token")
+            user = db.query(User).filter(User.username == username).first()
+            if not user or user.role != "ADMIN":
+                raise HTTPException(status_code=403, detail="ADMIN role required for metrics access")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=401, detail="Could not validate credentials")
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/system-status")
-def system_status(db: Session = Depends(get_db_context)):
+def system_status(
+    db: Session = Depends(get_db_context),
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"])),
+):
     logger.info("FastAPI Endpoint GET '/system-status': Status checked")
     
     now = time.time()
@@ -425,12 +550,12 @@ app.include_router(analytics_router)
 
 
 class ChatRequest(BaseModel):
-    message: str
-    session_id: str | None = None
+    message: str = Field(..., min_length=1, max_length=4000, description="User message (max 4000 chars)")
+    session_id: str | None = Field(default=None, max_length=128)
 
 class TicketCreateRequest(BaseModel):
-    category: str
-    issue_description: str
+    category: str = Field(..., min_length=1, max_length=100)
+    issue_description: str = Field(..., min_length=1, max_length=2000)
 
 @app.get("/")
 def home():
@@ -655,15 +780,35 @@ def health(db: Session = Depends(get_db_context)):
 
 
 @app.post("/chat")
-def chat(request: ChatRequest, current_user: User = Depends(get_current_user)):
+def chat(request: ChatRequest, raw_request: Request, current_user: User = Depends(get_current_user)):
     import time
-    t0 = time.time()
-    logger.info(">>> TRACE START: FastAPI Endpoint POST '/chat' | User: %s | Session ID: %s | Payload: %s", current_user.username, request.session_id, request.message)
+    from app.core.rate_limiter import check_rate_limit
+    from app.services.prompt_guard import scan_message, PromptInjectionError
+    from app.core.logging_context import correlation_id_ctx
+
+    # Phase 4: Rate limiting
+    check_rate_limit(raw_request, "chat")
+
+    # Phase 4: Prompt injection guard
+    safe_message = request.message
     try:
-        response_payload = handle_chat_turn(request.session_id, request.message, username=current_user.username, user_role=current_user.role)
+        safe_message = scan_message(request.message, correlation_id=correlation_id_ctx.get() or "")
+    except PromptInjectionError as pie:
+        logger.warning(
+            "POST /chat: Prompt injection blocked for user=%s: %s",
+            current_user.username, pie,
+        )
+        raise HTTPException(status_code=400, detail=str(pie))
+
+    t0 = time.time()
+    logger.info(">>> TRACE START: FastAPI Endpoint POST '/chat' | User: %s | Session ID: %s", current_user.username, request.session_id)
+    try:
+        response_payload = handle_chat_turn(request.session_id, safe_message, username=current_user.username, user_role=current_user.role)
         elapsed = (time.time() - t0) * 1000
-        logger.info("<<< TRACE END: FastAPI Endpoint POST '/chat' | Elapsed: %.2f ms | Returning: %s", elapsed, response_payload)
+        logger.info("<<< TRACE END: FastAPI Endpoint POST '/chat' | Elapsed: %.2f ms", elapsed)
         return response_payload
+    except HTTPException:
+        raise
     except Exception as exc:
         elapsed = (time.time() - t0) * 1000
         logger.error("!!! TRACE ERROR: FastAPI Endpoint POST '/chat' | Elapsed: %.2f ms | Error: %s", elapsed, exc, exc_info=True)
@@ -786,6 +931,26 @@ def list_tickets(
             "manager": t.manager,
             "approval_status": t.approval_status,
             "assignment_group": t.assignment_group or t.assigned_team,
+            "approved_by": getattr(t, "approved_by", None) or t.manager or ("manager" if t.approval_status == "APPROVED" else None),
+            "approved_at": t.approved_at.isoformat() + "Z" if getattr(t, "approved_at", None) else (t.updated_at.isoformat() + "Z" if (t.approval_status == "APPROVED" and t.updated_at) else None),
+            "approval_notes": getattr(t, "approval_notes", None) or ("Approved via Manager Portal." if t.approval_status == "APPROVED" else None),
+            "software_requested": t.category if t.category in ["Software", "SOFTWARE_INSTALLATION", "SAP", "ADOBE", "CITRIX", "POWERBI"] else (
+                "SAP GUI" if "sap" in (t.description or "").lower() else
+                "Adobe Acrobat" if "adobe" in (t.description or "").lower() else
+                "Microsoft Visio" if "visio" in (t.description or "").lower() else
+                t.category
+            ),
+            "laps_active": getattr(t, "laps_active", False) or False,
+            "laps_password": getattr(t, "laps_password", None),
+            "laps_expiration": t.laps_expiration.isoformat() + "Z" if getattr(t, "laps_expiration", None) else None,
+            "temp_admin_credentials": {
+                "username": ".\\Administrator",
+                "password": getattr(t, "laps_password", "Temp@4821#"),
+                "status": "EXPIRED" if (getattr(t, "laps_expiration", None) and datetime.datetime.utcnow() > t.laps_expiration) else ("ACTIVE" if getattr(t, "laps_active", False) else "PENDING"),
+                "valid_for_minutes": 15,
+                "expires_at": t.laps_expiration.isoformat() + "Z" if getattr(t, "laps_expiration", None) else None,
+                "source": "Mock Enterprise Integration"
+            } if getattr(t, "laps_active", False) or t.status == "ACCESS_GRANTED" else None
         })
     return results
 
@@ -3116,7 +3281,7 @@ def admin_upload_screenshot(
 
 @app.get("/api/itsm/manager-approvals")
 def get_manager_approval_queue(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"])),
     db: Session = Depends(get_db_context)
 ):
     """Returns all SERVICE_REQUEST and PRIVILEGED_ACTION tickets pending manager approval."""
@@ -3126,7 +3291,10 @@ def get_manager_approval_queue(
 
     from app.database.models.ticket import Ticket
     tickets_q = db.query(Ticket).filter(
-        ((Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"])) | (Ticket.status == "WAITING_MANAGER_APPROVAL")),
+        (
+            (Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"])) |
+            (Ticket.status.in_(["WAITING_MANAGER_APPROVAL", "WAITING_MANAGER"]))
+        ),
         Ticket.approval_status == "PENDING",
         Ticket.status.notin_(["REJECTED", "CLOSED"])
     )
@@ -3253,12 +3421,17 @@ def get_manager_tickets(
     if current_user.role not in ("MANAGER", "ADMIN"):
         raise HTTPException(status_code=403, detail="Only Managers and Admins can view manager tickets.")
 
+    import datetime
     from app.database.models.ticket import Ticket
     from app.database.models.audit_log import AuditLog
     from app.database.models.agent_trace import AgentTrace
 
     query = db.query(Ticket).filter(
-        (Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"])) | (Ticket.status == "WAITING_MANAGER_APPROVAL")
+        (
+            (Ticket.request_type.in_(["SERVICE_REQUEST", "PRIVILEGED_ACTION"])) |
+            (Ticket.status.in_(["WAITING_MANAGER_APPROVAL", "WAITING_MANAGER", "READY_FOR_ADMIN", "ACCESS_GRANTED", "COMPLETED", "APPROVED", "REJECTED"])) |
+            (Ticket.approval_status.in_(["PENDING", "APPROVED", "REJECTED"]))
+        )
     )
 
     if current_user.role == "MANAGER":
@@ -3294,6 +3467,27 @@ def get_manager_tickets(
             else:
                 ai_recommendation = f"Verify request alignment with {t.category} policies."
 
+        # Extract software requested name cleanly
+        software_req = t.category
+        desc_low = (t.description or t.issue_description or "").lower()
+        if "sap" in desc_low:
+            software_req = "SAP GUI"
+        elif "adobe" in desc_low:
+            software_req = "Adobe Acrobat"
+        elif "visio" in desc_low:
+            software_req = "Microsoft Visio"
+        elif "teams" in desc_low:
+            software_req = "Microsoft Teams"
+        elif "citrix" in desc_low:
+            software_req = "Citrix Workspace"
+
+        approved_by_val = getattr(t, "approved_by", None) or t.manager or ("manager" if t.approval_status == "APPROVED" else None)
+        approved_at_val = t.approved_at.isoformat() + "Z" if getattr(t, "approved_at", None) else (t.updated_at.isoformat() + "Z" if (t.approval_status in ("APPROVED", "REJECTED") and t.updated_at) else None)
+        approval_notes_val = getattr(t, "approval_notes", None) or ("Approved via Manager Portal." if t.approval_status == "APPROVED" else None)
+
+        laps_active_val = getattr(t, "laps_active", False) or (t.status == "ACCESS_GRANTED")
+        laps_exp_iso = t.laps_expiration.isoformat() + "Z" if getattr(t, "laps_expiration", None) else None
+
         results.append({
             "ticket_id": t.ticket_id,
             "category": t.category,
@@ -3311,11 +3505,26 @@ def get_manager_tickets(
             "request_type": t.request_type,
             "manager": t.manager,
             "approval_status": t.approval_status,
+            "approved_by": approved_by_val,
+            "approved_at": approved_at_val,
+            "approval_notes": approval_notes_val,
+            "software_requested": software_req,
             "assignment_group": t.assignment_group or t.assigned_team,
             "sla_hours": t.sla_hours,
             "sla_state": t.sla_state or "HEALTHY",
             "sla_breached": t.sla_breached or False,
-            "ai_recommendation": ai_recommendation
+            "ai_recommendation": ai_recommendation,
+            "laps_active": laps_active_val,
+            "laps_password": getattr(t, "laps_password", None),
+            "laps_expiration": laps_exp_iso,
+            "temp_admin_credentials": {
+                "username": ".\\Administrator",
+                "password": getattr(t, "laps_password", "Temp@4821#"),
+                "status": "EXPIRED" if (isinstance(getattr(t, "laps_expiration", None), datetime.datetime) and datetime.datetime.utcnow() > t.laps_expiration) else ("ACTIVE" if laps_active_val else "PENDING"),
+                "valid_for_minutes": 15,
+                "expires_at": laps_exp_iso,
+                "source": "Mock Enterprise Integration"
+            } if laps_active_val else None
         })
     return {"count": len(results), "tickets": results}
 
@@ -3338,16 +3547,16 @@ def approve_manager_ticket(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found.")
         
+    import datetime
     old_status = ticket.status
     
-    if ticket.status == "WAITING_MANAGER_APPROVAL":
-        ticket.status = "WAITING_ADMIN_APPROVAL"
-    elif ticket.status == "WAITING_MANAGER":
-        ticket.status = "WAITING_ADMIN"
-    else:
-        ticket.status = "WAITING_ADMIN"
-        
+    # Phase 6.3: Approve transitions ticket to READY_FOR_ADMIN so Admin Queue shows the action button.
+    ticket.status = "READY_FOR_ADMIN"
     ticket.approval_status = "APPROVED"
+    ticket.approved_by = current_user.username
+    ticket.approved_at = datetime.datetime.utcnow()
+    note_val = request.get("notes") or request.get("reason") or "Approved via Manager Portal."
+    ticket.approval_notes = note_val
     db.commit()
 
     # Log Admin approval requested
@@ -3413,9 +3622,13 @@ def reject_manager_ticket(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found.")
         
+    import datetime
     old_status = ticket.status
     ticket.status = "REJECTED"
     ticket.approval_status = "REJECTED"
+    ticket.approved_by = current_user.username
+    ticket.approved_at = datetime.datetime.utcnow()
+    ticket.approval_notes = request.get("reason") or request.get("notes") or "Rejected by manager."
     db.commit()
     
     try:
@@ -3446,7 +3659,171 @@ def reject_manager_ticket(
     return {"message": "Ticket request rejected successfully.", "status": "REJECTED"}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 6.3: Admin Queue — Grant Temporary Admin Access (Mock) & Complete Installation
+# ─────────────────────────────────────────────────────────────────────────────
 
+@app.post("/api/itsm/admin-queue/{ticket_id}/grant-admin-access")
+def grant_admin_access(
+    ticket_id: str,
+    request: dict = Body(default={}),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """
+    Phase 6.3: Mock admin access grant step.
+    Transitions ticket from READY_FOR_ADMIN → ACCESS_GRANTED.
+
+    TODO: Replace with real enterprise integration:
+      - CyberArk API  (Privileged Access Management)
+      - Windows LAPS  (Local Administrator Password Solution)
+      - Azure PIM     (Privileged Identity Management)
+    """
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only Admins can grant temporary admin access.")
+
+    from app.database.models.ticket import Ticket
+    from app.services.timeline_service import TimelineService
+    from app.services.rbac_audit_service import log_rbac_event
+    from app.services.notification_service import create_notification as _notif
+
+    ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found.")
+
+    if ticket.status not in ("READY_FOR_ADMIN", "WAITING_ADMIN", "WAITING_ADMIN_APPROVAL", "APPROVED"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ticket must be in READY_FOR_ADMIN status to grant access. Current status: {ticket.status}"
+        )
+
+    import datetime
+    old_status = ticket.status
+    ticket.status = "ACCESS_GRANTED"
+    ticket.laps_active = True
+    ticket.laps_password = "Temp@4821#"
+    now_utc = datetime.datetime.utcnow()
+    expires_dt = now_utc + datetime.timedelta(minutes=15)
+    ticket.laps_expiration = expires_dt
+    ticket.laps_audit_id = f"LAPS-{int(now_utc.timestamp())}"
+    db.commit()
+
+    try:
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="ADMIN_ACCESS_GRANTED",
+            actor=current_user.username,
+            action="grant_admin_access",
+            description=(
+                f"Temporary administrator access granted by {current_user.username}. "
+                "(Mock Enterprise Integration) — "
+                "TODO: Replace with CyberArk API / Windows LAPS / Azure PIM"
+            )
+        )
+        _notif(
+            ticket_id=ticket_id,
+            recipient=ticket.created_by or "Employee",
+            message=f"Temporary administrator access has been granted for your request {ticket_id}. Installation can now proceed."
+        )
+        log_rbac_event(
+            user=current_user.username,
+            role=current_user.role,
+            action="update_ticket_lifecycle",
+            ticket_id=ticket_id,
+            old_state=old_status,
+            new_state="ACCESS_GRANTED",
+            details={"action": "grant_admin_access", "mock": True}
+        )
+        db.commit()
+    except Exception as _audit_err:
+        logger.warning("grant_admin_access: audit write failed (non-critical): %s", _audit_err)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    return {
+        "message": "Temporary administrator access granted (Mock Enterprise Integration)",
+        "status": "ACCESS_GRANTED",
+        "mock": True,
+        "note": "TODO: Replace with CyberArk API / Windows LAPS / Azure PIM",
+        "temp_admin_credentials": {
+            "username": ".\\Administrator",
+            "password": "Temp@4821#",
+            "status": "ACTIVE",
+            "valid_for_minutes": 15,
+            "expires_at": expires_dt.isoformat() + "Z",
+            "source": "Mock Enterprise Integration"
+        }
+    }
+
+
+@app.post("/api/itsm/admin-queue/{ticket_id}/complete-installation")
+def complete_installation(
+    ticket_id: str,
+    request: dict = Body(default={}),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Phase 6.3: Marks the privileged action as completed after admin has granted access."""
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only Admins can complete installations.")
+
+    from app.database.models.ticket import Ticket
+    from app.services.timeline_service import TimelineService
+    from app.services.rbac_audit_service import log_rbac_event
+    from app.services.notification_service import create_notification as _notif
+
+    ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found.")
+
+    if ticket.status not in ("ACCESS_GRANTED", "TEMP_ADMIN_GRANTED"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ticket must be in ACCESS_GRANTED status to complete. Current: {ticket.status}"
+        )
+
+    old_status = ticket.status
+    ticket.status = "COMPLETED"
+    db.commit()
+
+    try:
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="INSTALLATION_COMPLETED",
+            actor=current_user.username,
+            action="complete_installation",
+            description=f"Installation/privileged action completed by admin {current_user.username}."
+        )
+        _notif(
+            ticket_id=ticket_id,
+            recipient=ticket.created_by or "Employee",
+            message=f"Your request {ticket_id} has been completed. The installation was successful."
+        )
+        log_rbac_event(
+            user=current_user.username,
+            role=current_user.role,
+            action="update_ticket_lifecycle",
+            ticket_id=ticket_id,
+            old_state=old_status,
+            new_state="COMPLETED",
+            details={"action": "complete_installation"}
+        )
+        db.commit()
+    except Exception as _audit_err:
+        logger.warning("complete_installation: audit write failed (non-critical): %s", _audit_err)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    return {
+        "message": "Installation completed successfully.",
+        "status": "COMPLETED"
+    }
 
 
 @app.get("/system/provider")

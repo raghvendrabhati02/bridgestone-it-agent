@@ -71,7 +71,7 @@ def test_create_incident_success(mock_env):
         args, kwargs = mock_post.call_args
         assert kwargs["json"]["short_description"] == "Short desc"
         assert kwargs["json"]["description"] == "Description"
-        assert kwargs["json"]["category"] == "VPN"
+        assert kwargs["json"]["category"].lower() == "network"
 
 
 def test_create_incident_http_error(mock_env):

@@ -9,7 +9,7 @@ class ServiceNowMock:
         self.counter = 0
         self.req_counter = 0
 
-    def create(self, category: str, description: str, assignment_group: str) -> dict:
+    def create(self, category: str, description: str, assignment_group: str, **kwargs) -> dict:
         self.counter += 1
         sys_id = f"SNOW{self.counter:03d}"
         number = f"INC{self.counter:06d}"
@@ -21,6 +21,9 @@ class ServiceNowMock:
             "description": description,
             "assignment_group": assignment_group
         }
+        if kwargs:
+            filtered_extra = {k: v for k, v in kwargs.items() if v is not None}
+            incident.update(filtered_extra)
         self.incidents[sys_id] = incident
         logger.info("ServiceNow Mock: Created incident %s (%s)", sys_id, number)
         return incident
@@ -47,8 +50,16 @@ class ServiceNowMock:
     def get_all_requests(self) -> list[dict]:
         return list(self.requests.values())
 
-    def get(self, sys_id: str) -> dict | None:
-        return self.incidents.get(sys_id)
+    def get(self, sys_id_or_number: str) -> dict | None:
+        if sys_id_or_number in self.incidents:
+            return self.incidents[sys_id_or_number]
+        for inc in self.incidents.values():
+            if inc.get("number") == sys_id_or_number or inc.get("sys_id") == sys_id_or_number:
+                return inc
+        return None
+
+    def get_by_number(self, number: str) -> dict | None:
+        return self.get(number)
 
     def get_all(self) -> list[dict]:
         return list(self.incidents.values())

@@ -10,9 +10,10 @@ import {
   Check, X, ShieldAlert, Send, Loader2, Download, ChevronLeft,
   ChevronRight as ChevronRightIcon, Paperclip, Shield, Terminal,
   Settings, Activity, AlertTriangle, BookOpen, Trash2, Edit,
-  Plus, RefreshCw, Upload, Database, Cpu, HelpCircle, HardDrive, CheckCheck,
-  AlertCircle
+  Plus, RefreshCw, Upload, Cpu, HardDrive, Database, Key, CheckCheck, AlertCircle, HelpCircle
 } from "lucide-react";
+
+import EnterpriseAdminAccessCard from "@/components/shared/EnterpriseAdminAccessCard";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
   CartesianGrid, PieChart, Pie, Cell, Legend, LineChart, Line
@@ -55,6 +56,14 @@ interface Ticket {
   sla_hours?: number;
   sla_state?: string;
   sla_breached?: boolean;
+  laps_active?: boolean;
+  laps_password?: string;
+  laps_expiration?: string;
+  temp_admin_credentials?: {
+    username?: string;
+    password?: string;
+    expires_at?: string;
+  };
 }
 
 interface Comment {
@@ -290,6 +299,63 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
     } catch (e) {
       if (e instanceof NetworkError) return; // silently skip when backend offline
       showToast("Network error submitting action", "error");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Phase 6.3: Grant Temporary Admin Access (Mock Enterprise Integration)
+  const handleGrantAdminAccess = async () => {
+    if (!selectedTicket) return;
+    setActionLoading(true);
+    try {
+      const res = await apiFetch(`/api/itsm/admin-queue/${selectedTicket.ticket_id}/grant-admin-access`, {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ note: actionNote.trim() || undefined })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("🔑 Temporary administrator access granted (Mock Enterprise Integration)", "success");
+        fetchTicketDetails(selectedTicket.ticket_id);
+        fetchData(true);
+        setActionNote("");
+        // Update selected ticket status in-place
+        setSelectedTicket({ ...selectedTicket, status: "ACCESS_GRANTED" });
+      } else {
+        showToast(data.detail || "Grant access failed", "error");
+      }
+    } catch (e) {
+      if (e instanceof NetworkError) return;
+      showToast("Network error granting admin access", "error");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Phase 6.3: Complete Installation
+  const handleCompleteInstallation = async () => {
+    if (!selectedTicket) return;
+    setActionLoading(true);
+    try {
+      const res = await apiFetch(`/api/itsm/admin-queue/${selectedTicket.ticket_id}/complete-installation`, {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ note: actionNote.trim() || undefined })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("✅ Installation completed successfully.", "success");
+        fetchTicketDetails(selectedTicket.ticket_id);
+        fetchData(true);
+        setActionNote("");
+        setSelectedTicket({ ...selectedTicket, status: "COMPLETED" });
+      } else {
+        showToast(data.detail || "Complete installation failed", "error");
+      }
+    } catch (e) {
+      if (e instanceof NetworkError) return;
+      showToast("Network error completing installation", "error");
     } finally {
       setActionLoading(false);
     }
@@ -1369,6 +1435,61 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
                       />
                     </div>
 
+                    {/* Phase 6.3: Grant Temporary Admin Access — visible when ticket is READY_FOR_ADMIN */}
+                    {selectedTicket.status === "READY_FOR_ADMIN" && (
+                      <div className="bg-gradient-to-br from-violet-950 to-violet-900 border border-violet-700 p-4 rounded-xl space-y-3 mb-3">
+                        <div>
+                          <span className="text-[10px] text-violet-300 font-bold uppercase tracking-wider block">🔒 Privileged Access — Manager Approved</span>
+                          <p className="text-[11px] text-violet-200 mt-1 font-semibold leading-relaxed">
+                            Manager has approved this request. Grant temporary administrator privileges to proceed.
+                          </p>
+                          <p className="text-[9px] text-violet-400 mt-2 font-mono">
+                            {/* TODO: Replace with CyberArk API / Windows LAPS / Azure PIM */}
+                            Mock Enterprise Integration — TODO: CyberArk / Windows LAPS / Azure PIM
+                          </p>
+                        </div>
+                        <button
+                          id={`grant-admin-access-${selectedTicket.ticket_id}`}
+                          onClick={handleGrantAdminAccess}
+                          disabled={actionLoading}
+                          className="w-full py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-2 shadow-lg uppercase tracking-wider text-[11px] disabled:opacity-50"
+                        >
+                          {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                          Grant Temporary Admin Access
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Phase 6.3: Complete Installation & Credentials Card — visible when ACCESS_GRANTED */}
+                    {(selectedTicket.status === "ACCESS_GRANTED" || selectedTicket.laps_active) && (
+                      <div className="space-y-3 mb-3">
+                        <EnterpriseAdminAccessCard
+                          username={selectedTicket.temp_admin_credentials?.username || ".\\Administrator"}
+                          password={selectedTicket.laps_password || selectedTicket.temp_admin_credentials?.password || "Temp@4821#"}
+                          expiresAt={selectedTicket.laps_expiration || selectedTicket.temp_admin_credentials?.expires_at}
+                        />
+
+                        <div className="bg-gradient-to-br from-emerald-950 to-emerald-900 border border-emerald-700 p-4 rounded-xl space-y-3">
+                          <div>
+                            <span className="text-[10px] text-emerald-300 font-bold uppercase tracking-wider block">✅ Admin Access Active — Ready to Install</span>
+                            <p className="text-[11px] text-emerald-200 mt-1 font-semibold leading-relaxed">
+                              Temporary administrator access has been granted. Mark as completed once installation is done.
+                            </p>
+                          </div>
+                          <button
+                            id={`complete-installation-${selectedTicket.ticket_id}`}
+                            onClick={handleCompleteInstallation}
+                            disabled={actionLoading}
+                            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-2 shadow-lg uppercase tracking-wider text-[11px] disabled:opacity-50"
+                          >
+                            {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCheck className="w-4 h-4" />}
+                            Complete Installation
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Existing: Approve LAPS Access (legacy — kept for backward compatibility) */}
                     {(selectedTicket.status === "WAITING_ADMIN_APPROVAL" || selectedTicket.status === "WAITING_ADMIN") && (
                       <button
                         onClick={() => handleTicketAction("admin_approve")}

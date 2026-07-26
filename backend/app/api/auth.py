@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import logging
@@ -29,8 +29,11 @@ class TokenRefreshRequest(BaseModel):
     refresh_token: str
 
 @router.post("/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db_context)):
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db_context)):
     """Authenticates user and returns access and refresh tokens. Logs LOGIN or FAILED_LOGIN."""
+    from app.core.rate_limiter import check_rate_limit
+    check_rate_limit(request, "login")
+
     user = db.query(User).filter(User.username == payload.username).first()
     
     if not user or not verify_password(payload.password, user.hashed_password):

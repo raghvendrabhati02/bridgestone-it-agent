@@ -1,16 +1,17 @@
 import logging
 import urllib.parse
+from app.services.servicenow_choice_resolver import ServiceNowChoiceResolver
 
 logger = logging.getLogger("it-agent-backend")
 
 def resolve_assignment_group(client, category_or_team: str) -> str:
     """
-    Resolves the category or team name to a ServiceNow Group Name or sys_id.
+    Resolves category or team name to a 32-character ServiceNow Group sys_id.
     Maps:
-      VPN -> "Network Team"
-      Outlook -> "Messaging Team"
-      Software -> "Desktop Support Team"
-      SAP -> "SAP Support Team"
+      VPN -> "Network Team" -> sys_id
+      Outlook -> "Messaging Team" -> sys_id
+      Software -> "Desktop Support Team" -> sys_id
+      SAP -> "SAP Support Team" -> sys_id
     """
     cat_upper = category_or_team.strip().upper()
     
@@ -27,9 +28,11 @@ def resolve_assignment_group(client, category_or_team: str) -> str:
     elif cat_upper == "GENERAL":
         group_name = "IT Support Team"
         
-    # If using mock (or client is mock), return group name directly
-    if getattr(client, "is_mock", True):
-        return group_name
+    resolver = ServiceNowChoiceResolver.get_instance()
+    
+    # If using mock (or client is mock), return resolved 32-character sys_id
+    if getattr(client, "use_mock", False):
+        return resolver.resolve_assignment_group(group_name)
         
     # 2. Query Real ServiceNow Group Table (sys_user_group)
     try:
@@ -43,13 +46,10 @@ def resolve_assignment_group(client, category_or_team: str) -> str:
             result = response.json().get("result", [])
             if result:
                 sys_id = result[0].get("sys_id")
-                logger.info("ServiceNow Assignment: Resolved group '%s' to sys_id %s", group_name, sys_id)
-                return sys_id
-            else:
-                logger.warning("ServiceNow Assignment: Group '%s' not found, defaulting to name", group_name)
-        else:
-            logger.error("ServiceNow Assignment: Failed to lookup group '%s', status_code=%d", group_name, response.status_code)
+                if sys_id and len(sys_id) == 32:
+                    logger.info("ServiceNow Assignment: Resolved group '%s' to sys_id %s", group_name, sys_id)
+                    return sys_id
     except Exception as e:
         logger.error("ServiceNow Assignment: Exception during group lookup for '%s': %s", group_name, e)
         
-    return group_name
+    return resolver.resolve_assignment_group(group_name)

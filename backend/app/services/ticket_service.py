@@ -46,6 +46,9 @@ from app.database.repositories.ticket_repository import TicketRepository
 from app.services.servicenow_service import ServiceNowService
 from app.models.servicenow_models import IncidentCreateRequest
 from app.services.field_mapping_service import FieldMappingService, FieldMappingError
+from app.services.incident_enrichment_service import IncidentMetadata
+from app.core.tracing import trace_span
+from app.core.logging_context import correlation_id_ctx
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -113,8 +116,11 @@ def _allocate_local_ticket_id() -> str:
                 # deleted rows or gaps.
                 # select() wrapper is required by SQLAlchemy 1.4+ — passing a
                 # bare func.max() expression raises ObjectNotExecutableError.
-                result = db.execute(select(func.max(Ticket.id))).scalar()
-                next_num = (result or 0) + 1
+                raw_res = db.execute(select(func.max(Ticket.id))).scalar()
+                try:
+                    next_num = int(raw_res or 0) + 1
+                except (TypeError, ValueError):
+                    next_num = 1
         except Exception as exc:
             logger.error(
                 "[ticket_service._allocate_local_ticket_id]: DB query failed: %s\n%s",
@@ -181,6 +187,9 @@ def create_ticket(
     issue_description: str,
     created_by: str = None,
     servicenow_service: Optional[ServiceNowService] = None,
+    short_description: Optional[str] = None,
+    description: Optional[str] = None,
+    incident_metadata: Optional[IncidentMetadata] = None,
     **kwargs,
 ) -> dict:
     """
@@ -200,16 +209,55 @@ def create_ticket(
     Raises:
         RuntimeError: If local ID allocation fails at the DB level.
     """
+    with trace_span(
+        name="ticket_service",
+        attributes={
+            "provider": "none",
+            "category": category,
+            "correlation_id": correlation_id_ctx.get() or _correlation_id() or "",
+        },
+    ):
+        return _create_ticket_internal(
+            category=category,
+            issue_description=issue_description,
+            created_by=created_by,
+            servicenow_service=servicenow_service,
+            short_description=short_description,
+            description=description,
+            incident_metadata=incident_metadata,
+            **kwargs,
+        )
+
+
+def _create_ticket_internal(
+    category: str,
+    issue_description: str,
+    created_by: str = None,
+    servicenow_service: Optional[ServiceNowService] = None,
+    short_description: Optional[str] = None,
+    description: Optional[str] = None,
+    incident_metadata: Optional[IncidentMetadata] = None,
+    **kwargs,
+) -> dict:
     t_start = time.monotonic()
     corr_id = _correlation_id()
 
+    # Determine final short_description and description
+    final_description = description or kwargs.get("description") or issue_description
+    raw_short_desc = short_description or kwargs.get("short_description")
+    if raw_short_desc:
+        final_short_desc = raw_short_desc.strip()[:_SHORT_DESC_MAX_LEN]
+    else:
+        final_short_desc = f"{category.upper()} Issue - {final_description[:_SHORT_DESC_MAX_LEN]}"[:_SHORT_DESC_MAX_LEN]
+
     logger.info(
         ">>> ENTRY [ticket_service.create_ticket]: category=%s, created_by=%s, "
-        "correlation_id=%s, description='%.150s'",
+        "correlation_id=%s, short_description='%.100s', description='%.150s'",
         category,
         created_by,
         corr_id or "<none>",
-        issue_description,
+        final_short_desc,
+        final_description,
     )
 
     # ── Metrics (best-effort) ──────────────────────────────────────────────────
@@ -233,12 +281,12 @@ def create_ticket(
     )
 
     # ── SLA calculations ───────────────────────────────────────────────────────
-    priority = calculate_priority(category, issue_description)
+    priority = calculate_priority(category, final_description)
     sla_hours = calculate_sla(priority)
     store_sla_record(local_ticket_id, priority, sla_hours)
 
     # ── ITSM classification ────────────────────────────────────────────────────
-    classification = classify_request(category, issue_description)
+    classification = classify_request(category, final_description)
     request_type   = classification.request_type
     approval_status = classification.approval_status
     manager        = classification.manager
@@ -358,6 +406,30 @@ def create_ticket(
         except Exception as map_ex:
             logger.warning("[ticket_service.create_ticket]: Field mapping notice: %s", map_ex)
 
+        # ── IncidentEnrichmentService override ────────────────────────────────
+        # When incident_metadata is provided by TicketOrchestrator, its values
+        # take precedence over the FieldMappingService baseline.  This is the
+        # correct layering: FMS sets defaults, IES provides enterprise-grade
+        # enriched values derived from the full troubleshooting context.
+        if incident_metadata is not None:
+            mapped_category       = incident_metadata.category
+            mapped_assignment_group = incident_metadata.assignment_group
+            # Merge enriched extra fields on top of FMS baseline
+            extra_fields.update(incident_metadata.to_extra_fields())
+            logger.info(
+                "[ticket_service.create_ticket]: IncidentEnrichmentService applied — "
+                "category='%s', subcategory='%s', assignment_group='%s', "
+                "impact=%d, urgency=%d, priority=%d (%s), ci=%s",
+                incident_metadata.category,
+                incident_metadata.subcategory,
+                incident_metadata.assignment_group,
+                incident_metadata.impact,
+                incident_metadata.urgency,
+                incident_metadata.priority,
+                incident_metadata.priority_label,
+                incident_metadata.configuration_item,
+            )
+
         logger.info(
             "[ticket_service.create_ticket]: Initiating ServiceNow POST "
             "(local_id=%s, correlation_id=%s)",
@@ -365,24 +437,40 @@ def create_ticket(
             corr_id or "<none>",
         )
         try:
+            # Derive impact / urgency from IncidentMetadata when available;
+            # otherwise fall back to model defaults (both default to 3 = Low).
+            _impact       = incident_metadata.impact        if incident_metadata is not None else 3
+            _urgency      = incident_metadata.urgency       if incident_metadata is not None else 3
+            _priority     = incident_metadata.priority      if incident_metadata is not None else None
+            _u_type       = incident_metadata.incident_type if incident_metadata is not None else extra_fields.get("u_type")
+            _contact_type = incident_metadata.channel       if incident_metadata is not None else extra_fields.get("contact_type")
+
+            mapped_subcategory = incident_metadata.subcategory if incident_metadata is not None else extra_fields.get("subcategory")
+
             req = IncidentCreateRequest(
-                short_description=(
-                    f"{mapped_category.upper()} Issue - {issue_description[:_SHORT_DESC_MAX_LEN]}"
-                ),
-                description=issue_description,
+                short_description=final_short_desc,
+                description=final_description,
                 category=mapped_category,
+                subcategory=mapped_subcategory,
+                u_type=_u_type,
+                contact_type=_contact_type,
                 severity=_DEFAULT_SEVERITY,
                 assignment_group=mapped_assignment_group,
                 caller_id=created_by,
+                impact=_impact,
+                urgency=_urgency,
+                priority=_priority,
                 extra_fields=extra_fields,
             )
             logger.info(
                 "[ticket_service.create_ticket]: Final Payload Sent to ServiceNow — "
-                "short_description='%s', category=%s, severity=%d, "
+                "short_description='%s', category=%s, severity=%d, impact=%d, urgency=%d, "
                 "assignment_group=%s, caller_id=%s, extra_fields=%s, description='%.100s'",
                 req.short_description,
                 req.category,
                 req.severity,
+                req.impact,
+                req.urgency,
                 req.assignment_group,
                 req.caller_id,
                 req.extra_fields,
@@ -393,18 +481,23 @@ def create_ticket(
             sn_res = sn_service.create_incident(req)
             sn_elapsed_ms = int((time.monotonic() - sn_t_start) * 1000)
 
+            sn_is_success = getattr(sn_res, "success", None) if not isinstance(sn_res, dict) else sn_res.get("success", False)
+            sn_number = getattr(sn_res, "number", None) if not isinstance(sn_res, dict) else (sn_res.get("number") or sn_res.get("sys_id") or sn_res.get("ticket_id"))
+            sn_sys_id = getattr(sn_res, "sys_id", None) if not isinstance(sn_res, dict) else sn_res.get("sys_id")
+            sn_msg = getattr(sn_res, "message", "") if not isinstance(sn_res, dict) else sn_res.get("message", "")
+
             logger.info(
                 "[ticket_service.create_ticket]: SN response — success=%s, "
                 "number=%s, sys_id=%s, message='%s', sn_latency=%dms",
-                sn_res.success,
-                sn_res.number,
-                sn_res.sys_id,
-                sn_res.message,
+                sn_is_success,
+                sn_number,
+                sn_sys_id,
+                sn_msg,
                 sn_elapsed_ms,
             )
 
-            if not sn_res.success or not sn_res.number:
-                err_detail = sn_res.message or "ServiceNow API returned failure"
+            if not sn_is_success or not sn_number:
+                err_detail = sn_msg or "ServiceNow API returned failure"
                 elapsed_ms = int((time.monotonic() - t_start) * 1000)
                 logger.error(
                     "[ticket_service.create_ticket]: SN creation failed: %s "
@@ -426,8 +519,8 @@ def create_ticket(
                     "servicenow_id": "",
                 }
 
-            servicenow_id     = sn_res.sys_id
-            servicenow_number = sn_res.number
+            servicenow_id     = sn_sys_id
+            servicenow_number = sn_number
             # ServiceNow incident number is the user-visible canonical ID.
             presentation_id   = servicenow_number
 
@@ -496,8 +589,9 @@ def create_ticket(
         "servicenow_number":  servicenow_number,
         "servicenow_id":      servicenow_id,
         "category":           category,
-        "description":        issue_description,
-        "issue_description":  issue_description,   # backward compatibility alias
+        "short_description":  final_short_desc,
+        "description":        final_description,
+        "issue_description":  final_description,   # backward compatibility alias
         "assigned_team":      assigned_team,
         "priority":           priority,
         "sla_hours":          sla_hours,

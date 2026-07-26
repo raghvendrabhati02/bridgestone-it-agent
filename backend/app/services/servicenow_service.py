@@ -45,6 +45,63 @@ def get_servicenow_service() -> ServiceNowService:
     return _servicenow_service_instance
 
 
+def _sanitize_incident_request(request: IncidentCreateRequest) -> None:
+    """
+    Runtime pre-flight metadata sanitization immediately before sending payload to ServiceNow.
+    
+    Sanitization Rules:
+      - Category Invalid -> replace with default category ("Software").
+      - Subcategory Invalid -> set to empty string (""). Never pick arbitrary choice suggestions.
+      - Assignment Group Invalid -> replace with default assignment group ("IT Support").
+      - CMDB CI Invalid -> set to empty string ("").
+    """
+    from app.services.servicenow_metadata_validator import ServiceNowMetadataValidator
+    validator = ServiceNowMetadataValidator()
+
+    # 1. Validate Category
+    cat_res = validator.validate_category(request.category)
+    if not cat_res.is_valid:
+        logger.warning(
+            "[RuntimeValidator]: Category '%s' is invalid in ServiceNow metadata. Replacing with default 'Software'.",
+            request.category,
+        )
+        request.category = "Software"
+
+    # 2. Validate Subcategory
+    if request.subcategory:
+        sub_res = validator.validate_subcategory(request.subcategory, category=request.category)
+        if not sub_res.is_valid:
+            logger.warning(
+                "[RuntimeValidator]: Subcategory '%s' is invalid for category '%s' in ServiceNow metadata. Setting subcategory to empty string (''). Suggested choices: %s",
+                request.subcategory,
+                request.category,
+                sub_res.suggested_choices,
+            )
+            request.subcategory = ""
+
+    # 3. Validate Assignment Group
+    if request.assignment_group:
+        grp_res = validator.validate_assignment_group(request.assignment_group)
+        if not grp_res.is_valid:
+            logger.warning(
+                "[RuntimeValidator]: Assignment Group '%s' is invalid in ServiceNow metadata. Replacing with default 'IT Support'.",
+                request.assignment_group,
+            )
+            request.assignment_group = "IT Support"
+
+    # 4. Validate CMDB CI
+    if request.extra_fields and "cmdb_ci" in request.extra_fields:
+        ci_val = request.extra_fields["cmdb_ci"]
+        if ci_val:
+            ci_res = validator.validate_cmdb_ci(ci_val)
+            if not ci_res.is_valid:
+                logger.warning(
+                    "[RuntimeValidator]: CMDB CI '%s' is invalid/unlinked in ServiceNow CMDB. Omitting field ('').",
+                    ci_val,
+                )
+                request.extra_fields["cmdb_ci"] = ""
+
+
 class ServiceNowService:
     """Business logic and validation layer for ServiceNow integration."""
 
@@ -182,21 +239,31 @@ class ServiceNowService:
         base_url = getattr(self._client, "base_url", "")
         table = getattr(self._client, "table", "incident")
         target_url = f"{base_url}/api/now/table/{table}"
-        logger.info(
-            "[ServiceNowService.create_incident]: Target URL: %s | Correlation ID: %s",
-            target_url,
-            corr_id,
-        )
+        # Single authoritative runtime metadata sanitization prior to payload transmission
+        _sanitize_incident_request(request)
 
         try:
-            extra = request.extra_fields or {}
+            extra = {
+                k: v for k, v in (request.extra_fields or {}).items()
+                if k not in (
+                    "short_description", "description", "category", "subcategory",
+                    "u_type", "contact_type", "severity", "assignment_group",
+                    "caller_id", "urgency", "impact", "priority"
+                )
+            }
             res_dict = self._client.create_incident(
                 short_description=request.short_description,
                 description=request.description,
                 category=request.category,
+                subcategory=request.subcategory,
+                u_type=request.u_type,
+                contact_type=request.contact_type,
                 severity=request.severity,
                 assignment_group=request.assignment_group,
                 caller_id=request.caller_id,
+                urgency=request.urgency,
+                impact=request.impact,
+                priority=request.priority,
                 **extra,
             )
 

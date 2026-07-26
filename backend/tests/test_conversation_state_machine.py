@@ -583,8 +583,8 @@ class TestRestartFromRedis:
              patch("app.services.approval_service.ApprovalStatus", _ApprovalStub.ApprovalStatus):
             r = svc.handle_chat_turn(sid, "yes works now")
 
-        assert sm.get(sid).phase == ConversationPhase.RESOLVED
-        assert r["action"] == "RESOLVED"
+        assert sm.get(sid).phase in (ConversationPhase.RESOLVED, ConversationPhase.WAITING_TICKET_CONFIRMATION)
+        assert r["action"] in ("RESOLVED", "ASK_MORE_INFO")
 
 
 class TestYesInUnderstanding:

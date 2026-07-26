@@ -21,6 +21,7 @@ from app.services.servicenow_exceptions import (
 @pytest.fixture(autouse=True)
 def clean_servicenow_env(monkeypatch):
     """Ensure environment variables do not interfere with unit tests."""
+    monkeypatch.setenv("USE_MOCK_SERVICENOW", "true")
     monkeypatch.delenv("SERVICENOW_TOKEN_URL", raising=False)
     monkeypatch.delenv("SERVICENOW_USERNAME", raising=False)
     monkeypatch.delenv("SERVICENOW_PASSWORD", raising=False)
@@ -50,9 +51,11 @@ def test_servicenow_client_is_configured_oauth():
     assert incomplete_basic.is_configured() is False
 
 
-def test_startup_validation_fails_fast_on_missing_oauth_config():
+def test_startup_validation_fails_fast_on_missing_oauth_config(monkeypatch):
     """Verify initialization fails immediately if required OAuth parameters are missing."""
-    with pytest.raises(ServiceNowAuthError) as exc_info:
+    monkeypatch.setenv("USE_MOCK_SERVICENOW", "false")
+    from app.services.servicenow_exceptions import ServiceNowConfigurationError
+    with pytest.raises((ServiceNowAuthError, ServiceNowConfigurationError)) as exc_info:
         ServiceNowClient(
             instance="bridgestone",
             auth_type="oauth",
@@ -61,7 +64,7 @@ def test_startup_validation_fails_fast_on_missing_oauth_config():
             username="admin",
             password="password123",
         )
-    assert "SERVICENOW_CLIENT_SECRET" in exc_info.value.message
+    assert "SERVICENOW_CLIENT_SECRET" in str(exc_info.value)
 
 
 def test_authenticate_success():
@@ -74,6 +77,7 @@ def test_authenticate_success():
         username="admin",
         password="password123",
     )
+    client.use_mock = False
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -112,6 +116,7 @@ def test_refresh_access_token_success():
         username="admin",
         password="password123",
     )
+    client.use_mock = False
     client.refresh_token = "existing_ref_token"
 
     mock_response = MagicMock()
@@ -147,6 +152,7 @@ def test_expiry_helper_safety_buffer():
         username="admin",
         password="password123",
     )
+    client.use_mock = False
 
     # 1. No access token -> expired
     assert client._is_token_expired() is True
@@ -171,6 +177,7 @@ def test_ensure_authenticated_double_check_locking():
         username="admin",
         password="password123",
     )
+    client.use_mock = False
 
     with patch.object(client, "authenticate") as mock_auth, \
          patch.object(client, "refresh_access_token") as mock_refresh:

@@ -1,273 +1,241 @@
-# Deployment Guide – Bridgestone IT Agent
+# Deployment Guide
 
-> **Version:** 1.0.0 | **Last updated:** 2026-07-11
-
----
-
-## 1. Prerequisites
-
-| Requirement | Minimum version |
-|-------------|----------------|
-| Docker | 24.x |
-| Docker Compose | 2.x (v2 syntax) |
-| Node.js | 18.x (for local frontend dev) |
-| Python | 3.12 (for local backend dev) |
+> **Project:** Bridgestone IT AI Assistant · **Last updated:** 2026-07-26
 
 ---
 
-## 2. Environment Configuration
+## Prerequisites
 
-All runtime configuration is managed through environment files in `infrastructure/env/`.
-
-### Required Variables
-
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string, e.g. `postgresql://postgres:password@postgres:5432/bridgestone_it_agent` |
-| `SECRET_KEY` | JWT signing key (minimum 32 random bytes, hex-encoded) |
-| `GEMINI_API_KEY` | Google Gemini API key |
-| `REDIS_URL` | Redis connection string, e.g. `redis://redis:6379/0` |
-| `CORS_ORIGINS` | Comma-separated list of allowed CORS origins |
-
-### ServiceNow Variables (optional – uses mock if absent)
-
-| Variable | Description |
-|----------|-------------|
-| `SERVICENOW_INSTANCE` | ServiceNow instance subdomain |
-| `SERVICENOW_USERNAME` | ServiceNow API username |
-| `SERVICENOW_PASSWORD` | ServiceNow API password |
-| `USE_MOCK_SERVICENOW` | Set to `true` to use mock data (default) |
-
-### Frontend Variables
-
-| Variable | Description |
-|----------|-------------|
-| `NEXT_PUBLIC_API_URL` | Backend API base URL, e.g. `http://localhost:8000` |
+| Requirement | Minimum version | Purpose |
+|---|---|---|
+| Python | 3.12 | Backend runtime |
+| Node.js | 20 | Frontend build and dev server |
+| npm | 9 | Package management |
+| Docker | 24 | Container deployment |
+| Docker Compose | 2 (v2 syntax) | Service orchestration |
+| Git | Any | Source control |
 
 ---
 
-## 3. Local Development Setup (without Docker)
+## Local Development (without Docker)
 
-### 3.1 Backend
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/your-org/bridgestone-it-agent.git
+cd bridgestone-it-agent
+```
+
+### 2. Backend
 
 ```bash
 cd backend
 
 # Create and activate virtual environment
-python -m venv venv
-venv\Scripts\activate          # Windows
-# source venv/bin/activate     # Linux/macOS
+python -m venv venv_312
+.\venv_312\Scripts\activate          # Windows
+# source venv_312/bin/activate        # macOS / Linux
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Configure environment
+# Create and configure .env
 copy .env.example .env
-# Edit .env with your settings
+# Edit .env — see Environment Variables section below
 
-# Start the backend server
-uvicorn app.main:app --reload --port 8000
+# Start the backend
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-The API will be available at `http://localhost:8000`.  
-Interactive API docs: `http://localhost:8000/docs`
+- API: `http://127.0.0.1:8000`
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- Health check: `http://127.0.0.1:8000/health`
 
----
+The database file is created automatically at `backend/bridgestone_it_agent.db` on first startup.
 
-### 3.2 Frontend
+### 3. Frontend
 
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Configure environment
 copy .env.example .env.local
-# Set NEXT_PUBLIC_API_URL=http://localhost:8000
+# Set NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 
-# Start the development server
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:3000`.
+- UI: `http://localhost:3000`
 
 ---
 
-## 4. Docker Deployment
+## Environment Variables
 
-### 4.1 Development Stack
+All variables are set in `backend/.env` for the backend and `frontend/.env.local` for the frontend.
 
-The development stack includes hot-reloading and volume mounts for rapid iteration.
+### Backend
+
+```env
+# ── AI Providers ──────────────────────────────────────────────────────────────
+GEMINI_API_KEY=your_gemini_api_key
+ANTHROPIC_API_KEY=your_anthropic_api_key          # Optional; used as fallback
+
+# ── ServiceNow ────────────────────────────────────────────────────────────────
+SERVICENOW_INSTANCE_URL=https://your-instance.service-now.com
+SERVICENOW_USERNAME=api_user
+SERVICENOW_PASSWORD=api_password
+SERVICENOW_CLIENT_ID=oauth_client_id
+SERVICENOW_CLIENT_SECRET=oauth_client_secret
+SERVICENOW_USE_MOCK=false                         # true = disable live SN calls
+
+# ── Authentication ────────────────────────────────────────────────────────────
+JWT_SECRET_KEY=your_jwt_secret_min_32_chars
+JWT_ALGORITHM=HS256
+JWT_EXPIRY_MINUTES=480
+
+# ── Database ──────────────────────────────────────────────────────────────────
+DATABASE_URL=sqlite:///./bridgestone_it_agent.db
+# DATABASE_URL=postgresql://user:password@localhost:5432/bridgestone_db
+
+# ── Rate Limiting ─────────────────────────────────────────────────────────────
+RATE_LIMIT_CHAT=30
+RATE_LIMIT_CHAT_WINDOW=60
+RATE_LIMIT_LOGIN=10
+RATE_LIMIT_LOGIN_WINDOW=60
+
+# ── Security ──────────────────────────────────────────────────────────────────
+HSTS_ENABLED=false              # Set true in production (HTTPS only)
+MAX_REQUEST_SIZE_KB=512
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+```
+
+### Frontend
+
+```env
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+```
+
+---
+
+## Docker Deployment
+
+All Docker configuration lives in `infrastructure/`:
+
+```
+infrastructure/
+├── compose/
+│   ├── docker-compose.dev.yml
+│   └── docker-compose.prod.yml
+├── docker/
+│   ├── backend.Dockerfile
+│   ├── frontend.Dockerfile
+│   └── postgres.Dockerfile
+├── env/
+│   ├── dev.env
+│   └── prod.env
+├── monitoring/
+│   └── docker-compose.monitoring.yml
+└── nginx/
+```
+
+### Development Stack
 
 ```bash
 cd infrastructure/compose
-
-# Start all services (postgres, redis, backend, frontend)
 docker compose -f docker-compose.dev.yml up --build -d
 
 # View logs
 docker compose -f docker-compose.dev.yml logs -f
 
-# Stop services
+# Stop
 docker compose -f docker-compose.dev.yml down
 ```
 
 **Services started:**
 
 | Service | Container | Port |
-|---------|-----------|------|
+|---|---|---|
 | PostgreSQL | `bridgestone-postgres-dev` | `5432` |
-| Redis | `bridgestone-redis-dev` | `6379` |
 | Backend | `bridgestone-backend-dev` | `8000` |
 | Frontend | `bridgestone-frontend-dev` | `3000` |
 
----
-
-### 4.2 Production Stack
-
-The production stack builds immutable containers and routes traffic through NGINX.
+### Production Stack
 
 ```bash
 cd infrastructure/compose
-
-# Build and start all services
 docker compose -f docker-compose.prod.yml up --build -d
-
-# View logs
-docker compose -f docker-compose.prod.yml logs -f backend
-
-# Stop services
-docker compose -f docker-compose.prod.yml down
 ```
 
-**Access:**
-- Application: `http://localhost/` (port 80 via NGINX)
+All internal ports are locked down; only the NGINX reverse proxy is exposed:
+
+- Frontend: `http://localhost/`
 - API: `http://localhost/api/`
 
----
-
-## 5. Startup Order & Health Checks
-
-Docker Compose enforces service startup order via `depends_on` with health conditions:
+### Startup Order
 
 ```mermaid
 graph LR
     PG[PostgreSQL] -->|healthy| BE[Backend]
-    Redis[Redis] -->|healthy| BE
-    BE[Backend] -->|healthy| FE[Frontend]
+    BE -->|healthy| FE[Frontend]
     FE --> NGINX[NGINX]
 ```
 
-**Health check commands:**
-
-| Service | Health check |
-|---------|-------------|
+| Service | Health check command |
+|---|---|
 | PostgreSQL | `pg_isready -U postgres -d bridgestone_it_agent` |
-| Redis | `redis-cli ping` |
-| Backend | HTTP GET `http://localhost:8000/health` |
-| Frontend | HTTP GET `http://localhost:3000/` |
+| Backend | `GET http://localhost:8000/health` |
+| Frontend | `GET http://localhost:3000/` |
 
 ---
 
-## 6. Container Images
-
-Each service has its own Dockerfile in `infrastructure/docker/`:
-
-| Dockerfile | Service |
-|------------|---------|
-| `backend.Dockerfile` | FastAPI Python backend |
-| `frontend.Dockerfile` | Next.js frontend (multi-stage build) |
-| `postgres.Dockerfile` | PostgreSQL with seed data |
-| `redis.Dockerfile` | Redis cache |
-
----
-
-## 7. Monitoring Stack (Optional)
-
-The `infrastructure/monitoring/` directory contains Prometheus and Grafana configuration.
-
-To enable monitoring:
+## Monitoring Stack (Optional)
 
 ```bash
-# Add to your docker-compose command
-docker compose -f docker-compose.prod.yml -f monitoring/docker-compose.monitoring.yml up -d
+docker compose \
+  -f docker-compose.prod.yml \
+  -f ../monitoring/docker-compose.monitoring.yml \
+  up -d
 ```
 
 | Service | Port | Purpose |
-|---------|------|---------|
-| Prometheus | `9090` | Metrics scraping |
-| Grafana | `3001` | Metrics visualisation |
+|---|---|---|
+| Prometheus | `9090` | Scrapes `GET /metrics` |
+| Grafana | `3001` | Dashboards |
 
-The backend exposes Prometheus metrics at `GET /metrics`.
-
-**Available metric groups:**
-- HTTP request counts, latencies, failures
-- Database query durations, transaction counts, failure counts
-- LLM API request counts, latencies, failure counts
-- Security events: logins, failed logins, permission denials
-- Active DB connections
+**Available Prometheus metric groups:**
+- HTTP request counts, latencies, error rates
+- Database query durations and failure counts
+- LLM request counts, latencies, rate-limit events
+- Security events: logins, failures, permission denials
+- Business metrics: tickets created, resolved, SLA breaches
 
 ---
 
-## 8. Production Readiness Checklist
-
-Before going live, verify the following:
-
-### Environment
-- [ ] `SECRET_KEY` set to a randomly generated 256-bit value
-- [ ] `DATABASE_URL` points to production PostgreSQL
-- [ ] Default user passwords changed (`employee`, `manager`, `admin`)
-- [ ] `CORS_ORIGINS` restricted to production domain(s)
-- [ ] `USE_MOCK_SERVICENOW=false` if connecting to live ServiceNow
-- [ ] `GEMINI_API_KEY` set to a valid production API key
-
-### Infrastructure
-- [ ] Backend port `8000` not exposed publicly
-- [ ] Frontend port `3000` not exposed publicly
-- [ ] NGINX configured for TLS (HTTPS)
-- [ ] Database backups scheduled
-- [ ] Log aggregation configured (e.g., ELK, Azure Monitor)
-
-### Application
-- [ ] Run `python backend/verify_production_readiness.py` — all checks pass
-- [ ] `GET /health` returns `{"status": "healthy"}`
-- [ ] `GET /system-status` returns all adapters healthy or acceptable mock status
-
----
-
-## 9. Log Access
+## Log Access
 
 ```bash
 # Stream backend logs
 docker logs bridgestone-backend-prod -f
 
-# Stream frontend logs
-docker logs bridgestone-frontend-prod -f
-
-# Stream all service logs
-docker compose -f docker-compose.prod.yml logs -f
-
-# View last 100 lines of backend logs
+# Last 100 lines
 docker logs bridgestone-backend-prod --tail 100
+
+# All services
+docker compose -f docker-compose.prod.yml logs -f
 ```
 
-The backend uses structured JSON logging. Each log entry includes:
-- `timestamp`, `level`, `logger`
-- `request_id`, `correlation_id`, `session_id`
-- `user`, `role`, `endpoint`
-- `execution_time`, `status_code`, `method`, `path`
+Structured JSON log fields: `timestamp`, `level`, `request_id`, `correlation_id`, `session_id`, `user`, `role`, `endpoint`, `execution_time`, `status_code`.
 
 ---
 
-## 10. Database Backup
+## Database Backup
 
-### PostgreSQL (Docker)
+### PostgreSQL
 
 ```bash
 # Create a backup
 docker exec bridgestone-postgres-prod \
-  pg_dump -U postgres bridgestone_it_agent > backup_$(date +%Y%m%d).sql
+  pg_dump -U postgres bridgestone_it_agent > backup_$(Get-Date -Format yyyyMMdd).sql
 
 # Restore from backup
 docker exec -i bridgestone-postgres-prod \
@@ -277,23 +245,58 @@ docker exec -i bridgestone-postgres-prod \
 ### SQLite (development)
 
 ```bash
-# Simple file copy
-copy backend\bridgestone_it_agent.db backup\bridgestone_it_agent_$(date +%Y%m%d).db
+copy backend\bridgestone_it_agent.db backup\bridgestone_it_agent_$(Get-Date -Format yyyyMMdd).db
 ```
 
 ---
 
-## 11. Scaling
+## Production Readiness Checklist
 
-For high-availability production deployments:
+### Environment
+
+- [ ] `JWT_SECRET_KEY` set to a randomly generated 256-bit value
+- [ ] `DATABASE_URL` points to production PostgreSQL
+- [ ] Default user passwords changed (`employee`, `manager`, `admin`)
+- [ ] `CORS_ORIGINS` restricted to production domain(s)
+- [ ] `SERVICENOW_USE_MOCK=false` if connecting to live ServiceNow
+- [ ] `GEMINI_API_KEY` set to a valid production API key
+- [ ] `HSTS_ENABLED=true` if serving over HTTPS
+
+### Infrastructure
+
+- [ ] Backend port `8000` not exposed publicly
+- [ ] Frontend port `3000` not exposed publicly
+- [ ] NGINX configured for TLS
+- [ ] Database backups scheduled
+- [ ] Log aggregation configured
+
+### Application
+
+- [ ] `GET /health` returns `{"status": "healthy"}`
+- [ ] `GET /system-status` returns all critical services healthy
+- [ ] `GET /servicenow/validate` returns VALID for all configured fields
+
+---
+
+## Scaling
+
+For higher-availability deployments:
 
 1. **Backend:** Run multiple Uvicorn workers with Gunicorn:
    ```
    gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
    ```
 
-2. **Database:** Use a managed PostgreSQL service (Azure Database for PostgreSQL, AWS RDS) with read replicas.
+2. **Database:** Switch `DATABASE_URL` to a managed PostgreSQL service.
 
-3. **Session storage:** Redis is already configured as a backend dependency; use a managed Redis service (Azure Cache for Redis, AWS ElastiCache) for horizontal scaling.
+3. **Rate Limiting:** Replace the in-process sliding-window limiter with Redis-backed implementation when running multiple backend instances.
 
-4. **Load balancing:** NGINX supports upstream load balancing across multiple backend instances.
+4. **Load Balancing:** NGINX supports upstream load balancing across multiple backend instances.
+
+---
+
+## Related Documents
+
+- [Architecture](./architecture.md) — Service structure and background jobs
+- [Security](./Security.md) — Secrets management and default accounts
+- [Configuration](./configuration.md) — All environment variables reference

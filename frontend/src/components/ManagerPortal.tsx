@@ -44,8 +44,13 @@ interface ManagerTicket {
   updated_at?: string;
   resolved_at?: string;
   closed_at?: string;
+  requires_approval?: boolean;
   request_type?: string;
   manager?: string;
+  approved_by?: string;
+  approved_at?: string;
+  approval_notes?: string;
+  software_requested?: string;
   approval_status?: string;
   assignment_group?: string;
   sla_hours?: number;
@@ -149,6 +154,14 @@ export default function ManagerPortal({ user, token }: ManagerPortalProps) {
     fetchTickets();
   }, [fetchTickets]);
 
+  // Phase 6.3: Auto-refresh every 10 seconds so new approval requests appear without manual refresh.
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      fetchTickets(true); // silent refresh
+    }, 10000);
+    return () => clearInterval(intervalId);
+  }, [fetchTickets]);
+
   // Fetch comments & timeline on ticket select
   const fetchTicketDetails = async (ticketId: string) => {
     setCommentsLoading(true);
@@ -222,21 +235,22 @@ export default function ManagerPortal({ user, token }: ManagerPortalProps) {
     if (!selectedTicket) return;
     setActionLoading(true);
     try {
-      const res = await apiFetch(`/tickets/${selectedTicket.ticket_id}/action`, {
+      const res = await apiFetch(`/api/itsm/manager-tickets/${selectedTicket.ticket_id}/approve`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${token}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          action: "manager_approve",
-          note: actionReason || "Approved via Manager Portal L2 Gateway Integration."
+          reason: actionReason || "Approved via Manager Portal.",
+          notes: actionReason || ""
         })
       });
 
       if (res.ok) {
-        showToast("Ticket request successfully approved.");
+        showToast("✅ Request approved. Ticket moved to Admin Queue (READY FOR ADMIN).");
         setSelectedTicket(null);
+        setActionReason("");
         fetchTickets(true);
       } else {
         const errData = await res.json();
@@ -456,6 +470,19 @@ export default function ManagerPortal({ user, token }: ManagerPortalProps) {
     link.click();
     document.body.removeChild(link);
     showToast("CSV Exported successfully", "success");
+  };
+
+  // Workflow stage progression helpers
+  const getWorkflowStages = (ticket: ManagerTicket) => {
+    const status = ticket.status?.toUpperCase() || "";
+    const stages = [
+      { label: "Request Submitted",    done: true },
+      { label: "Manager Approval",     done: ["READY_FOR_ADMIN","WAITING_ADMIN","ACCESS_GRANTED","COMPLETED","APPROVED"].includes(status), active: ["WAITING_MANAGER","WAITING_MANAGER_APPROVAL"].includes(status) },
+      { label: "Admin Access Grant",   done: ["ACCESS_GRANTED","COMPLETED"].includes(status), active: status === "READY_FOR_ADMIN" },
+      { label: "Installation",         done: status === "COMPLETED", active: status === "ACCESS_GRANTED" },
+      { label: "Completed",            done: status === "COMPLETED" },
+    ];
+    return stages;
   };
 
   return (
@@ -763,9 +790,15 @@ export default function ManagerPortal({ user, token }: ManagerPortalProps) {
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          {["Ticket ID", "Employee", "Request Type", "Category", "Priority", "Created", "Status", ""].map(h => (
-                            <TableHead key={h}>{h}</TableHead>
-                          ))}
+                          {subView === "approved" ? (
+                            ["Ticket ID", "Employee", "Software Requested", "Approved By", "Approval Time", "Approval Notes", "Status", ""].map(h => (
+                              <TableHead key={h}>{h}</TableHead>
+                            ))
+                          ) : (
+                            ["Ticket ID", "Employee", "Request Type", "Category", "Priority", "Created", "Status", ""].map(h => (
+                              <TableHead key={h}>{h}</TableHead>
+                            ))
+                          )}
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -773,17 +806,31 @@ export default function ManagerPortal({ user, token }: ManagerPortalProps) {
                           <TableRow key={t.ticket_id}>
                             <TableCell className="font-mono font-bold text-[#1E293B]">{t.ticket_id}</TableCell>
                             <TableCell className="font-semibold text-[#1E293B]">{t.created_by}</TableCell>
-                            <TableCell>
-                              <RequestTypePill type={t.request_type || "SERVICE_REQUEST"} />
-                            </TableCell>
-                            <TableCell className="text-[#475569]">{t.category.replace(/_/g, " ")}</TableCell>
-                            <TableCell>
-                              <PriorityPill priority={t.priority || "MEDIUM"} />
-                            </TableCell>
-                            <TableCell className="text-[#64748B]">{new Date(t.created_at).toLocaleString()}</TableCell>
-                            <TableCell>
-                              <StatusPill status={t.status} />
-                            </TableCell>
+                            {subView === "approved" ? (
+                              <>
+                                <TableCell className="font-bold text-indigo-700">{t.software_requested || t.category}</TableCell>
+                                <TableCell className="font-semibold text-[#0F172A]">{t.approved_by || t.manager || "manager"}</TableCell>
+                                <TableCell className="text-[#64748B]">{new Date(t.approved_at || t.updated_at || t.created_at).toLocaleString()}</TableCell>
+                                <TableCell className="text-[#475569] max-w-[200px] truncate">{t.approval_notes || "Approved"}</TableCell>
+                                <TableCell>
+                                  <ApprovalPill status="APPROVED" />
+                                </TableCell>
+                              </>
+                            ) : (
+                              <>
+                                <TableCell>
+                                  <RequestTypePill type={t.request_type || "SERVICE_REQUEST"} />
+                                </TableCell>
+                                <TableCell className="text-[#475569]">{t.category.replace(/_/g, " ")}</TableCell>
+                                <TableCell>
+                                  <PriorityPill priority={t.priority || "MEDIUM"} />
+                                </TableCell>
+                                <TableCell className="text-[#64748B]">{new Date(t.created_at).toLocaleString()}</TableCell>
+                                <TableCell>
+                                  <StatusPill status={t.status} />
+                                </TableCell>
+                              </>
+                            )}
                             <TableCell className="text-right">
                               <button 
                                 onClick={() => handleTicketClick(t)} 
@@ -998,7 +1045,73 @@ export default function ManagerPortal({ user, token }: ManagerPortalProps) {
 
               {/* Drawer Scrollable Content */}
               <div className="flex-1 overflow-y-auto p-5 space-y-5">
-                {/* Employee / Requester Info */}
+
+                {/* Phase 6.3: Workflow Stage Tracker */}
+                <div className="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 p-4 rounded-xl space-y-3">
+                  <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Approval Workflow Progress</span>
+                  <div className="flex items-center gap-1">
+                    {selectedTicket && getWorkflowStages(selectedTicket).map((stage, i, arr) => (
+                      <>
+                        <div key={stage.label} className="flex flex-col items-center gap-1 min-w-0">
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 border-2 ${
+                            stage.done    ? "bg-emerald-500 border-emerald-400" :
+                            stage.active  ? "bg-amber-400 border-amber-300 animate-pulse" :
+                            "bg-slate-700 border-slate-600"
+                          }`}>
+                            {stage.done ? (
+                              <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                            ) : (
+                              <span className="w-1.5 h-1.5 rounded-full bg-current" style={{ color: stage.active ? "#fbbf24" : "#64748b" }} />
+                            )}
+                          </div>
+                          <span className={`text-[8px] font-bold text-center leading-tight max-w-[52px] ${
+                            stage.done ? "text-emerald-400" : stage.active ? "text-amber-300" : "text-slate-500"
+                          }`}>{stage.label}</span>
+                        </div>
+                        {i < arr.length - 1 && (
+                          <div className={`flex-1 h-0.5 mb-4 ${
+                            arr[i+1].done || arr[i+1].active ? "bg-emerald-500" : "bg-slate-700"
+                          }`} />
+                        )}
+                      </>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Ticket ID + Status Banner */}
+                <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5">
+                  <div>
+                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">Ticket ID</span>
+                    <span className="font-mono font-bold text-slate-900 text-xs">{selectedTicket.ticket_id}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <ApprovalPill status={selectedTicket.approval_status || "PENDING"} />
+                    <StatusPill status={selectedTicket.status} />
+                  </div>
+                </div>
+
+                {/* Approved Manager Summary Card */}
+                {selectedTicket.approval_status === "APPROVED" && (
+                  <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        Manager Approval History
+                      </span>
+                      <ApprovalPill status="APPROVED" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-emerald-200/60 font-semibold text-emerald-950">
+                      <div><span className="text-emerald-700 text-[10px] uppercase font-bold block">Approved By:</span>{selectedTicket.approved_by || selectedTicket.manager || "manager"}</div>
+                      <div><span className="text-emerald-700 text-[10px] uppercase font-bold block">Approval Time:</span>{new Date(selectedTicket.approved_at || selectedTicket.updated_at || selectedTicket.created_at).toLocaleString()}</div>
+                      <div><span className="text-emerald-700 text-[10px] uppercase font-bold block">Employee:</span>{selectedTicket.created_by}</div>
+                      <div><span className="text-emerald-700 text-[10px] uppercase font-bold block">Software Requested:</span>{selectedTicket.software_requested || selectedTicket.category}</div>
+                    </div>
+                    <div className="pt-1.5 border-t border-emerald-200/60 text-xs">
+                      <span className="text-emerald-700 text-[10px] uppercase font-bold block">Approval Notes:</span>
+                      <p className="text-emerald-950 italic font-medium">{selectedTicket.approval_notes || "Approved via Manager Portal."}</p>
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-2 bg-[#F8FAFC] border border-[#E2E8F0] p-3.5 rounded-xl">
                   <span className="text-[9px] text-[#64748B] block font-bold uppercase tracking-wider">Employee Information</span>
                   <div className="text-xs space-y-1 font-bold uppercase">

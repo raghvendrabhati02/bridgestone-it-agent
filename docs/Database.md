@@ -1,28 +1,27 @@
-# Database – Bridgestone IT Agent
+# Database
 
-> **Version:** 1.0.0 | **Last updated:** 2026-07-11
+> **Project:** Bridgestone IT AI Assistant · **Last updated:** 2026-07-26
 
 ---
 
-## 1. Database Strategy
-
-The application supports two database backends:
+## Database Strategy
 
 | Backend | When used |
-|---------|-----------|
-| **PostgreSQL** | Primary database for all environments; configured via `DATABASE_URL` env var |
-| **SQLite** | Automatic development fallback when PostgreSQL is unreachable (file: `bridgestone_it_agent.db`) |
+|---|---|
+| **SQLite** | Default for development; auto-created at `backend/bridgestone_it_agent.db` |
+| **PostgreSQL** | Set `DATABASE_URL` to a PostgreSQL connection string for production |
 
-The connection strategy is implemented in `backend/app/database/connection.py`:
+The connection strategy is in `backend/app/database/connection.py`:
 
 1. Read `DATABASE_URL` from environment
-2. Attempt PostgreSQL connection
-3. On failure: log warning and fall back to SQLite
-4. Apply WAL mode + NORMAL synchronicity for SQLite; full connection pool for PostgreSQL
+2. If PostgreSQL URL: connect with connection pool
+3. If SQLite (or PostgreSQL unreachable): fall back to SQLite with WAL mode
+
+**Automatic schema migration on startup:** Missing columns (`approved_by`, `approval_notes`, `approved_at`, and others) are added automatically via `ALTER TABLE` statements in `connection.py` before the application accepts requests. No manual migration steps are required.
 
 ---
 
-## 2. Connection Configuration
+## Connection Configuration
 
 ### PostgreSQL (production)
 
@@ -37,15 +36,7 @@ engine = create_engine(
 )
 ```
 
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| `pool_size` | 20 | Max persistent connections in the pool |
-| `max_overflow` | 10 | Additional connections beyond pool_size |
-| `pool_timeout` | 30 s | Wait time before raising timeout |
-| `pool_recycle` | 1800 s | Recycle connections after 30 minutes |
-| `pool_pre_ping` | True | Test connection before use |
-
-### SQLite (development fallback)
+### SQLite (development)
 
 ```python
 engine = create_engine(
@@ -55,7 +46,7 @@ engine = create_engine(
 )
 ```
 
-WAL mode is enabled via SQLAlchemy event listener:
+WAL mode enabled via event listener:
 ```sql
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
@@ -63,89 +54,88 @@ PRAGMA synchronous=NORMAL;
 
 ---
 
-## 3. ORM Framework
+## ORM Framework
 
 - **ORM:** SQLAlchemy 2.x
-- **Session management:** `SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)`
-- **Dependency injection:** `get_db_context()` FastAPI dependency yields a session and closes it in `finally`
+- **Session:** `SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)`
+- **Dependency injection:** `get_db_context()` FastAPI dependency — yields a session, closes in `finally`
 
 ---
 
-## 4. Data Models
+## Data Models
 
-### 4.1 `users`
-
-Stores authenticated users.
+### `users`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | Auto-increment |
 | `username` | String(50) | Unique, indexed |
 | `email` | String(100) | Unique |
 | `hashed_password` | String(255) | bcrypt hash |
-| `role` | String(50) | `EMPLOYEE` \| `MANAGER` \| `ADMIN` |
+| `role` | String(50) | `EMPLOYEE` \| `MANAGER` \| `ADMIN` \| `SUPERADMIN` |
 | `is_active` | Boolean | Default `True` |
-| `created_at` | DateTime | UTC timestamp |
+| `created_at` | DateTime | UTC |
 
 ---
 
-### 4.2 `tickets`
+### `tickets`
 
-Core ITSM ticket entity.
+Core ITSM entity.
 
 | Column | Type | Notes |
-|--------|------|-------|
-| `id` | Integer PK | Auto-increment |
-| `ticket_id` | String(50) | Unique, e.g. `TKT-001` |
-| `category` | String(50) | VPN, OUTLOOK, PRINTER, etc. |
-| `description` | Text | Ticket description |
+|---|---|---|
+| `id` | Integer PK | |
+| `ticket_id` | String(50) | Unique, e.g. `INC000001` |
+| `category` | String(50) | VPN, OUTLOOK, SOFTWARE_INSTALLATION, etc. |
+| `description` | Text | |
 | `issue_description` | Text | Original user-reported issue |
-| `assigned_team` | String(100) | Assigned IT team |
-| `priority` | String(50) | CRITICAL, HIGH, MEDIUM, LOW |
+| `assigned_team` | String(100) | |
+| `priority` | String(50) | `CRITICAL` \| `HIGH` \| `MEDIUM` \| `LOW` |
 | `sla_hours` | Integer | SLA deadline in hours |
 | `status` | String(50) | See ticket states below |
-| `servicenow_id` | String(100) | Mapped ServiceNow incident ID |
-| `created_by` | String(100) | Username of creator |
+| `servicenow_id` | String(100) | ServiceNow INC number |
+| `created_by` | String(100) | Username |
 | `created_at` | DateTime | UTC |
-| `updated_at` | DateTime | UTC, auto-updated |
+| `updated_at` | DateTime | UTC auto-updated |
 | `request_type` | String(50) | `INCIDENT` \| `SERVICE_REQUEST` \| `PRIVILEGED_ACTION` |
 | `manager` | String(100) | Assigned manager username |
 | `approval_status` | String(50) | `PENDING` \| `APPROVED` \| `REJECTED` \| `NOT_REQUIRED` |
-| `assignment_group` | String(100) | ITSM assignment group |
+| `approved_by` | String(100) | Manager username who approved (**added by migration**) |
+| `approval_notes` | Text | Manager approval notes (**added by migration**) |
+| `approved_at` | DateTime | UTC timestamp of approval (**added by migration**) |
+| `assignment_group` | String(100) | ServiceNow assignment group |
 | `sla_state` | String(50) | `HEALTHY` \| `WARNING_75` \| `WARNING_90` \| `BREACHED` \| `ESCALATED_LEVEL_1..3` |
-| `sla_breached` | Boolean | True once SLA is breached |
+| `sla_breached` | Boolean | `True` once SLA is breached |
 | `sla_breached_at` | DateTime | UTC timestamp of first breach |
-| `assigned_engineer` | String(100) | Individual engineer name |
-| `waiting_since` | DateTime | When ticket entered PENDING state |
+| `assigned_engineer` | String(100) | |
+| `waiting_since` | DateTime | When ticket entered `PENDING` |
 | `waiting_duration_sec` | Integer | Total wait time in seconds |
-| `reminders_sent` | Integer | Count of reminder notifications |
-| `resolved_at` | DateTime | UTC timestamp of resolution |
-| `closed_at` | DateTime | UTC timestamp of closure |
-| `reopen_count` | Integer | Number of times reopened |
-| `reopened_by` | String(100) | Username who reopened |
-| `reopened_at` | DateTime | UTC timestamp of last reopen |
-| `reopen_reason` | Text | Reason for reopening |
+| `reminders_sent` | Integer | Reminder notification count |
+| `resolved_at` | DateTime | |
+| `closed_at` | DateTime | |
+| `reopen_count` | Integer | |
+| `reopened_by` | String(100) | |
+| `reopened_at` | DateTime | |
+| `reopen_reason` | Text | |
 | `cluster_id` | Integer | Cluster grouping ID |
 
 **Ticket Status Values:**
 
 ```
-NEW → WAITING_MANAGER → APPROVED → ASSIGNED → IN_PROGRESS → PENDING → RESOLVED → CLOSED
-                                                                              ↗
-                                                               REJECTED ────
+NEW → ASSIGNED → IN_PROGRESS → PENDING → RESOLVED → CLOSED
+NEW → WAITING_MANAGER → READY_FOR_ADMIN → ACCESS_GRANTED → COMPLETED
+                      → REJECTED
 ```
 
 ---
 
-### 4.3 `sessions`
-
-Conversation session records.
+### `sessions`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
 | `session_id` | String(100) | UUID, unique |
-| `user_id` | Integer | FK to users |
+| `user_id` | Integer | FK to `users` |
 | `category` | String(50) | Issue category |
 | `phase` | String(50) | Conversation phase |
 | `created_at` | DateTime | UTC |
@@ -153,88 +143,76 @@ Conversation session records.
 
 ---
 
-### 4.4 `audit_logs`
-
-Every significant action is logged here.
+### `audit_logs`
 
 | Column | Type | Notes |
-|--------|------|-------|
-| `id` | Integer PK | |
-| `session_id` | String(100) | Reference to session |
-| `action` | String(100) | Action performed |
-| `details` | Text | JSON payload |
-| `created_by` | String(100) | Username |
-| `created_at` | DateTime | UTC |
-| `correlation_id` | String(100) | Request correlation ID |
-
----
-
-### 4.5 `approval_history`
-
-Records all manager approval decisions.
-
-| Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
 | `session_id` | String(100) | |
-| `recommended_action` | String(100) | e.g. `VPN_ACCESS_RESTORATION` |
-| `approval_status` | String(50) | `PENDING` \| `APPROVED` \| `REJECTED` \| `ACCESS_DENIED` |
-| `approved_by` | String(100) | Manager/Admin username |
+| `action` | String(100) | |
+| `details` | Text | JSON payload |
+| `created_by` | String(100) | |
 | `created_at` | DateTime | UTC |
+| `correlation_id` | String(100) | |
 
 ---
 
-### 4.6 `action_history`
-
-Records executed IT actions.
+### `approval_history`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
-| `action_type` | String(100) | e.g. `VPN_RESET`, `SOFTWARE_INSTALL` |
-| `performed_by` | String(100) | Username |
-| `target_user` | String(100) | Who the action was performed for |
-| `result` | Text | JSON result |
+| `session_id` | String(100) | |
+| `recommended_action` | String(100) | e.g. `SOFTWARE_INSTALLATION` |
+| `approval_status` | String(50) | `PENDING` \| `APPROVED` \| `REJECTED` \| `ACCESS_DENIED` |
+| `approved_by` | String(100) | |
 | `created_at` | DateTime | UTC |
 
 ---
 
-### 4.7 `notifications`
-
-User-facing notification records.
+### `action_history`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
+| `id` | Integer PK | |
+| `action_type` | String(100) | e.g. `SOFTWARE_INSTALL` |
+| `performed_by` | String(100) | |
+| `target_user` | String(100) | |
+| `result` | Text | JSON |
+| `created_at` | DateTime | UTC |
+
+---
+
+### `notifications`
+
+| Column | Type | Notes |
+|---|---|---|
 | `id` | Integer PK | |
 | `username` | String(100) | Recipient |
-| `message` | Text | Notification content |
-| `type` | String(50) | Notification type |
-| `read` | Boolean | Default False |
+| `message` | Text | |
+| `type` | String(50) | |
+| `read` | Boolean | Default `False` |
 | `created_at` | DateTime | UTC |
 
 ---
 
-### 4.8 `security_events`
-
-Authentication and authorisation event log.
+### `security_events`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
 | `event_type` | String(50) | `LOGIN` \| `LOGOUT` \| `FAILED_LOGIN` \| `PERMISSION_DENIED` |
 | `username` | String(100) | |
-| `details` | Text | Human-readable description |
+| `details` | Text | |
 | `correlation_id` | String(100) | |
 | `created_at` | DateTime | UTC |
 
 ---
 
-### 4.9 `rbac_audit_logs`
-
-RBAC enforcement decision records.
+### `rbac_audit_logs`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
 | `user` | String(100) | |
 | `role` | String(50) | |
@@ -244,28 +222,50 @@ RBAC enforcement decision records.
 
 ---
 
-### 4.10 `agent_traces`
-
-Stores AI reasoning traces for observability.
+### `agent_traces`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
 | `session_id` | String(100) | |
-| `step` | String(100) | Agent reasoning step name |
-| `input` | Text | Input to the agent |
-| `output` | Text | Agent output |
+| `step` | String(100) | Agent node name |
+| `input` | Text | Input to the node |
+| `output` | Text | Node output |
 | `correlation_id` | String(100) | |
 | `created_at` | DateTime | UTC |
 
 ---
 
-### 4.11 `scheduled_jobs`
-
-APScheduler job registry in the database.
+### `sla_audit_events`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
+| `id` | Integer PK | |
+| `ticket_id` | String(50) | |
+| `event_type` | String(50) | `WARNING_75` \| `WARNING_90` \| `BREACHED` \| `ESCALATED_L1..3` |
+| `sla_state` | String(50) | |
+| `elapsed_hours` | Float | |
+| `remaining_hours` | Float | |
+| `created_at` | DateTime | UTC |
+
+---
+
+### `sla_escalation_history`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | Integer PK | |
+| `ticket_id` | String(50) | |
+| `escalation_level` | String(50) | `L1` \| `L2` \| `L3` |
+| `escalated_to` | String(100) | |
+| `created_at` | DateTime | UTC |
+
+---
+
+### `scheduled_jobs`
+
+| Column | Type | Notes |
+|---|---|---|
 | `id` | Integer PK | |
 | `job_name` | String(100) | Unique |
 | `is_enabled` | Boolean | |
@@ -274,12 +274,10 @@ APScheduler job registry in the database.
 
 ---
 
-### 4.12 `execution_history`
-
-Job execution history records.
+### `execution_history`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
 | `job_name` | String(100) | |
 | `status` | String(50) | `SUCCESS` \| `FAILED` |
@@ -291,60 +289,26 @@ Job execution history records.
 
 ---
 
-### 4.13 `sla_audit_events`
-
-SLA state transition audit trail.
+### `service_catalog`
 
 | Column | Type | Notes |
-|--------|------|-------|
-| `id` | Integer PK | |
-| `ticket_id` | String(50) | |
-| `event_type` | String(50) | `WARNING_75` \| `WARNING_90` \| `BREACHED` \| `ESCALATED_L1..3` |
-| `sla_state` | String(50) | |
-| `elapsed_hours` | Float | |
-| `remaining_hours` | Float | |
-| `created_at` | DateTime | UTC |
-
----
-
-### 4.14 `sla_escalation_history`
-
-Escalation action records.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | Integer PK | |
-| `ticket_id` | String(50) | |
-| `escalation_level` | String(50) | `L1` \| `L2` \| `L3` |
-| `escalated_to` | String(100) | Username or team |
-| `created_at` | DateTime | UTC |
-
----
-
-### 4.15 `service_catalog`
-
-Service request catalog items.
-
-| Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
 | `category` | String(100) | |
-| `name` | String(255) | Display name |
+| `name` | String(255) | |
 | `description` | Text | |
 | `requires_approval` | Boolean | |
 | `is_active` | Boolean | |
 
 ---
 
-### 4.16 `service_requests`
-
-User service request submissions.
+### `service_requests`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
 | `request_id` | String(50) | Unique, e.g. `REQ-001` |
-| `catalog_item_id` | Integer | FK to service_catalog |
+| `catalog_item_id` | Integer | FK to `service_catalog` |
 | `requested_by` | String(100) | |
 | `status` | String(50) | `SUBMITTED` \| `PENDING_APPROVAL` \| `APPROVED` \| `REJECTED` \| `FULFILLED` |
 | `approved_by` | String(100) | |
@@ -352,14 +316,12 @@ User service request submissions.
 
 ---
 
-### 4.17 `devices`
-
-Enterprise device inventory.
+### `devices`
 
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | Integer PK | |
-| `device_id` | String(100) | Unique identifier |
+| `device_id` | String(100) | Unique |
 | `hostname` | String(255) | |
 | `ip_address` | String(50) | |
 | `os` | String(100) | |
@@ -370,31 +332,28 @@ Enterprise device inventory.
 
 ---
 
-## 5. Database Schema Diagram
+## Entity Relationship Overview
 
 ```mermaid
 erDiagram
     users {
         int id PK
         string username
-        string email
-        string hashed_password
         string role
+        string hashed_password
         boolean is_active
-        datetime created_at
     }
 
     tickets {
         int id PK
         string ticket_id
-        string category
         string status
         string request_type
         string approval_status
+        string approved_by
         string sla_state
         boolean sla_breached
         string created_by
-        datetime created_at
     }
 
     sessions {
@@ -403,7 +362,6 @@ erDiagram
         int user_id FK
         string category
         string phase
-        datetime created_at
     }
 
     audit_logs {
@@ -411,7 +369,6 @@ erDiagram
         string session_id
         string action
         string created_by
-        datetime created_at
     }
 
     notifications {
@@ -419,14 +376,19 @@ erDiagram
         string username
         string message
         boolean read
-        datetime created_at
     }
 
     security_events {
         int id PK
         string event_type
         string username
-        datetime created_at
+    }
+
+    sla_audit_events {
+        int id PK
+        string ticket_id
+        string event_type
+        string sla_state
     }
 
     users ||--o{ sessions : "has"
@@ -437,26 +399,28 @@ erDiagram
 
 ---
 
-## 6. Observability Hooks
+## Schema Migration
 
-The database connection has SQLAlchemy event listeners for observability:
+On startup, `connection.py` executes `ALTER TABLE` statements to add any columns that do not exist yet. This handles upgrades from older database files without requiring a full migration tool:
 
-| Event | Metric |
-|-------|--------|
-| `before_cursor_execute` | Records query start time |
-| `after_cursor_execute` | Records query duration → `db_query_duration_seconds` histogram |
-| `after_cursor_execute` | Increments `db_transactions_total` |
-| `handle_error` | Increments `db_failures_total` |
+```python
+# Example of the auto-migration pattern used
+try:
+    db.execute("ALTER TABLE tickets ADD COLUMN approved_by TEXT")
+except OperationalError:
+    pass  # Column already exists
+```
+
+This covers:
+- `tickets.approved_by`
+- `tickets.approval_notes`
+- `tickets.approved_at`
+- `execution_history.status`
+- `execution_history.parameters`
 
 ---
 
-## 7. Database Initialization
+## Related Documents
 
-On first startup, SQLAlchemy creates all tables automatically via `Base.metadata.create_all(engine)` if they do not exist. There is no migration tool (Alembic) configured; schema changes require manual column additions or a fresh database.
-
-To add missing columns to an existing database:
-```python
-# Example: add missing columns using SQLite PRAGMA
-ALTER TABLE execution_history ADD COLUMN status TEXT;
-ALTER TABLE execution_history ADD COLUMN parameters TEXT;
-```
+- [Architecture](./architecture.md) — Connection pooling, ORM session management
+- [Deployment](./Deployment.md) — Database backup and restore

@@ -65,23 +65,35 @@ class TestTicketOrchestrator:
 
     @patch("app.services.ticket_orchestrator.memory.get_history")
     @patch("app.services.ticket_service.create_ticket")
-    def test_orchestrator_calls_create_ticket(self, mock_create, mock_history):
-        """TicketOrchestrator must delegate to ticket_service.create_ticket."""
+    @patch("app.services.ticket_summary_service.generate_ticket_summary")
+    def test_orchestrator_calls_create_ticket(self, mock_summary, mock_create, mock_history):
+        """TicketOrchestrator must delegate to ticket_service.create_ticket with correct core args."""
+        from app.services.ticket_summary_service import TicketSummary
         mock_history.return_value = [
             {"sender": "user", "text": "VPN not working, cannot connect from home"},
         ]
+        mock_summary.return_value = TicketSummary(
+            short_description="VPN not working",
+            description="VPN not working, cannot connect from home",
+            source="llm",
+            used_fallback=False,
+        )
         mock_create.return_value = _make_mock_ticket("INC000001", "NEW", "INCIDENT")
 
         from app.services.ticket_orchestrator import TicketOrchestrator
         orch = TicketOrchestrator()
         result = orch.create(self._make_state("VPN"), username="test_user")
 
-        # Must have called create_ticket (DB persistence path)
-        mock_create.assert_called_once_with(
-            category="VPN",
-            issue_description="VPN not working, cannot connect from home",
-            created_by="test_user",
-        )
+        # Must have called create_ticket exactly once (DB persistence path)
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["category"] in ("VPN", "network")
+        assert call_kwargs["created_by"] == "test_user"
+        assert call_kwargs["short_description"] == "VPN not working"
+        assert call_kwargs["description"] == "VPN not working, cannot connect from home"
+        # IncidentEnrichmentService always produces metadata; verify it is passed
+        from app.services.incident_enrichment_service import IncidentMetadata
+        assert isinstance(call_kwargs["incident_metadata"], IncidentMetadata)
         assert result["ticket_id"] == "INC000001"
         assert result["status"] == "NEW"
         assert result["request_type"] == "INCIDENT"
@@ -101,20 +113,34 @@ class TestTicketOrchestrator:
 
     @patch("app.services.ticket_orchestrator.memory.get_history")
     @patch("app.services.ticket_service.create_ticket")
-    def test_orchestrator_uses_first_user_message_as_description(self, mock_create, mock_history):
-        """Issue description must come from the first user message in history."""
+    @patch("app.services.ticket_summary_service.generate_ticket_summary")
+    def test_orchestrator_uses_first_user_message_as_description(
+        self, mock_summary, mock_create, mock_history
+    ):
+        """TicketSummary description (derived from conversation) is used as issue_description."""
+        from app.services.ticket_summary_service import TicketSummary
         mock_history.return_value = [
             {"sender": "user", "text": "Outlook is crashing every time I open it"},
             {"sender": "agent", "text": "Let me help with that"},
             {"sender": "user", "text": "Still not working after restart"},
         ]
+        # Simulate TicketSummaryService distilling the conversation
+        expected_description = "Outlook is crashing every time I open it"
+        mock_summary.return_value = TicketSummary(
+            short_description="Outlook crashing on open",
+            description=expected_description,
+            source="llm",
+            used_fallback=False,
+        )
         mock_create.return_value = _make_mock_ticket("INC000002", "NEW", "INCIDENT")
 
         from app.services.ticket_orchestrator import TicketOrchestrator
         TicketOrchestrator().create(self._make_state("OUTLOOK"), username="test_user")
 
-        call_kwargs = mock_create.call_args
-        assert call_kwargs.kwargs["issue_description"] == "Outlook is crashing every time I open it"
+        call_kwargs = mock_create.call_args.kwargs
+        # The TicketSummary description must flow through as the issue description
+        assert call_kwargs["issue_description"] == expected_description
+        assert call_kwargs["description"] == expected_description
 
     @patch("app.services.ticket_orchestrator.memory.get_history")
     @patch("app.services.ticket_service.create_ticket")
@@ -140,17 +166,20 @@ class TestTicketOrchestrator:
 class TestTicketServicePersistence:
     """Verify ticket_service.create_ticket() writes to DB."""
 
+    @patch("app.services.ticket_service.calculate_priority", return_value="MEDIUM")
     @patch("app.services.ticket_service.store_sla_record")
     @patch("app.services.ticket_service.create_notification")
     @patch("app.services.ticket_service.get_db")
-    @patch("app.services.ticket_service.servicenow_client")
-    def test_incident_persisted_to_db(self, mock_sn, mock_get_db, mock_notif, mock_sla):
+    @patch("app.services.ticket_service.ServiceNowService")
+    def test_incident_persisted_to_db(self, mock_sn, mock_get_db, mock_notif, mock_sla, mock_prio):
         """Incident must be saved to DB via TicketRepository.save_ticket()."""
-        mock_sn.create_incident.return_value = {"sys_id": "SN001", "success": True}
+        mock_sn.return_value.validate_configuration.return_value = (True, "")
+        mock_sn.return_value.create_incident.return_value = MagicMock(success=True, sys_id="SN001", number="INC000001")
 
         mock_repo = MagicMock()
         mock_repo.save_ticket.return_value = MagicMock(ticket_id="INC000001")
         mock_db = MagicMock()
+        mock_db.execute.return_value.scalar.return_value = 100
         mock_db.__enter__ = MagicMock(return_value=mock_db)
         mock_db.__exit__ = MagicMock(return_value=False)
         mock_get_db.return_value = mock_db
@@ -175,17 +204,20 @@ class TestTicketServicePersistence:
         assert "request_type" in result
         assert "requires_approval" in result
 
+    @patch("app.services.ticket_service.calculate_priority", return_value="MEDIUM")
     @patch("app.services.ticket_service.store_sla_record")
     @patch("app.services.ticket_service.create_notification")
     @patch("app.services.ticket_service.get_db")
-    @patch("app.services.ticket_service.servicenow_client")
-    def test_service_request_gets_waiting_manager_status(self, mock_sn, mock_get_db, mock_notif, mock_sla):
+    @patch("app.services.ticket_service.ServiceNowService")
+    def test_service_request_gets_waiting_manager_status(self, mock_sn, mock_get_db, mock_notif, mock_sla, mock_prio):
         """Software installation must produce WAITING_MANAGER status, not NEW."""
-        mock_sn.create_incident.return_value = {"sys_id": "SN002", "success": True}
+        mock_sn.return_value.validate_configuration.return_value = (True, "")
+        mock_sn.return_value.create_incident.return_value = MagicMock(success=True, sys_id="SN002", number="INC000002")
 
         mock_repo = MagicMock()
         mock_repo.save_ticket.return_value = MagicMock()
         mock_db = MagicMock()
+        mock_db.execute.return_value.scalar.return_value = 100
         mock_db.__enter__ = MagicMock(return_value=mock_db)
         mock_db.__exit__ = MagicMock(return_value=False)
         mock_get_db.return_value = mock_db
@@ -204,17 +236,20 @@ class TestTicketServicePersistence:
         assert result["approval_status"] == "PENDING"
         assert result["manager"] == "manager"
 
+    @patch("app.services.ticket_service.calculate_priority", return_value="MEDIUM")
     @patch("app.services.ticket_service.store_sla_record")
     @patch("app.services.ticket_service.create_notification")
     @patch("app.services.ticket_service.get_db")
-    @patch("app.services.ticket_service.servicenow_client")
-    def test_incident_gets_new_status_no_approval(self, mock_sn, mock_get_db, mock_notif, mock_sla):
+    @patch("app.services.ticket_service.ServiceNowService")
+    def test_incident_gets_new_status_no_approval(self, mock_sn, mock_get_db, mock_notif, mock_sla, mock_prio):
         """VPN incident must go directly to NEW — no manager approval."""
-        mock_sn.create_incident.return_value = {"sys_id": "SN003", "success": True}
+        mock_sn.return_value.validate_configuration.return_value = (True, "")
+        mock_sn.return_value.create_incident.return_value = MagicMock(success=True, sys_id="SN003", number="INC000003")
 
         mock_repo = MagicMock()
         mock_repo.save_ticket.return_value = MagicMock()
         mock_db = MagicMock()
+        mock_db.execute.return_value.scalar.return_value = 100
         mock_db.__enter__ = MagicMock(return_value=mock_db)
         mock_db.__exit__ = MagicMock(return_value=False)
         mock_get_db.return_value = mock_db
@@ -233,17 +268,20 @@ class TestTicketServicePersistence:
         assert result["approval_status"] == "NOT_REQUIRED"
         assert result["manager"] is None
 
+    @patch("app.services.ticket_service.calculate_priority", return_value="MEDIUM")
     @patch("app.services.ticket_service.store_sla_record")
     @patch("app.services.ticket_service.create_notification")
     @patch("app.services.ticket_service.get_db")
-    @patch("app.services.ticket_service.servicenow_client")
-    def test_manager_notified_for_service_request(self, mock_sn, mock_get_db, mock_notif, mock_sla):
+    @patch("app.services.ticket_service.ServiceNowService")
+    def test_manager_notified_for_service_request(self, mock_sn, mock_get_db, mock_notif, mock_sla, mock_prio):
         """Manager must receive an approval notification for service requests."""
-        mock_sn.create_incident.return_value = {"sys_id": "SN004", "success": True}
+        mock_sn.return_value.validate_configuration.return_value = (True, "")
+        mock_sn.return_value.create_incident.return_value = MagicMock(success=True, sys_id="SN004", number="INC000004")
 
         mock_repo = MagicMock()
         mock_repo.save_ticket.return_value = MagicMock()
         mock_db = MagicMock()
+        mock_db.execute.return_value.scalar.return_value = 100
         mock_db.__enter__ = MagicMock(return_value=mock_db)
         mock_db.__exit__ = MagicMock(return_value=False)
         mock_get_db.return_value = mock_db

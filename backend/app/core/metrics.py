@@ -325,3 +325,69 @@ ACCESS_CHECKS_TOTAL = Counter(
     "access_checks_total",
     "Total Entra ID access validation check operations"
 )
+
+# ==============================================================================
+# 11. TOOL EXECUTION METRICS
+# ==============================================================================
+TOOL_EXECUTION_TOTAL = Counter(
+    "tool_execution_total",
+    "Total tool executions dispatched by the tool agent",
+    ["tool_name", "status"]          # status: "success" | "failure"
+)
+
+TOOL_EXECUTION_DURATION_SECONDS = Histogram(
+    "tool_execution_duration_seconds",
+    "Tool execution latency in seconds",
+    ["tool_name"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+)
+
+TOOL_RETRIES_TOTAL = Counter(
+    "tool_retries_total",
+    "Total tool execution retries",
+    ["tool_name"]
+)
+
+# ==============================================================================
+# 12. PROVIDER-LEVEL METRICS (per provider + model)
+# ==============================================================================
+PROVIDER_REQUESTS_TOTAL = Counter(
+    "provider_requests_total",
+    "Total requests sent to each AI provider",
+    ["provider", "model"]
+)
+
+PROVIDER_RETRIES_TOTAL = Counter(
+    "provider_retries_total",
+    "Total retry attempts made against each AI provider",
+    ["provider", "model"]
+)
+
+PROVIDER_QUOTA_FAILURES_TOTAL = Counter(
+    "provider_quota_failures_total",
+    "Total quota / rate-limit failures per provider",
+    ["provider"]
+)
+
+PROVIDER_LATENCY_SECONDS = Histogram(
+    "provider_latency_seconds",
+    "End-to-end latency per provider call in seconds",
+    ["provider", "model", "fallback_used"],
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
+)
+
+# ==============================================================================
+# 13. PIPELINE SPAN METRICS (per service + provider + status)
+# ==============================================================================
+PIPELINE_SPAN_DURATION_SECONDS = Histogram(
+    "pipeline_span_duration_seconds",
+    "End-to-end latency of each pipeline service stage in seconds",
+    ["service", "provider", "status"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
+)
+# Label reference:
+#   service  — component name: "classification", "enrichment", "ticket_summary",
+#              "ticket_service", "servicenow_api", "conversation", "http_request"
+#   provider — AI provider in scope, or "none" / "servicenow" / "unknown"
+#   status   — "success" | "error"
+

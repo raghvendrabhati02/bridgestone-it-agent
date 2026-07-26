@@ -7,8 +7,11 @@ import {
   Wrench, FileText, CheckCircle2,
   Ticket, CheckCircle, XCircle,
   Mic, Paperclip, MessageSquare,
-  AlertCircle
+  AlertCircle, ChevronRight, ChevronLeft,
+  Activity, BookOpen, Layers
 } from "lucide-react";
+
+import EnterpriseAdminAccessCard from "@/components/shared/EnterpriseAdminAccessCard";
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -240,6 +243,7 @@ export default function SupportChatView({
   recommendedAction,
   username,
   status,
+  category,
 }: SupportChatViewProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -247,6 +251,13 @@ export default function SupportChatView({
   const [isInvestigationOpen, setIsInvestigationOpen] = useState(false);
 
   const inv = useInvestigationState(messages, isLoading, status, actions);
+
+  // Auto-expand investigation panel on desktop when conversation starts
+  useEffect(() => {
+    if (messages.length > 0 || isLoading) {
+      setIsInvestigationOpen(true);
+    }
+  }, [messages.length, isLoading]);
 
   const focusInput = () => {
     requestAnimationFrame(() => {
@@ -313,137 +324,375 @@ export default function SupportChatView({
     .at(-1)?.tool_result;
 
   const renderInvestigationStatus = () => {
+    const lastAgentMsg = messages.filter(m => m.sender === "agent").at(-1);
+    const tbState = lastAgentMsg?.tool_result?.["_tb_engine_state"];
+    const hasStarted = messages.length > 0 || isLoading;
+    const isSolved = inv.isSolved || status === "RESOLVED";
+    const isTicketCreated = Boolean(lastToolResult?.ticket_id);
+    const isEscalated = status === "ESCALATED" || isTicketCreated;
+
+    // Current Phase Title
+    let phaseTitle = "Idle / Ready";
+    let phaseSubtitle = "Awaiting user inquiry";
+    let phaseBadgeCls = "bg-[#F1F5F9] text-[#64748B] border-[#CBD5E1]";
+
+    if (isSolved) {
+      phaseTitle = "Issue Resolved";
+      phaseSubtitle = "Resolution confirmed";
+      phaseBadgeCls = "bg-emerald-50 text-emerald-700 border-emerald-200";
+    } else if (isEscalated) {
+      phaseTitle = "ServiceNow Escalation";
+      phaseSubtitle = "Ticket created in ITSM queue";
+      phaseBadgeCls = "bg-amber-50 text-amber-700 border-amber-200";
+    } else if (tbState?.is_troubleshooting || inv.activeStep >= 2) {
+      phaseTitle = "AI Troubleshooting";
+      phaseSubtitle = "Executing step-by-step resolution";
+      phaseBadgeCls = "bg-blue-50 text-blue-700 border-blue-200";
+    } else if (isLoading) {
+      phaseTitle = "Diagnosing Issue";
+      phaseSubtitle = "Analyzing intent & searching SOPs";
+      phaseBadgeCls = "bg-purple-50 text-purple-700 border-purple-200";
+    } else if (hasStarted) {
+      phaseTitle = "Active Investigation";
+      phaseSubtitle = "Evaluating user request";
+      phaseBadgeCls = "bg-indigo-50 text-indigo-700 border-indigo-200";
+    }
+
+    const rawCategory = category || lastAgentMsg?.category || messages.find(m => m.category)?.category || "General IT";
+    const formattedCategory = rawCategory.toUpperCase().replace("_", " ");
+
+    const articleId = tbState?.troubleshooting_session?.article_id
+      || (inv.kbSource?.source ?? (hasStarted ? "KB0001" : null));
+    const articleTitle = inv.kbSource?.source || (articleId ? `SOP Guide (${articleId})` : "General Support Document");
+
+    const totalSteps = ARTICLE_TOTAL_STEPS[articleId ?? "KB0001"] ?? 5;
+    const stepDetails = parseTroubleshootingText(lastAgentMsg?.text || "");
+    const currentStepNum = stepDetails.stepNumber || (inv.activeStep >= 0 ? inv.activeStep + 1 : 1);
+
+    // Build Stage list dynamically: includes Escalation stage when escalated or ticket created
+    const activeStages = [
+      ...PIPELINE_STEPS.map((s, idx) => ({
+        key: idx === 0 ? "understanding" : idx === 1 ? "knowledge_base" : idx === 2 ? "troubleshooting" : "solution",
+        label: s.label,
+        Icon: s.Icon,
+      })),
+      ...(isEscalated ? [{ key: "escalation", label: "Escalated to ServiceNow", Icon: Ticket }] : [])
+    ];
+
+    // Helper to compute state per stage (completed | current | pending)
+    const getStageStatus = (stageKey: string): "completed" | "current" | "pending" => {
+      if (isSolved) {
+        if (stageKey === "escalation") return "pending";
+        return "completed";
+      }
+
+      if (isTicketCreated || isEscalated) {
+        return "completed";
+      }
+
+      if (isLoading) {
+        if (inv.agentMsgCount === 0) {
+          return stageKey === "understanding" ? "current" : "pending";
+        }
+        if (inv.agentMsgCount === 1) {
+          if (stageKey === "understanding") return "completed";
+          if (stageKey === "knowledge_base") return "current";
+          return "pending";
+        }
+        if (tbState?.is_troubleshooting) {
+          if (["understanding", "knowledge_base"].includes(stageKey)) return "completed";
+          if (stageKey === "troubleshooting") return "current";
+          return "pending";
+        }
+        if (["understanding", "knowledge_base", "troubleshooting"].includes(stageKey)) return "completed";
+        if (stageKey === "solution") return "current";
+        return "pending";
+      }
+
+      if (tbState?.is_troubleshooting) {
+        if (["understanding", "knowledge_base"].includes(stageKey)) return "completed";
+        if (stageKey === "troubleshooting") return "current";
+        return "pending";
+      }
+
+      if (inv.agentMsgCount > 0) {
+        if (["understanding", "knowledge_base", "troubleshooting"].includes(stageKey)) return "completed";
+        if (stageKey === "solution") return "current";
+        return "pending";
+      }
+
+      return "pending";
+    };
+
     return (
       <div className="flex flex-col h-full bg-[#F8FAFC]">
-        <div className="flex-shrink-0 px-4 py-3 border-b border-[#E2E8F0] bg-white flex items-center justify-between">
-          <p className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
-            Investigation Status
-          </p>
+        {/* Panel Header */}
+        <div className="flex-shrink-0 px-4 py-3 border-b border-[#E2E8F0] bg-white flex items-center justify-between shadow-2xs">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-md bg-[#FEF2F2] border border-[#FEE2E2] flex items-center justify-center">
+              <Activity className="w-3.5 h-3.5 text-[#E30613]" />
+            </div>
+            <div>
+              <h3 className="text-xs font-black text-[#0F172A] uppercase tracking-wider">
+                Investigation Workflow
+              </h3>
+              <p className="text-[9px] text-[#64748B] font-semibold uppercase tracking-wider">
+                ITSM Status Tracking
+              </p>
+            </div>
+          </div>
+
           <button
             onClick={() => setIsInvestigationOpen(false)}
-            className="lg:hidden p-1 rounded-lg text-[#64748B] hover:bg-[#F1F5F9] cursor-pointer"
-            aria-label="Close status drawer"
+            className="p-1.5 rounded-lg text-[#64748B] hover:text-[#1E293B] hover:bg-[#F1F5F9] transition-colors cursor-pointer"
+            aria-label="Collapse Investigation Panel"
+            title="Collapse Panel"
           >
-            <XCircle className="w-4 h-4" />
+            <ChevronRight className="w-4 h-4" />
           </button>
         </div>
 
+        {/* Panel Body */}
         <div className="flex-1 px-4 py-4 space-y-4 overflow-y-auto">
-          {messages.length === 0 && !isLoading && (
-            <div className="text-center py-6">
-              <div className="w-10 h-10 rounded-full bg-white border border-[#E2E8F0] flex items-center justify-center mx-auto mb-3">
-                <Brain className="w-5 h-5 text-[#94A3B8]" />
+          {!hasStarted ? (
+            /* Initial Placeholder / Waiting State */
+            <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 text-center space-y-3 shadow-2xs">
+              <div className="w-12 h-12 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-center mx-auto text-[#94A3B8]">
+                <Brain className="w-6 h-6 text-[#94A3B8]" />
               </div>
-              <p className="text-[10.5px] text-[#64748B] font-bold leading-relaxed uppercase">
-                Investigation steps will appear here once you describe your issue.
-              </p>
-            </div>
-          )}
-
-          {(messages.length > 0 || isLoading) && (
-            <div className="space-y-2">
-              {PIPELINE_STEPS.map((step, idx) => {
-                const isDone = idx <= inv.completedUntil;
-                const isActive = idx === inv.activeStep && isLoading;
-
-                return (
-                  <div
-                    key={step.label}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all ${isActive
-                      ? "bg-white border-[#E30613]/20 shadow-xs"
-                      : isDone
-                        ? "bg-white border-green-155"
-                        : "border-transparent"
-                      }`}
-                  >
-                    <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${isDone ? "bg-green-50" : isActive ? "bg-[#FEF2F2]" : "bg-[#F1F5F9]"
-                      }`}>
-                      {isDone ? (
-                        <CheckCircle2 className="w-3 h-3 text-[#16A34A]" />
-                      ) : isActive ? (
-                        <Loader2 className="w-3 h-3 text-[#E30613] animate-spin" />
-                      ) : (
-                        <step.Icon className="w-3 h-3 text-[#94A3B8]" />
-                      )}
-                    </div>
-
-                    <span className={`text-xs font-semibold leading-none ${isDone ? "text-green-700" : isActive ? "text-[#1E293B]" : "text-[#94A3B8]"
-                      }`}>
-                      {step.label}
-                    </span>
-                  </div>
-                );
-              })}
-
-              {!isLoading && messages.length > 0 && !inv.isSolved && actions.length === 0 && (
-                <p className="text-[9px] text-[#64748B] font-bold uppercase px-3 pt-1 italic tracking-wider">
-                  Waiting for your response...
+              <div>
+                <h4 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">Ready for Investigation</h4>
+                <p className="text-[11px] text-[#64748B] font-medium leading-relaxed mt-1">
+                  Describe your issue in the chat to start live diagnostics, knowledge retrieval, and step-by-step troubleshooting.
                 </p>
-              )}
+              </div>
+              <button
+                onClick={() => focusInput()}
+                className="w-full py-2 bg-[#F8FAFC] hover:bg-[#F1F5F9] border border-[#E2E8F0] text-xs font-bold text-[#E30613] rounded-lg transition-colors cursor-pointer uppercase tracking-wider"
+              >
+                Describe An Issue
+              </button>
             </div>
-          )}
+          ) : (
+            <>
+              {/* 1. CURRENT PHASE & CATEGORY */}
+              <div className="bg-white border border-[#E2E8F0] rounded-xl p-3.5 space-y-3 shadow-2xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">Current Phase</span>
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${phaseBadgeCls}`}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+                    {phaseTitle}
+                  </span>
+                </div>
 
-          {inv.kbSource && (
-            <div className="bg-white border border-[#E2E8F0] rounded-lg p-3 space-y-2 shadow-xs">
-              <p className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">
-                Knowledge Base
-              </p>
-              <div className="flex items-start gap-2">
-                <Search className="w-3.5 h-3.5 text-[#E30613] flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-xs font-bold text-[#1E293B]">
-                    {inv.kbSource.source ?? "SOP Document"}
-                  </p>
-                  <p className="text-[10px] text-[#64748B] font-bold mt-0.5 uppercase">
-                    {inv.kbSource.category ?? "Troubleshooting Guide"}
-                  </p>
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[#F1F5F9]">
+                  <div>
+                    <span className="text-[9px] font-bold text-[#94A3B8] uppercase tracking-wider block">Category</span>
+                    <span className="text-xs font-bold text-[#0F172A] truncate block mt-0.5">{formattedCategory}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-bold text-[#94A3B8] uppercase tracking-wider block">Sub-Status</span>
+                    <span className="text-xs font-semibold text-[#475569] truncate block mt-0.5">{phaseSubtitle}</span>
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center justify-between pt-1 border-t border-[#E2E8F0]">
-                <span className="text-[10px] text-[#64748B] font-bold uppercase">Confidence</span>
-                <span className="text-[10px] font-bold text-[#16A34A]">94%</span>
-              </div>
-            </div>
-          )}
 
-          {inv.isSolved && (
-            <div className="bg-green-50 border border-green-200 rounded-lg p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-[#16A34A] flex-shrink-0" />
-                <p className="text-xs font-bold text-green-800 uppercase tracking-wider">Issue Resolved</p>
-              </div>
-              <p className="text-[11px] text-green-700 leading-relaxed font-bold">
-                The AI resolved your issue successfully. No ticket was created.
-              </p>
-            </div>
-          )}
+              {/* 2. WORKFLOW STAGES (STATUS-BASED NO PERCENTAGES) */}
+              <div className="bg-white border border-[#E2E8F0] rounded-xl p-3.5 space-y-3 shadow-2xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">Workflow Stages</span>
+                  <span className="text-[9px] font-bold text-[#64748B] uppercase tracking-wider bg-[#F8FAFC] border border-[#E2E8F0] px-2 py-0.5 rounded">
+                    Status-Driven
+                  </span>
+                </div>
 
-          {lastToolResult?.ticket_id && (
-            <div className="bg-white border border-[#E2E8F0] rounded-lg p-3 space-y-3 shadow-xs">
-              <div className="flex items-center gap-2">
-                <Ticket className="w-4 h-4 text-[#E30613] flex-shrink-0" />
-                <p className="text-xs font-bold text-[#1E293B] uppercase tracking-wider">Ticket Created</p>
-                <span className="ml-auto inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-50 text-green-700 border border-green-200 uppercase tracking-wider">
-                  Created
-                </span>
+                {/* Active Step callout when troubleshooting */}
+                {tbState?.is_troubleshooting && stepDetails.title && !isSolved && !isTicketCreated && (
+                  <div className="bg-[#FEF2F2] border border-[#FEE2E2] rounded-lg p-2.5 space-y-1">
+                    <span className="text-[9px] font-bold text-[#E30613] uppercase tracking-wider block">
+                      Active Step {currentStepNum} of {totalSteps}
+                    </span>
+                    <p className="text-xs font-bold text-[#0F172A] leading-snug">{stepDetails.title}</p>
+                  </div>
+                )}
+
+                {/* Workflow Stages List */}
+                <div className="space-y-1.5 pt-1">
+                  {activeStages.map((stage) => {
+                    const statusType = getStageStatus(stage.key);
+                    const isCompleted = statusType === "completed";
+                    const isCurrent = statusType === "current";
+
+                    return (
+                      <div
+                        key={stage.key}
+                        className={`flex items-center justify-between px-3 py-2 rounded-xl border text-xs transition-all ${
+                          isCurrent
+                            ? "bg-blue-50/90 border-blue-200 shadow-2xs font-bold text-blue-950"
+                            : isCompleted
+                            ? "bg-white border-[#E2E8F0] font-semibold text-[#1E293B]"
+                            : "bg-transparent border-transparent text-[#94A3B8] font-normal"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className={`w-5 h-5 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                            isCompleted
+                              ? "bg-emerald-50 border border-emerald-200 text-emerald-600"
+                              : isCurrent
+                              ? "bg-blue-600 text-white shadow-2xs"
+                              : "bg-[#F1F5F9] text-[#CBD5E1]"
+                          }`}>
+                            {isCompleted ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : isCurrent ? (
+                              <Loader2 className="w-3.5 h-3.5 text-white animate-spin" />
+                            ) : (
+                              <stage.Icon className="w-3 h-3 text-[#94A3B8]" />
+                            )}
+                          </div>
+                          <span className="truncate text-xs tracking-tight">{stage.label}</span>
+                        </div>
+
+                        <div>
+                          {isCompleted ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-600 uppercase tracking-wider">
+                              Done
+                            </span>
+                          ) : isCurrent ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-blue-100 text-blue-700 uppercase tracking-wider">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping" />
+                              Active
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-semibold text-[#CBD5E1] uppercase tracking-wider">
+                              Pending
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
-              <div className="space-y-1.5 pt-1 border-t border-[#E2E8F0]">
-                {[
-                  { label: "Ticket ID", value: lastToolResult.ticket_id as string },
-                  { label: "Assigned Team", value: (lastToolResult.assigned_team as string) ?? "IT Support" },
-                  { label: "Priority", value: (lastToolResult.priority as string) ?? "Medium" },
-                  { label: "Estimated SLA", value: `${lastToolResult.sla_hours ?? 4} Hours` },
-                ].map(({ label, value }) => (
-                  <div key={label} className="flex justify-between items-center">
-                    <span className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider">{label}</span>
-                    <span className={`text-[10px] font-bold ${label === "Ticket ID" ? "text-[#E30613] font-mono" : "text-[#334155]"}`}>
-                      {value}
+              {/* 3. KNOWLEDGE BASE CITATION (NO PERCENTAGE) */}
+              {articleId && (
+                <div className="bg-white border border-[#E2E8F0] rounded-xl p-3.5 space-y-2 shadow-2xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider flex items-center gap-1.5">
+                      <BookOpen className="w-3 h-3 text-[#E30613]" />
+                      Knowledge Base Citation
+                    </span>
+                    <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                      SOP Verified
                     </span>
                   </div>
-                ))}
-              </div>
-            </div>
+                  <p className="text-xs font-bold text-[#0F172A] leading-snug">
+                    {articleTitle}
+                  </p>
+                  <div className="flex items-center justify-between pt-1.5 border-t border-[#F1F5F9] text-[10px] text-[#64748B] font-semibold">
+                    <span>Article ID</span>
+                    <span className="text-[#1E293B] font-mono font-bold">{articleId}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* 4. RESOLVED OR SERVICENOW TICKET CARD */}
+              {isSolved && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2 shadow-2xs">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                    <h4 className="text-xs font-bold text-emerald-900 uppercase tracking-wider">Issue Solved</h4>
+                  </div>
+                  <p className="text-xs text-emerald-800 leading-relaxed font-medium">
+                    The AI successfully resolved your issue. No ServiceNow escalation was required.
+                  </p>
+                </div>
+              )}
+
+              {lastToolResult?.ticket_id && (
+                <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 space-y-3 shadow-2xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Ticket className="w-4 h-4 text-[#E30613]" />
+                      <h4 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">ServiceNow Ticket</h4>
+                    </div>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase tracking-wider">
+                      Created
+                    </span>
+                  </div>
+
+                  <div className="space-y-2 pt-2 border-t border-[#F1F5F9]">
+                    {[
+                      { label: "Ticket Number", value: lastToolResult.ticket_id as string, isMono: true },
+                      { label: "Assigned Team", value: (lastToolResult.assigned_team as string) ?? "IT Support" },
+                      { label: "Priority", value: (lastToolResult.priority as string) ?? "Medium" },
+                      { label: "Target SLA", value: `${lastToolResult.sla_hours ?? 4} Hours` },
+                    ].map(({ label, value, isMono }) => (
+                      <div key={label} className="flex justify-between items-center text-xs">
+                        <span className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider">{label}</span>
+                        <span className={`font-bold ${isMono ? "text-[#E30613] font-mono text-xs" : "text-[#1E293B]"}`}>
+                          {value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Phase 6.3: Approval Pending Panel — shown when manager approval is required */}
+                  {(lastToolResult.requires_approval || lastToolResult.ticket_status === "WAITING_MANAGER") && lastToolResult.ticket_status !== "ACCESS_GRANTED" && status !== "ACCESS_GRANTED" && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 space-y-3 mt-2">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                        <span className="text-xs font-bold text-amber-900 uppercase tracking-wider">Manager Approval Required</span>
+                        <span className="ml-auto w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                      </div>
+                      <p className="text-[11px] text-amber-800 leading-relaxed font-semibold">
+                        Your request has been submitted for manager approval.
+                        Once approved, IT administration will grant temporary access to proceed.
+                      </p>
+                      {/* Workflow mini-progress */}
+                      <div className="space-y-1.5 pt-1 border-t border-amber-200">
+                        {[
+                          { label: "Request Submitted", done: true },
+                          { label: "Awaiting Manager", done: false, active: true },
+                          { label: "Admin Access Grant", done: false },
+                          { label: "Installation", done: false },
+                        ].map((step, i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <div className={`w-3.5 h-3.5 rounded-full flex-shrink-0 flex items-center justify-center ${
+                              step.done ? "bg-emerald-500" : step.active ? "bg-amber-400 animate-pulse" : "bg-amber-100 border border-amber-300"
+                            }`}>
+                              {step.done && (
+                                <svg className="w-2 h-2 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <span className={`text-[10px] font-bold ${
+                              step.done ? "text-emerald-700 line-through" : step.active ? "text-amber-800" : "text-amber-400"
+                            }`}>{step.label}</span>
+                            {step.active && (
+                              <span className="text-[9px] bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ml-auto">Pending</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Phase 6.3: Temporary Admin Credentials Card — shown when ACCESS_GRANTED */}
+                  {(status === "ACCESS_GRANTED" || lastToolResult?.ticket_status === "ACCESS_GRANTED" || lastToolResult?.laps_active || lastToolResult?.temp_admin_credentials) && (
+                    <div className="mt-3">
+                      <EnterpriseAdminAccessCard
+                        username={lastToolResult?.temp_admin_credentials?.username || ".\\Administrator"}
+                        password={lastToolResult?.temp_admin_credentials?.password || "Temp@4821#"}
+                        expiresAt={lastToolResult?.temp_admin_credentials?.expires_at}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -453,7 +702,7 @@ export default function SupportChatView({
   return (
     <div className="h-full flex flex-col bg-[#F8FAFC] overflow-hidden font-sans">
 
-      {/* Header */}
+      {/* Top Header */}
       <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 border-b border-[#E2E8F0] bg-white">
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-[#FEF2F2] border border-[#FEE2E2] flex items-center justify-center">
@@ -468,12 +717,16 @@ export default function SupportChatView({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Chevron Panel Toggle Button */}
           <button
-            onClick={() => setIsInvestigationOpen(true)}
-            className="lg:hidden inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#F8FAFC] border border-[#E2E8F0] hover:bg-[#F1F5F9] text-xs font-bold text-[#475569] rounded-xl transition-all cursor-pointer"
+            onClick={() => setIsInvestigationOpen(!isInvestigationOpen)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#F8FAFC] border border-[#E2E8F0] hover:bg-[#F1F5F9] hover:border-[#CBD5E1] text-xs font-bold text-[#334155] rounded-xl transition-all cursor-pointer shadow-2xs"
+            title={isInvestigationOpen ? "Collapse Investigation Panel" : "Expand Investigation Panel"}
+            aria-label={isInvestigationOpen ? "Collapse Investigation Panel" : "Expand Investigation Panel"}
           >
             <Brain className="w-3.5 h-3.5 text-[#E30613]" />
-            Status
+            <span className="hidden sm:inline">Investigation</span>
+            <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 ${isInvestigationOpen ? "rotate-180" : ""}`} />
           </button>
 
           {sessionId && (
@@ -482,17 +735,17 @@ export default function SupportChatView({
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#F8FAFC] border border-[#E2E8F0] hover:bg-[#F1F5F9] text-xs font-bold text-[#475569] rounded-xl transition-all cursor-pointer"
             >
               <RefreshCw className="w-3 h-3" />
-              New Session
+              <span className="hidden sm:inline">New Session</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Two-column Body */}
-      <div className="flex-1 min-h-0 flex overflow-hidden">
+      {/* Three-Column Body (Left Chat flex-1, Right Investigation Panel w-[340px] inline) */}
+      <div className="flex-1 min-h-0 flex overflow-hidden relative">
 
-        {/* LEFT — CHAT AREA */}
-        <div className="flex-1 min-w-0 flex flex-col border-r border-[#E2E8F0] bg-white">
+        {/* LEFT COLUMN — CHAT AREA (flex-1 min-w-0, resizes automatically) */}
+        <div className="flex-1 min-w-0 flex flex-col bg-white">
           <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
 
             {/* Welcome message */}
@@ -576,15 +829,9 @@ export default function SupportChatView({
                           const totalSteps = ARTICLE_TOTAL_STEPS[msg.tool_result?.["_tb_engine_state"]?.["troubleshooting_session"]?.["article_id"] ?? "KB0001"] ?? 5;
                           return (
                             <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-sm space-y-4 max-w-md w-full text-left">
-                              <div className="flex items-center justify-between text-[10px] font-bold text-[#64748B]">
+                              <div className="flex items-center justify-between text-[10px] font-bold text-[#64748B] border-b border-[#F1F5F9] pb-2">
                                 <span className="uppercase text-[#E30613] tracking-wider">Troubleshooting Step {details.stepNumber}</span>
                                 <span className="uppercase tracking-wider">Step {details.stepNumber} of {totalSteps}</span>
-                              </div>
-                              <div className="w-full bg-[#F1F5F9] rounded-full h-1.5">
-                                <div
-                                  className="bg-[#E30613] h-1.5 rounded-full transition-all duration-300"
-                                  style={{ width: `${(details.stepNumber / totalSteps) * 100}%` }}
-                                />
                               </div>
                               <div>
                                 <h3 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">{details.title}</h3>
@@ -598,21 +845,19 @@ export default function SupportChatView({
                                 />
                               )}
                               <div className="pt-2 border-t border-[#E2E8F0] flex items-center justify-between gap-3">
-                                <span className="text-xs font-bold text-[#1E293B]">
-                                  {details.stepNumber === 1 ? "Have you completed this step?" : "Did that work?"}
-                                </span>
+                                <span className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider">Did this resolve your issue?</span>
                                 <div className="flex gap-2">
                                   <button
-                                    onClick={() => sendMessage("yes")}
-                                    className="px-3.5 py-1.5 bg-[#16A34A] hover:bg-green-700 text-white text-xs font-bold rounded-lg cursor-pointer transition-colors shadow-xs"
+                                    onClick={() => sendMessage("Yes, that solved my issue.")}
+                                    className="px-3 py-1 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-bold hover:bg-green-100 transition-colors cursor-pointer"
                                   >
-                                    ✔ Completed
+                                    Yes
                                   </button>
                                   <button
-                                    onClick={() => sendMessage("no")}
-                                    className="px-3.5 py-1.5 bg-[#F8FAFC] hover:bg-[#F1F5F9] text-[#475569] text-xs font-bold rounded-lg cursor-pointer transition-colors border border-[#E2E8F0]"
+                                    onClick={() => sendMessage("No, that did not work.")}
+                                    className="px-3 py-1 bg-red-50 text-[#E30613] border border-red-200 rounded-lg text-xs font-bold hover:bg-red-100 transition-colors cursor-pointer"
                                   >
-                                    ❌ Still Not Working
+                                    No
                                   </button>
                                 </div>
                               </div>
@@ -620,229 +865,96 @@ export default function SupportChatView({
                           );
                         })()
                       ) : msg.type === "verification" ? (
-                        <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-sm space-y-4 max-w-md w-full text-left">
+                        <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-sm space-y-3 max-w-md w-full text-left">
                           <div className="flex items-center gap-2">
-                            <Brain className="w-5 h-5 text-[#E30613] flex-shrink-0" />
-                            <span className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">Solution Verification</span>
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                            <h4 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">Confirm Resolution</h4>
                           </div>
-                          <p className="text-xs text-[#334155] leading-relaxed font-semibold">
-                            {msg.text}
-                          </p>
-                          <div className="pt-2 border-t border-[#E2E8F0] flex gap-3">
+                          <p className="text-xs text-[#334155] font-medium leading-relaxed">{msg.text}</p>
+                          <div className="pt-2 border-t border-[#E2E8F0] flex gap-2">
                             <button
-                              onClick={() => sendMessage("yes")}
-                              className="flex-1 py-2 bg-[#16A34A] hover:bg-green-700 text-white text-xs font-bold rounded-lg cursor-pointer transition-colors shadow-xs"
+                              onClick={() => sendMessage("Yes, my issue is resolved.")}
+                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs"
                             >
-                              ✔ Yes, Solved
+                              Yes, Resolved
                             </button>
                             <button
-                              onClick={() => sendMessage("no")}
-                              className="flex-1 py-2 bg-[#E30613] hover:bg-red-700 text-white text-xs font-bold rounded-lg cursor-pointer transition-colors shadow-xs"
+                              onClick={() => sendMessage("No, I still need help.")}
+                              className="px-3.5 py-1.5 bg-[#F8FAFC] border border-[#E2E8F0] text-[#475569] hover:bg-[#F1F5F9] rounded-lg text-xs font-bold transition-colors cursor-pointer"
                             >
-                              ❌ No, Still Broken
+                              No, Still Broken
                             </button>
                           </div>
                         </div>
                       ) : msg.type === "ticket_confirmation" ? (
-                        <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-sm space-y-4 max-w-md w-full text-left">
+                        <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-sm space-y-3 max-w-md w-full text-left">
                           <div className="flex items-center gap-2">
-                            <Ticket className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                            <span className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">ServiceNow Ticket Approval</span>
+                            <AlertCircle className="w-4 h-4 text-amber-500" />
+                            <h4 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">ServiceNow Ticket Creation</h4>
                           </div>
-                          <p className="text-xs text-[#334155] leading-relaxed font-semibold">
-                            I can create a ServiceNow ticket. Would you like me to proceed?
-                          </p>
-                          <div className="pt-2 border-t border-[#E2E8F0] flex gap-3">
+                          <p className="text-xs text-[#334155] font-medium leading-relaxed">{msg.text}</p>
+                          <div className="pt-2 border-t border-[#E2E8F0] flex gap-2">
                             <button
-                              onClick={() => sendMessage("yes")}
-                              className="flex-1 py-2 bg-[#E30613] hover:bg-red-700 text-white text-xs font-bold rounded-lg cursor-pointer transition-colors shadow-xs"
+                              onClick={() => sendMessage("Yes, please create a ticket.")}
+                              className="px-3.5 py-1.5 bg-[#E30613] hover:bg-red-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs"
                             >
                               Create Ticket
                             </button>
                             <button
-                              onClick={() => sendMessage("no")}
-                              className="flex-1 py-2 bg-[#F8FAFC] hover:bg-[#F1F5F9] text-[#475569] text-xs font-bold rounded-lg cursor-pointer transition-colors border border-[#E2E8F0]"
+                              onClick={() => sendMessage("No, don't create a ticket yet.")}
+                              className="px-3.5 py-1.5 bg-[#F8FAFC] border border-[#E2E8F0] text-[#475569] hover:bg-[#F1F5F9] rounded-lg text-xs font-bold transition-colors cursor-pointer"
                             >
                               Cancel
                             </button>
                           </div>
                         </div>
-                      ) : msg.type === "ticket_created" ? (
-                        (() => {
-                          const tr = msg.tool_result ?? {};
-                          const ticket = tr.ticket ?? tr;
-                          const requiresApproval = tr.requires_approval || ticket.requires_approval;
-                          const requestType = tr.request_type || ticket.request_type || "INCIDENT";
-                          const statusLabel = tr.ticket_status_label || ticket.status_label || (requiresApproval ? "Pending Manager Approval" : "Open — Assigned to IT Team");
-                          const isServiceRequest = requestType === "SERVICE_REQUEST" || requiresApproval;
-                          const servicenowNumber = tr.servicenow_number || ticket.servicenow_number;
-                          const isSNIncident = Boolean(servicenowNumber || (ticket.servicenow_id && ticket.servicenow_id !== "N/A"));
-                          const incidentNumber = servicenowNumber || tr.ticket_id || ticket.ticket_id || "Pending";
-                          const assignmentGroup = ticket.assignment_group || ticket.assigned_team || tr.assigned_team || "IT Operations";
-                          const createdAtTime = ticket.created_at ? new Date(ticket.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Just now";
-
-                          return (
-                            <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-sm space-y-4 max-w-md w-full text-left">
-                              <div className="flex items-center gap-2 border-b border-[#E2E8F0] pb-3">
-                                <Ticket className="w-5 h-5 text-[#E30613] flex-shrink-0" />
-                                <span className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">
-                                  {isSNIncident ? "ServiceNow Incident Created" : (isServiceRequest ? "Service Request Created" : "Support Ticket Created")}
-                                </span>
-                                <span className={`ml-auto inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${isServiceRequest
-                                    ? "bg-amber-50 text-amber-800 border-amber-200"
-                                    : "bg-green-50 text-green-700 border-green-200"
-                                  }`}>
-                                  {isServiceRequest ? "⏳ Pending Approval" : "✅ Active"}
-                                </span>
-                              </div>
-                              <div className="grid grid-cols-2 gap-y-3 gap-x-4">
-                                {[
-                                  { label: isSNIncident ? "Incident Number" : "Ticket Number", value: incidentNumber, highlight: true },
-                                  { label: "Assignment Group", value: assignmentGroup },
-                                  { label: "Priority", value: ticket.priority || tr.priority || "Medium" },
-                                  { label: "State", value: statusLabel },
-                                  { label: "Created Time", value: createdAtTime },
-                                  { label: "ServiceNow Status", value: isSNIncident ? "Synced to ServiceNow" : "Local Ticket" },
-                                ].map(({ label, value, highlight }) => (
-                                  <div key={label} className="space-y-0.5">
-                                    <span className="text-[10px] text-[#64748B] font-bold uppercase tracking-wider block">{label}</span>
-                                    <span className={`text-xs font-bold ${highlight ? "text-[#E30613] font-mono" : "text-[#1E293B]"}`}>
-                                      {value}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                              {isServiceRequest && (
-                                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-[11px] text-amber-800 font-bold">
-                                  ⚠️ This request is pending your manager's approval. You'll be notified when it's approved.
-                                </div>
-                              )}
-                              <p className="text-[10px] text-[#64748B] uppercase tracking-wider pt-1 font-bold">
-                                Track status in <span className="text-[#1E293B]">My Tickets</span>
-                              </p>
-                            </div>
-                          );
-                        })()
-                      ) : msg.type === "resolved" ? (
-                        <div className="bg-green-50 border border-green-255 rounded-2xl p-5 shadow-sm space-y-3 max-w-md w-full text-left">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-6 h-6 rounded-full bg-green-100 border border-green-200 flex items-center justify-center flex-shrink-0">
-                              <CheckCircle className="w-3.5 h-3.5 text-green-600" />
-                            </div>
-                            <h3 className="text-xs font-bold text-green-800 uppercase tracking-wider">Resolved</h3>
-                          </div>
-                          <p className="text-xs text-green-700 leading-relaxed font-semibold">
-                            Problem solved successfully. Thank you for utilizing Bridgestone IT Automated Support.
-                          </p>
-                        </div>
                       ) : (
-                        <div
-                          className="bg-[#F8FAFC] border border-[#E2E8F0] text-[#1E293B] rounded-2xl rounded-bl-sm px-4 py-2.5 text-xs leading-relaxed font-semibold"
-                        >
-                          <span className="whitespace-pre-wrap">{msg.text}</span>
-                        </div>
+                        <MessageBubble
+                          text={msg.text}
+                          isUser={isUser}
+                          username={username}
+                          setZoomImage={setZoomImage}
+                        />
                       )}
                     </div>
-
-                    {isUser && (
-                      <div className="w-6 h-6 rounded-full bg-[#E2E8F0] flex items-center justify-center flex-shrink-0 mb-0.5">
-                        <span className="text-[9px] font-bold text-[#475569] uppercase">
-                          {username.charAt(0)}
-                        </span>
-                      </div>
-                    )}
                   </div>
                 );
               });
-            }, [messages, username, msgTimes, setZoomImage])}
+            }, [messages, username, msgTimes, setZoomImage, sendMessage])}
 
-            {/* Loading / Typing */}
             {isLoading && (
-              <div className="flex items-end gap-2.5">
+              <div className="flex items-center gap-2 text-xs text-[#64748B] font-semibold py-2">
                 <div className="w-6 h-6 rounded-full bg-[#FEF2F2] border border-[#FEE2E2] flex items-center justify-center flex-shrink-0">
                   <Brain className="w-3 h-3 text-[#E30613]" />
                 </div>
-                <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl rounded-bl-sm px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="w-3.5 h-3.5 text-[#E30613] animate-spin" />
-                    <span className="text-xs text-[#64748B] font-bold uppercase tracking-wider">Investigating your issue...</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {error && (
-              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-[#DC2626] font-bold">
-                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                {error}
-              </div>
-            )}
-
-            {/* Approval dialog */}
-            {approvalRequired && approvalStatus === "PENDING" && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
-                <div className="flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                  <span className="text-xs font-bold text-gray-805 uppercase tracking-wider">Your Approval Required</span>
-                  <span className="ml-auto inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 border border-amber-300">
-                    Pending
-                  </span>
-                </div>
-                <p className="text-xs text-[#475569] font-medium leading-relaxed">
-                  Proceed with:{" "}
-                  <code className="font-mono font-bold text-[#E30613] bg-white px-1.5 py-0.5 rounded border border-[#E2E8F0]">
-                    {recommendedAction}
-                  </code>
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => sendMessage("yes")}
-                    className="flex-1 py-2 bg-[#16A34A] hover:bg-green-700 text-white text-xs font-bold rounded-lg cursor-pointer transition-colors shadow-xs"
-                  >
-                    ✓ Approve
-                  </button>
-                  <button
-                    onClick={() => sendMessage("no")}
-                    className="flex-1 py-2 bg-[#F8FAFC] hover:bg-[#F1F5F9] text-[#475569] border border-[#E2E8F0] text-xs font-bold rounded-lg cursor-pointer transition-colors"
-                  >
-                    ✕ Decline
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Context Actions list */}
-            {actions.length > 0 && (
-              <div className="flex gap-2 justify-end flex-wrap pt-1">
-                {actions.map(act => (
-                  <button
-                    key={act}
-                    onClick={() => sendMessage(act)}
-                    className={`px-3.5 py-2 text-xs font-bold rounded-lg cursor-pointer transition-all border ${act === "SOLVED"
-                      ? "bg-green-50 border-green-200 text-[#16A34A] hover:bg-green-100"
-                      : act === "NOT_SOLVED"
-                        ? "bg-[#F8FAFC] border-[#E2E8F0] text-[#475569] hover:bg-[#F1F5F9]"
-                        : "bg-white border-[#E2E8F0] text-[#475569] hover:text-[#E30613] hover:border-[#FCA5A5]"
-                      }`}
-                  >
-                    {act === "SOLVED" ? "✓ Issue Resolved" : act === "NOT_SOLVED" ? "Still Not Working" : act}
-                  </button>
-                ))}
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#E30613]" />
+                <span>AI Agent is analyzing request...</span>
               </div>
             )}
 
             <div ref={messagesEndRef} />
           </div>
 
-          {/* User Input controls */}
+          {/* Input Box */}
           {showInput && (
-            <div className="flex-shrink-0 px-4 py-3 border-t border-[#E2E8F0] bg-white">
-              <div className="flex items-center gap-2 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-3 py-2 focus-within:border-[#E30613]/30 focus-within:bg-white transition-all">
+            <div className="p-4 border-t border-[#E2E8F0] bg-white">
+              <div className="flex items-end gap-2 bg-[#F8FAFC] border border-[#E2E8F0] focus-within:border-[#E30613] focus-within:ring-1 focus-within:ring-[#E30613]/20 rounded-2xl p-2 transition-all shadow-2xs">
+                
+                {/* TODO: Enable screenshot and file upload support.
+                    Planned support:
+                    - PNG
+                    - JPG
+                    - PDF
+                    - DOCX
+                    - Log files
+                    - Drag & Drop
+                    - Clipboard image paste */}
                 <button
-                  className="p-1 rounded text-gray-300 hover:text-gray-400 transition-colors cursor-not-allowed"
-                  title="Attach file (coming soon)"
-                  disabled
                   type="button"
+                  disabled
+                  title="📎 Attach Screenshot or File (Coming Soon)"
+                  aria-label="Attach Screenshot or File (Coming Soon)"
+                  className="p-1.5 rounded-lg text-[#94A3B8] hover:text-[#64748B] opacity-60 cursor-not-allowed transition-opacity flex-shrink-0 mb-0.5"
                 >
                   <Paperclip className="w-4 h-4" />
                 </button>
@@ -882,7 +994,7 @@ export default function SupportChatView({
                 <button
                   onClick={() => { if (message.trim() && !inputIsDisabled) sendMessage(message); }}
                   disabled={inputIsDisabled || !message.trim()}
-                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-[#E30613] hover:bg-red-700 disabled:bg-[#E2E8F0] text-white transition-colors cursor-pointer flex-shrink-0 shadow-xs"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-[#E30613] hover:bg-red-700 disabled:bg-[#E2E8F0] text-white transition-colors cursor-pointer flex-shrink-0 shadow-2xs"
                   aria-label="Send Message"
                   type="button"
                 >
@@ -900,30 +1012,37 @@ export default function SupportChatView({
           )}
         </div>
 
-        {/* Mobile Investigation status drawer overlay */}
+        {/* MOBILE DRAWER OVERLAY BACKDROP & DRAWER (< md) */}
         {isInvestigationOpen && (
           <div
             onClick={() => setIsInvestigationOpen(false)}
-            className="lg:hidden fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40 transition-opacity duration-200"
+            className="md:hidden fixed inset-0 bg-slate-900/40 backdrop-blur-2xs z-40 transition-opacity duration-200"
           />
         )}
         <aside
-          className={`fixed inset-y-0 right-0 z-50 w-72 bg-white border-l border-[#E2E8F0] flex flex-col shadow-xl transform transition-transform duration-350 ease-in-out lg:hidden ${isInvestigationOpen ? "translate-x-0" : "translate-x-full"
-            }`}
+          className={`fixed inset-y-0 right-0 z-50 w-80 max-w-[85vw] bg-white border-l border-[#E2E8F0] flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out md:hidden ${
+            isInvestigationOpen ? "translate-x-0" : "translate-x-full"
+          }`}
         >
           {renderInvestigationStatus()}
         </aside>
 
-        {/* RIGHT — INVESTIGATION STATUS PANEL (DESKTOP) */}
-        <div className="w-64 flex-shrink-0 flex flex-col bg-[#F8FAFC] border-l border-[#E2E8F0] overflow-hidden lg:flex hidden">
-          {renderInvestigationStatus()}
-        </div>
+        {/* RIGHT COLUMN — INVESTIGATION STATUS PANEL (DESKTOP & TABLET INLINE THREE-COLUMN) */}
+        <aside
+          className={`hidden md:flex flex-col bg-[#F8FAFC] border-l border-[#E2E8F0] flex-shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${
+            isInvestigationOpen ? "w-[340px] opacity-100" : "w-0 opacity-0 border-l-0"
+          }`}
+        >
+          <div className="w-[340px] h-full flex flex-col flex-shrink-0">
+            {renderInvestigationStatus()}
+          </div>
+        </aside>
 
       </div>
 
       {zoomImage && (
         <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4 cursor-zoom-out"
+          className="fixed inset-0 bg-black/50 backdrop-blur-2xs z-50 flex items-center justify-center p-4 cursor-zoom-out"
           onClick={() => setZoomImage(null)}
         >
           <div className="relative max-w-4xl max-h-[85vh] bg-white p-2 rounded-xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>

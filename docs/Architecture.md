@@ -1,336 +1,248 @@
-# Architecture – Bridgestone IT Agent
+# Architecture
 
-> **Version:** 1.0.0 | **Last updated:** 2026-07-11
+> **Project:** Bridgestone IT AI Assistant · **Last updated:** 2026-07-26
 
 ---
 
-## 1. Overview
+## Overview
 
-Bridgestone IT Agent is a containerised, enterprise-grade AI IT-support platform.  
-It consists of four runtime tiers communicating over a private Docker bridge network.
+The Bridgestone IT AI Assistant is a proof-of-concept agentic AI IT support system. It is structured as a three-tier application: a Next.js frontend, a FastAPI backend containing the LangGraph AI pipeline, and a SQLite (dev) or PostgreSQL (production) data layer. External integrations connect to ServiceNow for incident management.
 
 ```mermaid
-graph TD
-    Employee([Employee])
-    Manager([Manager])
-    Admin([Admin])
-
-    subgraph Edge ["Edge Layer"]
-        Nginx[NGINX Reverse Proxy]
+graph TB
+    subgraph FE["Frontend — Next.js 16 / React 19 · :3000"]
+        ChatUI[SupportChatView]
+        ManagerPortal[ManagerPortal]
+        AdminQueue[ITSMQueueView]
+        Analytics[AnalyticsView]
+        KB[KnowledgeBase]
     end
 
-    subgraph Frontend ["Presentation Tier – Next.js 15"]
-        FE[Next.js Application :3000]
+    subgraph BE["Backend — FastAPI / Python 3.12 · :8000"]
+        API[FastAPI app/main.py]
+        PG[PromptGuard]
+        RL[RateLimiter]
+        SEC[SecurityMiddleware]
+        CS[ConversationService]
+        LG[LangGraph StateGraph]
+        CLS[ClassificationService]
+        TO[TicketOrchestrator]
+        IES[IncidentEnrichmentService]
+        FMS[FieldMappingService]
+        MVC[ServiceNowMetadataValidator]
+        SLA[SLA Escalation Engine]
+        SCHED[APScheduler]
     end
 
-    subgraph Backend ["Application Tier – FastAPI / Python 3.12"]
-        API[FastAPI :8000]
+    subgraph EXT["External Integrations"]
+        SN[(ServiceNow REST)]
+        SNMC[ServiceNow Metadata Cache]
+        MG[Microsoft Graph — mock]
+        AD[Active Directory — mock]
+        VPN[VPN Adapter — mock]
     end
 
-    subgraph AI ["Intelligence Layer"]
-        ConvSvc[ConversationService]
-        IntentRouter[IntentRouter]
-        KnowledgeEngine[KnowledgeEngine]
-        GeminiSvc[GeminiService]
-        TroubleshootingSvc[TroubleshootingService]
+    subgraph DATA["Data Layer"]
+        DB[(SQLite dev / PostgreSQL prod)]
     end
 
-    subgraph Storage ["Storage Tier"]
-        PG[(PostgreSQL)]
-        SQLite[(SQLite – Dev Fallback)]
-    end
-
-    subgraph Integrations ["External Integrations"]
-        SN[ServiceNow REST]
-        MSGraph[Microsoft Graph API]
-        ADAP[Active Directory]
-    end
-
-    Employee --> Nginx
-    Manager --> Nginx
-    Admin --> Nginx
-    Nginx --> FE
     FE --> API
-    API --> ConvSvc
-    ConvSvc --> IntentRouter
-    ConvSvc --> KnowledgeEngine
-    ConvSvc --> GeminiSvc
-    ConvSvc --> TroubleshootingSvc
-    API --> PG
-    API --> SQLite
-    API --> SN
-    API --> MSGraph
-    API --> ADAP
+    API --> PG --> RL --> SEC --> CS
+    CS --> LG & CLS & TO
+    TO --> IES --> FMS --> MVC --> SN
+    SN <--> SNMC
+    TO --> DB
+    SLA --> DB
+    SCHED --> SLA
 ```
 
 ---
 
-## 2. Tier Details
+## Request Lifecycle
 
-### 2.1 Edge Layer – NGINX
+Every HTTP request passes through the following middleware chain before reaching a handler:
 
-| Attribute | Value |
-|-----------|-------|
-| Image | `nginx:stable-alpine` |
-| Role | TLS termination, path-based routing |
-| Routes | `/` → Frontend `:3000` · `/api/` → Backend `:8000` |
-| Config | `infrastructure/nginx/` |
-
-NGINX is the single public entrypoint. All backend traffic flows through `/api/` path rewrites; the frontend serves everything else.
-
----
-
-### 2.2 Presentation Tier – Next.js Frontend
-
-| Attribute | Value |
-|-----------|-------|
-| Framework | Next.js 15, React, TypeScript |
-| Port | 3000 |
-| Config | `NEXT_PUBLIC_API_URL` environment variable |
-| Auth | JWT bearer token in `localStorage` |
-
-**Key UI Components**
-
-| Component | Purpose |
-|-----------|---------|
-| `AppShell.tsx` | Navigation shell, role-based sidebar |
-| `SupportChatView.tsx` | AI chat interface |
-| `ITSMQueueView.tsx` | Admin/Manager ticket queue |
-| `ManagerPortal.tsx` | Approval workflow portal |
-| `KnowledgeBase.tsx` | KB article viewer and editor |
-| `AnalyticsView.tsx` | Dashboard metrics and charts |
-| `DeviceDashboard.tsx` | Enterprise device management |
-| `ExecutionCenter.tsx` | IT action execution history |
-| `MyTicketsView.tsx` | Employee ticket self-service |
-
----
-
-### 2.3 Application Tier – FastAPI Backend
-
-| Attribute | Value |
-|-----------|-------|
-| Framework | FastAPI, Python 3.12 |
-| Port | 8000 |
-| Entry point | `app/main.py` |
-| ASGI server | Uvicorn |
-
-**Request lifecycle:**
+1. **CORSMiddleware** — Allowlist-based origin check.
+2. **RateLimitMiddleware** — Sliding-window per-IP limiter; enforced on `/chat`, `/auth/login`, `/upload`.
+3. **SecurityHeadersMiddleware** — Injects `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, configurable HSTS, and CSP.
+4. **RequestSizeLimitMiddleware** — Returns HTTP 413 if `Content-Length` exceeds `MAX_REQUEST_SIZE_KB`.
+5. **monitor_requests** — Assigns `request_id` and `correlation_id`, extracts and validates the JWT, records structured JSON log on response.
+6. **RoleChecker dependency** — FastAPI dependency on each protected endpoint; raises HTTP 403 if the user's role is insufficient.
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant MW as Middleware
+    participant MW as Middleware Stack
     participant EP as Endpoint
     participant SVC as Service Layer
     participant DB as Database
 
     C->>MW: HTTP Request + Bearer token
-    MW->>MW: Extract session_id, correlation_id, JWT
-    MW->>MW: Increment Prometheus counters
+    MW->>MW: CORS · Rate Limit · Size Limit · Security Headers
+    MW->>MW: Extract JWT → user, role, correlation_id
     MW->>EP: Forwarded request
     EP->>SVC: Business logic call
     SVC->>DB: SQLAlchemy ORM query
-    DB-->>SVC: Result
+    DB-->>SVC: Result set
     SVC-->>EP: Response payload
     EP-->>MW: HTTP Response
-    MW->>MW: Log duration + status code
+    MW->>MW: Structured JSON log (duration, status)
     MW-->>C: Final response
 ```
 
-**Middleware chain (applied in order):**
+---
 
-1. `CORSMiddleware` – allowlist from `CORS_ORIGINS` env var
-2. `monitor_requests` – request ID, correlation ID, JWT extraction, Prometheus metrics, structured JSON logging
-3. `global_exception_handler` – converts all unhandled exceptions to `{"detail":..., "error_code":...}` JSON
+## Frontend Portals
+
+| Component | File | Audience |
+|---|---|---|
+| AI Support Chat | `SupportChatView.tsx` | Employee |
+| Manager Portal | `ManagerPortal.tsx` | Manager |
+| IT Admin Queue | `ITSMQueueView.tsx` | Admin |
+| Analytics Dashboard | `AnalyticsView.tsx` | Admin |
+| Knowledge Base | `KnowledgeBase.tsx` | Admin |
+| My Tickets | `MyTicketsView.tsx` | Employee |
+| Enterprise Admin Access Card | `EnterpriseAdminAccessCard.tsx` | Employee (shown post-approval) |
+
+Navigation items are filtered by role at render time; employees never see the Admin Queue or Manager Portal links.
 
 ---
 
-### 2.4 Intelligence Layer – AI Pipeline
+## Backend Services
 
-The AI pipeline is **stateless at the service level**. All conversation state lives in `ConversationState` objects serialised to the database.
-
-```mermaid
-flowchart TD
-    A[User Message] --> B[IntentRouter]
-    B -->|TICKET_COMMAND| C[TicketOrchestrator - creates ticket immediately]
-    B -->|RESTART| D[Restart Handler]
-    B -->|CANCEL| E[Cancel Handler]
-    B -->|STATUS| F[Status Handler]
-    B -->|RESOLVED_KEYWORD| G[Resolution Handler]
-    B -->|IT_ISSUE| H[ConversationService Phase Router]
-
-    H -->|UNDERSTANDING| I[KnowledgeEngine Search]
-    I --> J[TroubleshootingService]
-    J --> K[Step-by-step guidance loop]
-    K -->|Not resolved| L[TicketOrchestrator]
-    K -->|Resolved| M[Resolution ACK]
-
-    H -->|WAITING_ACTION_CONFIRMATION| N[ApprovalService]
-    N -->|Approved by Manager or Admin| O[ActionEngine]
-    N -->|Rejected| P[Cancel flow]
-    N -->|EMPLOYEE attempt| Q[RBAC ACCESS_DENIED]
-```
-
-**IntentRouter priority order (deterministic, never reordered):**
-
-1. `TICKET_COMMAND` – "create ticket", "raise incident", "open a ticket", "escalate"
-2. `RESTART` – "restart", "start over", "new issue"
-3. `CANCEL` – "cancel", "abort", "stop", "never mind"
-4. `STATUS` – "ticket status", "check ticket", "my ticket"
-5. `RESOLVED_KEYWORD` – "working", "fixed", "solved", "issue resolved"
-6. `IT_ISSUE` – keyword/regex classification into category
-7. `GENERAL` – fallback, routed to Gemini free conversation
-
-**IT Issue Categories:**
-
-| Category | Trigger Keywords |
-|----------|-----------------|
-| `VPN` | vpn, global protect, remote access |
-| `OUTLOOK` | outlook, email, mailbox, exchange |
-| `PRINTER` | printer, printing, print queue, spooler |
-| `SOFTWARE_INSTALLATION` | install, chrome, zoom, teams, software |
-| `NETWORK` | wifi, network, internet, connectivity |
-| `PASSWORD_RESET` | password, reset password, locked out |
-| `SAP` | sap, erp, sap gui |
-| `GENERAL` | anything else |
+| Service | File | Responsibility |
+|---|---|---|
+| `ConversationService` | `services/conversation_service.py` | Orchestrates the chat turn; routes to LangGraph or direct handler |
+| `ClassificationService` | `services/classification_service.py` | Gemini/Claude-powered ITSM classification with Pydantic validation |
+| `TicketOrchestrator` | `services/ticket_orchestrator.py` | Coordinates ticket creation across local DB and ServiceNow |
+| `IncidentEnrichmentService` | `services/incident_enrichment_service.py` | Resolves category metadata and SLA values |
+| `FieldMappingService` | `services/field_mapping_service.py` | Builds the ServiceNow incident payload |
+| `ServiceNowMetadataValidator` | `services/servicenow_metadata_validator.py` | Validates every field against cached SN metadata |
+| `ServiceNowMetadataCache` | `services/servicenow_metadata_cache.py` | TTL-based cache of categories, groups, CMDB CIs |
+| `ServiceNowClient` | `services/servicenow_client.py` | OAuth2 + Basic Auth HTTP client for SN REST API |
+| `SlaEscalationService` | `services/sla_escalation_service.py` | Evaluates open tickets every 60 s; updates SLA state |
+| `PromptGuard` | `services/prompt_guard.py` | Three-tier prompt injection classifier |
+| `AuditService` | `services/audit_service.py` | Reads audit logs, action history, approvals, agent traces |
+| `AIProvider` | `services/ai_provider.py` | Gemini and Claude provider abstraction |
 
 ---
 
-### 2.5 Storage Tier
+## Background Jobs
 
-| Database | Use case |
-|----------|----------|
-| PostgreSQL (primary) | All persistent data: tickets, users, sessions, audit logs, SLA records |
-| SQLite (dev fallback) | Automatic fallback when PostgreSQL is unreachable |
+The APScheduler starts on application startup and runs in-process:
 
-PostgreSQL connection pooling (`connection.py`):
-
-| Setting | Value |
-|---------|-------|
-| `pool_size` | 20 |
-| `max_overflow` | 10 |
-| `pool_timeout` | 30 s |
-| `pool_recycle` | 1800 s |
-| `pool_pre_ping` | `True` |
-
-SQLite settings: WAL journal mode, NORMAL synchronicity, `NullPool`.
+| Job | Interval | Purpose |
+|---|---|---|
+| `sla_monitor_job` | Every 60 s | Evaluates every open ticket for SLA state transitions and breach escalation |
 
 ---
 
-## 3. Background Jobs (APScheduler)
-
-| Job | Frequency | Purpose |
-|-----|-----------|---------|
-| `sla_monitor_job` | Every 60 s | Evaluates all open tickets for SLA state transitions and breach escalations |
-| `auto_close_job` | Configurable | Auto-closes tickets resolved beyond idle threshold |
-| `cleanup_job` | Configurable | Removes stale sessions and aged data |
-| `notification_job` | Configurable | Dispatches pending notification records |
-
----
-
-## 4. ITSM Ticket Lifecycle
+## Ticket Lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> NEW : INCIDENT created
-    [*] --> WAITING_MANAGER : SERVICE_REQUEST or PRIVILEGED_ACTION
+    [*] --> NEW : Incident created
+    [*] --> WAITING_MANAGER : Privileged software request
 
-    WAITING_MANAGER --> APPROVED : Manager approves
-    WAITING_MANAGER --> REJECTED : Manager rejects
-    APPROVED --> ASSIGNED : Admin assigns engineer
     NEW --> ASSIGNED : Admin assigns engineer
+    WAITING_MANAGER --> READY_FOR_ADMIN : Manager approves
+    WAITING_MANAGER --> REJECTED : Manager rejects
+    READY_FOR_ADMIN --> ACCESS_GRANTED : Admin grants temp access
+    ACCESS_GRANTED --> COMPLETED : Admin marks complete
+
+    NEW --> IN_PROGRESS : Engineer begins work
     ASSIGNED --> IN_PROGRESS : Engineer begins work
-    IN_PROGRESS --> PENDING : Waiting on user info
+    IN_PROGRESS --> PENDING : Waiting on user response
     PENDING --> IN_PROGRESS : User responds
     IN_PROGRESS --> RESOLVED : Engineer marks resolved
-    RESOLVED --> CLOSED : Auto-close or explicit close
-    RESOLVED --> IN_PROGRESS : Reopened by user
-    CLOSED --> [*]
+    RESOLVED --> CLOSED : Explicit close
     REJECTED --> [*]
+    CLOSED --> [*]
+    COMPLETED --> [*]
 ```
 
-**ITSM Classification Rules (priority order):**
+---
 
-1. Category/description matches privileged keywords → `PRIVILEGED_ACTION`
-2. Category is in service-catalog set → `SERVICE_REQUEST`
-3. Anything else → `INCIDENT`
+## SLA Escalation Engine
+
+The SLA monitor runs every 60 seconds and transitions tickets through seven states:
+
+| State | Trigger | Notified Parties |
+|---|---|---|
+| `HEALTHY` | < 75% SLA elapsed | — |
+| `WARNING_75` | 75–89% elapsed | Assigned team, Manager |
+| `WARNING_90` | 90–99% elapsed | Assigned team, Manager, Admin |
+| `BREACHED` | 100%+ elapsed | All — `SlaEscalationHistory` record created |
+| `ESCALATED_LEVEL_1` | Immediately on breach | All |
+| `ESCALATED_LEVEL_2` | Breach + 30 min | All |
+| `ESCALATED_LEVEL_3` | Breach + 60 min | All |
 
 ---
 
-## 5. SLA Escalation Engine
+## External Integrations
 
-| SLA State | Trigger |
-|-----------|---------|
-| `HEALTHY` | < 75% SLA window consumed |
-| `WARNING_75` | 75–89% consumed |
-| `WARNING_90` | 90–99% consumed |
-| `BREACHED` | 100%+ consumed |
-| `ESCALATED_LEVEL_1` | Immediately on breach |
-| `ESCALATED_LEVEL_2` | Breach + 30 minutes |
-| `ESCALATED_LEVEL_3` | Breach + 60 minutes |
+| Integration | Adapter | Live Mode | Mock Mode |
+|---|---|---|---|
+| ServiceNow REST API | `ServiceNowAdapter` / `servicenow_client.py` | OAuth2 + Basic Auth to live instance | `SERVICENOW_USE_MOCK=true` |
+| Microsoft Graph API | `MicrosoftGraphAdapter` | Requires MS Graph credentials | Mock only in this POC |
+| Azure AD / Entra ID | `ActiveDirectoryAdapter` | Requires AD connection | Mock only in this POC |
+| VPN Gateway | `VPNAdapter` | Requires VPN endpoint | Mock only in this POC |
 
-Notification recipients per state:
-
-| State | Recipients |
-|-------|-----------|
-| `WARNING_75` | Manager |
-| `WARNING_90` | Manager, Admin |
-| `BREACHED` and above | Manager, Admin |
+All adapters expose an `is_mock` property. The system logs the mode at startup.
 
 ---
 
-## 6. External Integrations
-
-| Integration | Adapter class | Default mode |
-|-------------|---------------|-------------|
-| ServiceNow REST API | `ServiceNowAdapter` | Mock |
-| Microsoft Graph API | `MicrosoftGraphAdapter` | Mock |
-| Azure AD / Entra ID | `ActiveDirectoryAdapter` | Mock |
-| VPN Gateway | `VPNAdapter` | Mock |
-
-All adapters expose `is_mock` detection and fall back gracefully to mock data when real credentials are absent.
-
----
-
-## 7. Observability
-
-| Signal | Implementation |
-|--------|---------------|
-| Structured logs | JSON format with `request_id`, `correlation_id`, `session_id`, `user`, `role`, `endpoint` |
-| Prometheus metrics | `GET /metrics` – counters and histograms for HTTP, DB, LLM, security events |
-| Health check | `GET /health` – returns `{"status": "healthy"}` |
-| System status | `GET /system-status` – deep check of DB, Gemini, adapters, scheduler |
-
----
-
-## 8. Directory Structure
+## Directory Structure
 
 ```
 bridgestone-it-agent/
 ├── backend/
 │   ├── app/
-│   │   ├── adapters/          # ServiceNow, Graph, AD, VPN adapters
-│   │   ├── agents/            # Specialised LLM agent implementations
-│   │   ├── api/               # Router modules: auth, analytics, devices, executions
-│   │   ├── core/              # Security, JWT, RBAC, metrics, logging context
-│   │   ├── database/          # SQLAlchemy models, connection, session
-│   │   │   └── models/        # ticket, user, audit_log, sla, device, etc.
-│   │   ├── integrations/      # ServiceNow integration models
-│   │   ├── jobs/              # APScheduler job definitions
-│   │   ├── services/          # All business logic services
-│   │   └── tools/             # IT tool implementations (VPN, Outlook, printer, etc.)
-│   └── knowledge_base/        # JSON knowledge-base articles by category
+│   │   ├── adapters/              # External system adapters
+│   │   ├── api/                   # Auth and Analytics routers
+│   │   ├── core/                  # Security, rate limiter, tracing, JSON logger
+│   │   │   ├── json_logger.py
+│   │   │   ├── rate_limiter.py
+│   │   │   ├── security.py
+│   │   │   ├── security_middleware.py
+│   │   │   └── tracing.py
+│   │   ├── database/
+│   │   │   ├── models/            # SQLAlchemy ORM models
+│   │   │   ├── repositories/      # Repository pattern DAOs
+│   │   │   ├── connection.py      # Engine + startup schema migration
+│   │   │   └── session.py
+│   │   ├── graph/                 # LangGraph StateGraph
+│   │   │   ├── graph.py
+│   │   │   ├── state.py
+│   │   │   └── nodes/
+│   │   ├── jobs/                  # APScheduler job definitions
+│   │   ├── services/              # All business logic
+│   │   └── main.py                # FastAPI app entry point
+│   ├── tests/
+│   ├── knowledge_base/
+│   └── requirements.txt
 ├── frontend/
 │   └── src/
-│       ├── app/               # Next.js App Router pages
-│       ├── components/        # Feature-level UI components
-│       └── lib/               # API client, utilities, auth helpers
-├── infrastructure/
-│   ├── compose/               # docker-compose.dev.yml / docker-compose.prod.yml
-│   ├── docker/                # Per-service Dockerfiles
-│   ├── env/                   # dev.env / prod.env environment files
-│   ├── monitoring/            # Prometheus and Grafana configs
-│   └── nginx/                 # NGINX reverse proxy config
-├── docs/                      # All project documentation
-└── knowledge_base/            # KB JSON articles (VPN, Outlook, Printer, SAP, etc.)
+│       ├── app/                   # Next.js App Router pages
+│       └── components/
+│           ├── SupportChatView.tsx
+│           ├── ITSMQueueView.tsx
+│           ├── ManagerPortal.tsx
+│           ├── AnalyticsView.tsx
+│           ├── KnowledgeBase.tsx
+│           └── shared/EnterpriseAdminAccessCard.tsx
+├── infrastructure/                # Docker Compose configs
+├── docs/
+└── README.md
 ```
+
+---
+
+## Related Documents
+
+- [AI Workflow](./ai-workflow.md) — LangGraph pipeline, node descriptions, routing logic
+- [ServiceNow Integration](./servicenow.md) — Incident creation pipeline, metadata validation
+- [Database](./Database.md) — All ORM models and schema details
+- [Security](./Security.md) — RBAC, JWT, prompt injection guard, audit logging
+- [API Reference](./API.md) — All endpoints with request/response schemas
+- [Deployment](./Deployment.md) — Local and Docker deployment guide

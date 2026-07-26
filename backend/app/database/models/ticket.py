@@ -34,10 +34,13 @@ class Ticket(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # ITSM Workflow fields
-    request_type = Column(String(50), nullable=True)      # "INCIDENT" | "SERVICE_REQUEST"
+    request_type = Column(String(50), nullable=True)      # "INCIDENT" | "SERVICE_REQUEST" | "PRIVILEGED_ACTION"
     manager = Column(String(100), nullable=True)           # Manager username
     approval_status = Column(String(50), nullable=True)    # "PENDING" | "APPROVED" | "REJECTED" | "NOT_REQUIRED"
     assignment_group = Column(String(100), nullable=True)  # Maps to assignment group
+    approved_by = Column(String(100), nullable=True)       # Username of approver
+    approval_notes = Column(Text, nullable=True)           # Approval reason/notes
+    approved_at = Column(DateTime, nullable=True)          # Timestamp of approval
 
     # ── SLA Escalation Engine fields ──────────────────────────────────────────
     sla_state = Column(String(50), nullable=True, default="HEALTHY")  # SLA state enum string

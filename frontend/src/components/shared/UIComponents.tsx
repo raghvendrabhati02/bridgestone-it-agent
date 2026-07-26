@@ -44,12 +44,18 @@ export function Badge({ variant = "DEFAULT", children, className = "", ...props 
     case "ADMIN_APPROVED":
       colorClass = "bg-emerald-100 text-emerald-900 border-emerald-300 font-extrabold";
       break;
+    case "READY_FOR_ADMIN":
+      colorClass = "bg-blue-100 text-blue-900 border-blue-300 font-extrabold";
+      break;
+    case "ACCESS_GRANTED":
+      colorClass = "bg-violet-100 text-violet-900 border-violet-300 font-extrabold";
+      break;
     case "EXECUTING":
     case "EXECUTION_READY":
       colorClass = "bg-indigo-100 text-indigo-900 border-indigo-300";
       break;
     case "COMPLETED":
-      colorClass = "bg-teal-100 text-teal-900 border-teal-300";
+      colorClass = "bg-teal-100 text-teal-900 border-teal-300 font-bold";
       break;
     case "WAITING_FOR_USER":
       colorClass = "bg-yellow-50 text-yellow-900 border-yellow-300";
@@ -142,10 +148,18 @@ export function RequestTypePill({ type = "INCIDENT", className = "" }: { type?: 
 export function ApprovalPill({ status = "PENDING", className = "" }: { status?: string; className?: string }) {
   const safeStatus = status || "PENDING";
   const label = safeStatus.replace(/_/g, " ");
+  const isPending = safeStatus.toUpperCase() === "PENDING";
   return (
-    <Badge variant={safeStatus} className={className}>
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
+      safeStatus.toUpperCase() === "APPROVED" ? "bg-green-50 text-green-800 border-green-200" :
+      safeStatus.toUpperCase() === "REJECTED" ? "bg-red-50 text-red-800 border-red-200" :
+      "bg-amber-50 text-amber-800 border-amber-200"
+    } ${className}`}>
+      {isPending && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse flex-shrink-0" />}
+      {!isPending && safeStatus.toUpperCase() === "APPROVED" && <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />}
+      {!isPending && safeStatus.toUpperCase() === "REJECTED" && <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />}
       {label}
-    </Badge>
+    </span>
   );
 }
 

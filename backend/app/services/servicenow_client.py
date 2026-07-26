@@ -21,6 +21,7 @@ from urllib3.util import Retry
 
 from app.services.servicenow_exceptions import (
     ServiceNowException,
+    ServiceNowConfigurationError,
     ServiceNowConnectionError,
     ServiceNowTimeoutError,
     ServiceNowHTTPError,
@@ -28,6 +29,7 @@ from app.services.servicenow_exceptions import (
     ServiceNowAPIError,
 )
 from app.models.servicenow_models import extract_sn_field
+from app.core.tracing import trace_span
 
 logger = logging.getLogger("it-agent-backend")
 
@@ -63,28 +65,59 @@ class ServiceNowClient:
             instance
             or os.getenv("SERVICENOW_INSTANCE_URL")
             or os.getenv("SERVICENOW_INSTANCE", "")
-        )
-        self.username = username or os.getenv("SERVICENOW_USERNAME", "")
-        self.password = password or os.getenv("SERVICENOW_PASSWORD", "")
+        ).strip()
+        # Read credentials strictly from arguments or environment variables (NO fallback defaults like 'admin')
+        env_user = os.getenv("SERVICENOW_USERNAME")
+        env_pass = os.getenv("SERVICENOW_PASSWORD")
+        self.username = (username if username is not None else (env_user or "")).strip()
+        self.password = (password if password is not None else (env_pass or "")).strip()
+
+        self.credentials_from_env = bool(env_user and env_pass)
+        self.fallback_used = False  # Hardcoded defaults like "admin" or "password" are forbidden
+
         self.auth_type = (auth_type or os.getenv("SERVICENOW_AUTH_TYPE", "basic")).strip().lower()
-        self.client_id = client_id or os.getenv("SERVICENOW_CLIENT_ID", "")
-        self.client_secret = client_secret or os.getenv("SERVICENOW_CLIENT_SECRET", "")
+        self.client_id = (client_id or os.getenv("SERVICENOW_CLIENT_ID", "")).strip()
+        self.client_secret = (client_secret or os.getenv("SERVICENOW_CLIENT_SECRET", "")).strip()
         self.table = table or os.getenv("SERVICENOW_TABLE", "incident")
         self.assignment_group_mode = (
             assignment_group_mode
             or os.getenv("SERVICENOW_ASSIGNMENT_GROUP_MODE", "name")
         ).strip().lower()
 
-        # Read mock mode configuration
-        self.use_mock = os.getenv("USE_MOCK_SERVICENOW", "false").lower() == "true"
-        if self.use_mock:
-            logger.info("ServiceNowClient: Mock mode enabled (USE_MOCK_SERVICENOW=true)")
-        else:
-            logger.info(
-                "ServiceNowClient: Real API mode enabled (auth_type=%s, assignment_group_mode=%s)",
-                self.auth_type,
-                self.assignment_group_mode,
-            )
+        # Read mock mode configuration (defaults to True if not explicitly set to false)
+        self.use_mock = os.getenv("USE_MOCK_SERVICENOW", "true").lower() == "true"
+
+        # Log startup credential diagnostics (masking password)
+        logger.info(
+            "[ServiceNowClient Diagnostics]: Instance='%s' | Username='%s' | AuthMode='%s' | CredentialsFromEnv=%s | FallbackUsed=%s | MockMode=%s",
+            self.instance,
+            self.username or "<UNSET>",
+            self.auth_type,
+            self.credentials_from_env,
+            self.fallback_used,
+            self.use_mock,
+        )
+
+        # Fail fast in Real Mode if credentials or instance URL are missing
+        if not self.use_mock:
+            missing = []
+            if not self.instance:
+                missing.append("SERVICENOW_INSTANCE_URL")
+            if self.auth_type == "basic":
+                if not self.username:
+                    missing.append("SERVICENOW_USERNAME")
+                if not self.password:
+                    missing.append("SERVICENOW_PASSWORD")
+            elif self.auth_type == "oauth":
+                if not self.client_id:
+                    missing.append("SERVICENOW_CLIENT_ID")
+                if not self.client_secret:
+                    missing.append("SERVICENOW_CLIENT_SECRET")
+            if missing:
+                raise ServiceNowConfigurationError(
+                    f"Real Production ServiceNow mode requires environment variable(s): {', '.join(missing)}. "
+                    "Placeholder defaults like 'admin' or 'password' are not permitted."
+                )
 
         # Determine configurable timeout
         if timeout is None:
@@ -719,60 +752,231 @@ class ServiceNowClient:
                 "message": str(e),
             }
 
+    def resolve_reference(self, table_name: str, display_value: str) -> str:
+        """
+        Resolve a human-readable display name to a 32-character ServiceNow sys_id.
+        If display_value is already a 32-char sys_id, or if resolution fails/mock mode,
+        returns display_value as fallback.
+        """
+        if not display_value or not isinstance(display_value, str):
+            return display_value
+        val = display_value.strip()
+        if len(val) == 32 and all(c in "0123456789abcdefABCDEF" for c in val):
+            return val
+        if self.use_mock or not self.base_url:
+            return val
+        try:
+            import urllib.parse
+            url = f"{self.base_url}/api/now/table/{table_name}?sysparm_query=name={urllib.parse.quote(val)}&sysparm_limit=1"
+            res = self._safe_request("GET", url)
+            if res.get("success"):
+                result = res.get("result")
+                if isinstance(result, list) and len(result) > 0:
+                    found_sys_id = result[0].get("sys_id")
+                    if found_sys_id:
+                        logger.info("[ServiceNowClient.resolve_reference]: Resolved '%s' in %s -> %s", val, table_name, found_sys_id)
+                        return found_sys_id
+                elif isinstance(result, dict) and result.get("sys_id"):
+                    return result.get("sys_id")
+        except Exception as e:
+            logger.warning("[ServiceNowClient.resolve_reference]: Reference lookup failed for '%s' in %s: %s", val, table_name, e)
+        return val
+
     def create_incident(
         self,
         short_description: Optional[str] = None,
         description: Optional[str] = None,
         category: Optional[str] = None,
+        subcategory: Optional[str] = None,
         severity: int = 3,
         caller_id: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Create a new incident in ServiceNow including caller_id when provided."""
         import time
+        import json
         from app.core.logging_context import correlation_id_ctx
+        from app.services.servicenow_payload_inspector import ServiceNowPayloadInspector
+
+        with trace_span(
+            name="servicenow_api",
+            attributes={
+                "provider": "servicenow",
+                "operation": "create_incident",
+                "instance": getattr(self, "instance", "unknown"),
+                "correlation_id": correlation_id_ctx.get() or "",
+            },
+        ):
+            return self._create_incident_internal(
+                short_description=short_description,
+                description=description,
+                category=category,
+                subcategory=subcategory,
+                severity=severity,
+                caller_id=caller_id,
+                **kwargs,
+            )
+
+    def _create_incident_internal(
+        self,
+        short_description: Optional[str] = None,
+        description: Optional[str] = None,
+        category: Optional[str] = None,
+        subcategory: Optional[str] = None,
+        severity: int = 3,
+        caller_id: Optional[str] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Internal create_incident logic extracted for trace_span wrapping."""
+        import time
+        import json
+        from app.core.logging_context import correlation_id_ctx
+        from app.services.servicenow_payload_inspector import ServiceNowPayloadInspector
+
         t_create_start = time.monotonic()
         corr_id = correlation_id_ctx.get() or "<none>"
 
         logger.info(">>> ENTRY [ServiceNowClient.create_incident] | Correlation ID: %s", corr_id)
 
         desc = description or kwargs.get("description", "")
-        cat = category or kwargs.get("category", "")
-        short_desc = short_description or kwargs.get("short_description") or f"{cat} Issue"
-        caller = caller_id or kwargs.get("caller_id")
-        assignment_group = kwargs.get("assignment_group", "IT Support")
+        short_desc = short_description or kwargs.get("short_description") or "IT Agent Incident"
 
-        logger.info(
-            "[ServiceNowClient.create_incident]: use_mock=%s, base_url='%s', table='%s', auth_type='%s' | Correlation ID: %s",
-            self.use_mock,
-            self.base_url,
-            self.table,
-            self.auth_type,
-            corr_id,
+        # Rule 3 mapping keys
+        raw_caller = kwargs.get("caller") or caller_id or kwargs.get("caller_id")
+        raw_channel = kwargs.get("channel") or kwargs.get("contact_type") or "virtual_agent"
+        raw_type = kwargs.get("type") or kwargs.get("u_type")
+        raw_cat = category or kwargs.get("category", "")
+        raw_subcat = subcategory or kwargs.get("subcategory")
+        raw_assignment_group = kwargs.get("assignment_group") or "IT Support"
+
+        # Resolve choices & group sys_id via ServiceNowChoiceResolver (Rules 1, 4, 5, 6, 7, 8)
+        from app.services.servicenow_choice_resolver import ServiceNowChoiceResolver
+        resolver = ServiceNowChoiceResolver.get_instance()
+
+        resolved_type = resolver.resolve_type(raw_type) if raw_type else None
+        resolved_cat = resolver.resolve_category(resolved_type, raw_cat) if raw_cat else None
+        resolved_subcat = resolver.resolve_subcategory(resolved_cat, raw_subcat) if raw_subcat else None
+        resolved_contact_type = resolver.resolve_contact_type(raw_channel)
+        resolved_assignment_group = resolver.resolve_assignment_group(raw_assignment_group)
+
+        # Diagnostics Required Logging
+        subcat_exists = any(
+            c["element"] == "subcategory" and c["value"] == resolved_subcat
+            for c in resolver.choices
+        ) if resolved_subcat else False
+
+        dependent_cats = [
+            c.get("dependent_value")
+            for c in resolver.choices
+            if c["element"] == "subcategory" and c["value"] == resolved_subcat
+        ] if resolved_subcat else []
+
+        # Rule 10: Validate hierarchy (u_type -> category -> subcategory) before POST
+        is_valid_hierarchy, hierarchy_err = resolver.validate_hierarchy(
+            u_type_val=resolved_type,
+            category_val=resolved_cat,
+            subcategory_val=resolved_subcat,
         )
+
+        if not is_valid_hierarchy:
+            logger.error(
+                "!!! HIERARCHY VALIDATION FAILURE [ServiceNowClient.create_incident]: %s",
+                hierarchy_err,
+            )
+            # Check if subcategory fails hierarchy check for given category
+            if resolved_cat and resolved_subcat:
+                sub_valid, sub_err = resolver.validate_hierarchy(None, resolved_cat, resolved_subcat)
+                if not sub_valid:
+                    raise ServiceNowAPIError(
+                        message=f"Invalid subcategory '{resolved_subcat}' for category '{resolved_cat}': {sub_err}"
+                    )
+
+        payload: Dict[str, Any] = {
+            "short_description": short_desc,
+            "description": desc,
+            "severity": severity,
+            "assignment_group": resolved_assignment_group,  # Guaranteed 32-character sys_id
+            "contact_type": resolved_contact_type,
+        }
+
+        if resolved_type:
+            payload["u_type"] = resolved_type
+        if resolved_cat:
+            payload["category"] = resolved_cat
+        if resolved_subcat:
+            payload["subcategory"] = resolved_subcat
+        if raw_caller:
+            payload["caller_id"] = raw_caller
+
+        logger.info("=" * 80)
+        logger.info("[ServiceNowChoiceResolver Diagnostics]:")
+        logger.info("Resolved Category: %s", repr(resolved_cat))
+        logger.info("Resolved Subcategory: %s", repr(resolved_subcat))
+        logger.info("Subcategory exists in sys_choice: %s", subcat_exists)
+        logger.info("Dependent category: %s", dependent_cats)
+        logger.info("Final payload:\n%s", json.dumps(payload, indent=2))
+        logger.info("=" * 80)
+
+        for extra_key in ("urgency", "impact", "priority"):
+            if extra_key in kwargs and kwargs[extra_key] is not None:
+                payload[extra_key] = kwargs[extra_key]
+
+        # Resolve other reference fields to sys_id BEFORE POST
+        for ref_key, tbl in (
+            ("cmdb_ci", "cmdb_ci"),
+            ("business_service", "cmdb_ci_service"),
+            ("location", "cmn_location"),
+        ):
+            if ref_key in kwargs and kwargs[ref_key] is not None:
+                ref_val = str(kwargs[ref_key])
+                payload[ref_key] = self.resolve_reference(tbl, ref_val)
+
+        inspector = ServiceNowPayloadInspector()
+        req_summary = {
+            "short_description": short_desc,
+            "description": desc,
+            "category": raw_cat,
+            "subcategory": raw_subcat,
+            "severity": severity,
+            "assignment_group": raw_assignment_group,
+            "caller_id": raw_caller,
+            "contact_type": raw_channel,
+            "impact": kwargs.get("impact"),
+            "urgency": kwargs.get("urgency"),
+            "priority": kwargs.get("priority"),
+            "extra_fields": {k: v for k, v in kwargs.items() if k not in ("short_description", "description", "category", "severity", "assignment_group", "caller_id")},
+        }
+        inspector.inspect_pre_post(req_summary, payload)
 
         if self.use_mock:
             from app.integrations.servicenow.servicenow_mock import servicenow_mock_db
             mock_incident = servicenow_mock_db.create(
-                category=cat,
+                category=payload.get("category", raw_cat),
                 description=desc,
-                assignment_group=assignment_group,
+                assignment_group=payload.get("assignment_group", raw_assignment_group),
+                **{k: v for k, v in payload.items() if k not in ("category", "description", "assignment_group")},
             )
             mock_incident["short_description"] = short_desc
             mock_incident["severity"] = severity
-            if caller:
-                mock_incident["caller_id"] = caller
-            logger.info("[ServiceNowClient.create_incident]: Mock incident created (number=%s) | Correlation ID: %s", mock_incident["number"], corr_id)
-            return {
+            if raw_caller:
+                mock_incident["caller_id"] = raw_caller
+
+            mock_res = {
                 "success": True,
                 "ticket_id": mock_incident["number"],
                 "number": mock_incident["number"],
                 "sys_id": mock_incident["sys_id"],
                 "state": "1",
-                "caller_id": caller,
+                "caller_id": raw_caller,
                 "message": "Mock incident created successfully",
                 "result": mock_incident,
             }
+            inspector.inspect_post_response(mock_res)
+
+            if inspector.enabled:
+                inspector.verify_and_compare(req_summary, payload, mock_incident)
+
+            return mock_res
 
         if not self.base_url:
             logger.error(
@@ -792,30 +996,75 @@ class ServiceNowClient:
             }
 
         url = f"{self.base_url}/api/now/table/{self.table}"
-        payload: Dict[str, Any] = {
-            "short_description": short_desc,
-            "description": desc,
-            "category": cat,
-            "severity": severity,
-        }
-
-        if caller:
-            payload["caller_id"] = caller
-
-        if "assignment_group" in kwargs and kwargs["assignment_group"]:
-            payload["assignment_group"] = self._format_assignment_group(kwargs["assignment_group"])
-
-        for extra_key in ("contact_type", "u_type", "subcategory"):
-            if extra_key in kwargs and kwargs[extra_key]:
-                payload[extra_key] = kwargs[extra_key]
 
         logger.info(
-            "[ServiceNowClient.create_incident]: About to POST to URL: %s | Correlation ID: %s",
-            url,
+            "\n========== SERVICENOW PRE-CALL PAYLOAD LOG ==========\n"
+            "Correlation ID : %s\n"
+            "u_type         : %s\n"
+            "category       : %s\n"
+            "subcategory    : %s\n"
+            "assignment_grp : %s\n"
+            "impact/urgency : %s / %s\n"
+            "priority       : %s\n"
+            "contact_type   : %s\n"
+            "Final JSON     :\n%s\n"
+            "=====================================================",
             corr_id,
+            payload.get("u_type"),
+            payload.get("category"),
+            payload.get("subcategory"),
+            payload.get("assignment_group"),
+            payload.get("impact"),
+            payload.get("urgency"),
+            payload.get("priority"),
+            payload.get("contact_type"),
+            json.dumps(payload, indent=2),
         )
 
         res = self._safe_request("POST", url, json=payload)
+        inspector.inspect_post_response(res)
+
+        logger.info(
+            "\n========== SERVICENOW POST-CALL RESPONSE LOG ==========\n"
+            "Correlation ID   : %s\n"
+            "Status Success   : %s\n"
+            "Created Incident : %s\n"
+            "Created Sys ID   : %s\n"
+            "======================================================",
+            corr_id,
+            res.get("success"),
+            res.get("number") or res.get("ticket_id"),
+            res.get("sys_id"),
+        )
+
+        # GET retrieval & mapping diagnostic report when SERVICENOW_VALIDATE_MAPPING is enabled
+        if inspector.enabled and res.get("success") and (res.get("sys_id") or res.get("number")):
+            lookup_id = res.get("sys_id") or res.get("number")
+            stored_res = self.get_incident(lookup_id)
+            stored_data = stored_res.get("result", {}) if isinstance(stored_res, dict) else {}
+
+            audit_results = inspector.verify_and_compare(req_summary, payload, stored_data)
+
+            # Adaptive sys_id resolution fallback if display values were dropped for reference fields
+            needs_update = {}
+            for r in audit_results:
+                if r.status in ("REFERENCE_LOOKUP_FAILED", "FIELD_NOT_STORED") and r.json_key_sent in ("assignment_group", "cmdb_ci", "business_service", "location"):
+                    display_val = payload.get(r.json_key_sent)
+                    if display_val:
+                        tbl = (
+                            "sys_user_group" if r.json_key_sent == "assignment_group"
+                            else ("cmdb_ci" if r.json_key_sent == "cmdb_ci"
+                            else ("cmdb_ci_service" if r.json_key_sent == "business_service"
+                            else "cmn_location"))
+                        )
+                        resolved_sys_id = self.resolve_reference(tbl, display_val)
+                        if resolved_sys_id and resolved_sys_id != display_val:
+                            needs_update[r.servicenow_field] = resolved_sys_id
+
+            if needs_update and res.get("sys_id"):
+                logger.info("[ServiceNowClient.create_incident]: Adaptive reference fallback — updating sys_id %s with sys_ids: %s", res.get("sys_id"), needs_update)
+                self.update_incident(res.get("sys_id"), needs_update)
+
         create_elapsed_ms = int((time.monotonic() - t_create_start) * 1000)
         logger.info(
             "<<< EXIT [ServiceNowClient.create_incident] | Correlation ID: %s | Elapsed: %dms | success=%s, number=%s, sys_id=%s, message='%s'",
@@ -829,7 +1078,7 @@ class ServiceNowClient:
         return res
 
     def get_incident(self, sys_id: str) -> Dict[str, Any]:
-        """Retrieve incident details by sys_id."""
+        """Retrieve incident details by sys_id or incident number."""
         if self.use_mock:
             from app.integrations.servicenow.servicenow_mock import servicenow_mock_db
             mock_incident = servicenow_mock_db.get(sys_id)
@@ -840,7 +1089,7 @@ class ServiceNowClient:
                     "number": "",
                     "sys_id": "",
                     "state": "",
-                    "message": f"Incident with sys_id {sys_id} not found.",
+                    "message": f"Incident {sys_id} not found.",
                 }
             return {
                 "success": True,
@@ -862,8 +1111,16 @@ class ServiceNowClient:
                 "message": "ServiceNow instance URL is not configured.",
             }
 
-        url = f"{self.base_url}/api/now/table/{self.table}/{sys_id}"
-        return self._safe_request("GET", url)
+        if sys_id.startswith("INC") or (len(sys_id) != 32):
+            import urllib.parse
+            url = f"{self.base_url}/api/now/table/{self.table}?sysparm_query=number={urllib.parse.quote(sys_id)}&sysparm_limit=1"
+        else:
+            url = f"{self.base_url}/api/now/table/{self.table}/{sys_id}"
+
+        res = self._safe_request("GET", url)
+        if res.get("success") and isinstance(res.get("result"), list) and len(res["result"]) > 0:
+            res["result"] = res["result"][0]
+        return res
 
     def update_incident(self, sys_id: str, data: dict, use_patch: bool = True) -> Dict[str, Any]:
         """Update incident details by sys_id using PATCH for partial updates by default."""

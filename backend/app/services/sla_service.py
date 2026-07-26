@@ -60,9 +60,14 @@ def calculate_priority(category: str, issue_description: str) -> str:
         provider = get_ai_provider()
         response = provider.generate_response(prompt)
         if response:
-            result = json.loads(response.strip())
-            priority = result.get("priority", "").strip().upper()
-            reason = result.get("reason", "").strip()
+            if isinstance(response, dict):
+                result = response
+            elif isinstance(response, str):
+                result = json.loads(response.strip())
+            else:
+                result = {}
+            priority = str(result.get("priority", "")).strip().upper()
+            reason = str(result.get("reason", "")).strip()
             if priority in ("LOW", "MEDIUM", "HIGH", "CRITICAL"):
                 logger.info("SLA Agent: AI provider determined priority: %s (Reason: %s)", priority, reason)
                 return priority

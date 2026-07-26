@@ -32,25 +32,56 @@ try:
     
     with engine.connect() as conn:
         pass
-    logger.info("PostgreSQL database connection established successfully.")
+    logger.info("Database connection established successfully.")
 except Exception as e:
-    logger.error("Failed to connect to configured database (%s): %s", DATABASE_URL, e)
-    raise RuntimeError(f"Database connection failed: {e}")
+    logger.warning("Failed to connect to configured database (%s): %s — Falling back to SQLite file database.", DATABASE_URL, e)
+    DATABASE_URL = "sqlite:///./bridgestone_it_agent.db"
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    from app.database.base import Base
+    import app.database.models.ticket
+    import app.database.models.notification
+    import app.database.models.conversation
+    import app.database.models.user
+    Base.metadata.create_all(bind=engine)
+    logger.info("SQLite fallback database initialized at bridgestone_it_agent.db")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Automatic lightweight schema migration check for servicenow_number column
+# Automatic lightweight schema migration check for tickets table columns
 try:
     with engine.begin() as conn:
         from sqlalchemy import text
+        required_cols = {
+            "servicenow_number": "VARCHAR(100)",
+            "approved_by": "VARCHAR(100)",
+            "approval_notes": "TEXT",
+            "approved_at": "DATETIME",
+            "laps_password": "VARCHAR(100)",
+            "laps_expiration": "DATETIME",
+            "laps_active": "BOOLEAN DEFAULT 0",
+            "laps_audit_id": "VARCHAR(50)",
+            "request_type": "VARCHAR(50)",
+            "manager": "VARCHAR(100)",
+            "approval_status": "VARCHAR(50)",
+            "assignment_group": "VARCHAR(100)"
+        }
         if "sqlite" in DATABASE_URL:
             cursor = conn.execute(text("PRAGMA table_info(tickets)"))
-            cols = [row[1] for row in cursor.fetchall()]
-            if cols and "servicenow_number" not in cols:
-                logger.info("Migrating SQLite DB: Adding column 'servicenow_number' to 'tickets' table.")
-                conn.execute(text("ALTER TABLE tickets ADD COLUMN servicenow_number VARCHAR(100)"))
+            existing_cols = [row[1] for row in cursor.fetchall()]
+            if existing_cols:
+                for col_name, col_type in required_cols.items():
+                    if col_name not in existing_cols:
+                        logger.info("Migrating SQLite DB: Adding column '%s' (%s) to 'tickets' table.", col_name, col_type)
+                        try:
+                            conn.execute(text(f"ALTER TABLE tickets ADD COLUMN {col_name} {col_type}"))
+                        except Exception as col_err:
+                            logger.warning("Failed to add column %s: %s", col_name, col_err)
         elif "postgresql" in DATABASE_URL:
-            conn.execute(text("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS servicenow_number VARCHAR(100)"))
+            for col_name, col_type in required_cols.items():
+                try:
+                    conn.execute(text(f"ALTER TABLE tickets ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                except Exception:
+                    pass
 except Exception as exc:
     logger.debug("Database column migration check skipped: %s", exc)
 

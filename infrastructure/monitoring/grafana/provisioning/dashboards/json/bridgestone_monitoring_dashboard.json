@@ -232,12 +232,229 @@
           "refId": "B"
         }
       ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "id": 400,
+      "title": "ServiceNow Integration",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 17 },
+      "id": 41,
+      "title": "Incidents Created (Total)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "incidents_created_total",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 17 },
+      "id": 42,
+      "title": "ServiceNow Failures (5m)",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(servicenow_failures_total[5m])",
+          "legendFormat": "{{operation}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 17 },
+      "id": 43,
+      "title": "ServiceNow API Latency (p50 / p95)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(servicenow_latency_seconds_bucket[5m])) by (le, operation))",
+          "legendFormat": "p50 {{operation}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(servicenow_latency_seconds_bucket[5m])) by (le, operation))",
+          "legendFormat": "p95 {{operation}}",
+          "refId": "B"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "id": 500,
+      "title": "AI Provider Performance",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 22 },
+      "id": 51,
+      "title": "AI Provider Request Rate (5m)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(provider_requests_total[5m])",
+          "legendFormat": "{{provider}} / {{model}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 22 },
+      "id": 52,
+      "title": "AI Provider Latency (p50 / p95)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(provider_latency_seconds_bucket[5m])) by (le, provider, model))",
+          "legendFormat": "p50 {{provider}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(provider_latency_seconds_bucket[5m])) by (le, provider, model))",
+          "legendFormat": "p95 {{provider}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 27 },
+      "id": 53,
+      "title": "AI Fallback Events (5m)",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(llm_model_fallback_total[5m])",
+          "legendFormat": "{{target_model}} → {{fallback_model}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "id": 600,
+      "title": "Pipeline Span Tracing (Phase 5)",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 32 },
+      "id": 61,
+      "title": "Pipeline Stage Latency — p50 / p95 by Service",
+      "description": "Per-service breakdown of end-to-end latency: classification → enrichment → ticket_summary → ticket_service → servicenow_api. Helps identify bottlenecks.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(pipeline_span_duration_seconds_bucket[5m])) by (le, service))",
+          "legendFormat": "p50 {{service}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(pipeline_span_duration_seconds_bucket[5m])) by (le, service))",
+          "legendFormat": "p95 {{service}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 38 },
+      "id": 62,
+      "title": "Pipeline Error Rate by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(pipeline_span_duration_seconds_count{status=\"error\"}[5m])) by (service)",
+          "legendFormat": "{{service}} errors/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 38 },
+      "id": 63,
+      "title": "Pipeline Stage Latency by AI Provider",
+      "description": "Latency breakdown by provider label — shows which pipeline stages are Gemini-backed vs deterministic.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(pipeline_span_duration_seconds_bucket[5m])) by (le, provider))",
+          "legendFormat": "p95 provider={{provider}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 43 },
+      "id": 64,
+      "title": "End-to-End HTTP Request Latency p95 (/chat)",
+      "description": "95th percentile end-to-end latency for /chat. Alert fires when this exceeds 20s.",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{path=\"/chat\"}[5m])) by (le))",
+          "legendFormat": "p95 /chat",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "5s",
   "schemaVersion": 36,
   "style": "dark",
-  "tags": ["bridgestone", "monitoring"],
+  "tags": ["bridgestone", "monitoring", "phase5"],
   "time": {
     "from": "now-1h",
     "to": "now"
@@ -251,5 +468,5 @@
   },
   "timezone": "browser",
   "title": "Bridgestone IT Agent Observability Portal",
-  "version": 1
+  "version": 2
 }
