@@ -1,0 +1,41 @@
+flowchart TB
+    subgraph Entry["1. Ingress & Router"]
+        START([User Input]) --> ROUTER{Router Node}
+        ROUTER -->|CHAT| CONV[Conversation Node] --> END1([End Response])
+        ROUTER -->|TROUBLESHOOT| MEMORY[Memory Node]
+    end
+
+    subgraph Dispatch["2. Context Dispatcher"]
+        MEMORY --> CTX{Context Router}
+        CTX -->|ticket_status| T_STAT[Ticket Status Node] --> END2([End Response])
+        CTX -->|service_request| S_REQ[Service Request Node] --> END3([End Response])
+        CTX -->|intent| INTENT[Intent Classification Node]
+    end
+
+    subgraph DiagnosticLoop["3. Diagnostic & Tool Execution Loop"]
+        INTENT --> DIAG[Diagnostic Interview Node]
+        DIAG -->|Questions Pending| END4([Await User Input])
+        DIAG -->|Ready| PLANNER[Planner Node]
+        PLANNER --> KB[Knowledge Node]
+        KB --> TOOL[Tool Execution Node]
+        TOOL --> MULTI{Multi-Step Node}
+        MULTI -->|More Tools Needed| TOOL
+        MULTI -->|Diagnostics Complete| ROOT[Root Cause Node]
+    end
+
+    subgraph DecisionTier["4. Synthesis & Governance"]
+        ROOT --> REFLECT[Reflection Node]
+        REFLECT --> DECIDE{Decision Node}
+        DECIDE -->|ASK_MORE_INFO| END5([Ask User])
+        DECIDE -->|EXECUTE_ACTION| APPROVAL{Approval Node}
+        DECIDE -->|CREATE_TICKET| TICKET[Ticket Node]
+    end
+
+    subgraph Execution["5. Ticket Lifecycle & SLA"]
+        APPROVAL -->|APPROVED| ACTION[Action Node] --> LIFECYCLE
+        APPROVAL -->|REJECTED / PENDING| END6([Halt Action])
+        TICKET --> LIFECYCLE[Ticket Lifecycle Node]
+        LIFECYCLE --> ASSIGN[Assignment Node]
+        ASSIGN --> NOTIF[Notification Node]
+        NOTIF --> SLA[SLA Tracking Node] --> FINISH([Pipeline Complete])
+    end

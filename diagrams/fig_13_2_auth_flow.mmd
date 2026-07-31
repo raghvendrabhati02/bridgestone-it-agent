@@ -1,0 +1,21 @@
+sequenceDiagram
+    autonumber
+    actor Client as Client Browser
+    participant API as FastAPI Auth Endpoint
+    participant JWT as JWT Utility (PyJWT)
+    participant DB as User Database
+    participant Middleware as RoleChecker Middleware
+
+    Client->>API: POST /auth/login {username, password}
+    API->>DB: Query User Record & Password Hash
+    DB-->>API: User Record Found (bcrypt hashed)
+    API->>JWT: Generate Access Token (30m) & Refresh Token (7d)
+    JWT-->>API: Signed HS256 Tokens
+    API-->>Client: Return {access_token, refresh_token, role}
+
+    Note over Client, Middleware: Subsequent Authenticated Requests
+    Client->>Middleware: POST /chat (Header: Bearer <access_token>)
+    Middleware->>JWT: Decode & Validate HS256 Token Signature
+    JWT-->>Middleware: Claims Valid (sub, role, exp)
+    Middleware->>Middleware: Verify Role Permitted (e.g. EMPLOYEE)
+    Middleware-->>API: Request Approved — Inject User Context

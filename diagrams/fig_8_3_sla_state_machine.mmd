@@ -1,0 +1,19 @@
+stateDiagram-v2
+    [*] --> HEALTHY: Ticket Created (SLA Timer Starts)
+    
+    HEALTHY --> WARNING_75: SLA 75% Elapsed
+    WARNING_75 --> WARNING_90: SLA 90% Elapsed
+    WARNING_90 --> BREACHED: SLA 100% Elapsed
+    
+    state BREACHED {
+        [*] --> ESCALATED_LEVEL_1: Immediate Breach Notification
+        ESCALATED_LEVEL_1 --> ESCALATED_LEVEL_2: Breach + 30 Mins
+        ESCALATED_LEVEL_2 --> ESCALATED_LEVEL_3: Breach + 60 Mins
+    }
+
+    HEALTHY --> RESOLVED: Issue Resolved
+    WARNING_75 --> RESOLVED: Issue Resolved
+    WARNING_90 --> RESOLVED: Issue Resolved
+    BREACHED --> RESOLVED: Issue Resolved
+    
+    RESOLVED --> [*]

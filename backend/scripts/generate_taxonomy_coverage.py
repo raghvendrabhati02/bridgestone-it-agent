@@ -205,9 +205,11 @@ def print_report(report: Dict[str, Any]) -> None:
 
     # -- Unique Assignment Groups --
     print(f"+{'-' * (W - 2)}+")
-    print(f"|  {YELLOW}Unique Assignment Groups{RESET}{' ' * (W - 28)}|")
     for grp in report["unique_assignment_groups"]:
-    print(f"║  {YELLOW}Intent Map → Category Coverage{RESET}{' ' * (W - 34)}║")
+        line = f"    • {grp}"
+        print(f"|{line:<{W-2}}|")
+    print(f"+{'-' * (W - 2)}+")
+    print(f"|  {YELLOW}Intent Map -> Category Coverage{RESET}{' ' * (W - 34)}|")
     for cat in report["intent_categories"]:
         intent_list = [k for k, v in report["intents"].items() if v.lower() == cat]
         line = f"    {cat:<20} ({len(intent_list)} intents)"

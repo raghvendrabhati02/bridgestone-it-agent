@@ -1,0 +1,20 @@
+{
+  "theme": "dark",
+  "themeVariables": {
+    "darkMode": true,
+    "background": "#0b0f19",
+    "primaryColor": "#1e293b",
+    "primaryTextColor": "#f8fafc",
+    "primaryBorderColor": "#38bdf8",
+    "lineColor": "#38bdf8",
+    "secondaryColor": "#0f172a",
+    "tertiaryColor": "#1e1e2e",
+    "fontFamily": "Segoe UI, Calibri, sans-serif",
+    "fontSize": "13px",
+    "nodeBorder": "#38bdf8",
+    "clusterBkg": "#0f172a",
+    "clusterBorder": "#334155",
+    "titleColor": "#f8fafc",
+    "edgeLabelBackground": "#0f172a"
+  }
+}

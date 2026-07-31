@@ -1,0 +1,21 @@
+sequenceDiagram
+    autonumber
+    actor Client as Client Browser
+    participant Nginx as Nginx Ingress
+    participant SizeMW as SizeLimiter Middleware
+    participant RateMW as RateLimiter Middleware
+    participant AuthMW as JWT / RBAC Middleware
+    participant Guard as PromptGuard Engine
+    participant Graph as LangGraph Engine
+
+    Client->>Nginx: POST /chat (HTTP Body + Bearer Token)
+    Nginx->>SizeMW: Forward Payload
+    SizeMW->>SizeMW: Verify Body Size <= 512 KB
+    SizeMW->>RateMW: Size Check PASSED
+    RateMW->>RateMW: Verify Sliding Window Limit (30 req/min)
+    RateMW->>AuthMW: Rate Limit PASSED
+    AuthMW->>AuthMW: Validate JWT Signature & Role (EMPLOYEE)
+    AuthMW->>Guard: Authentication PASSED
+    Guard->>Guard: Scan Prompt for Injection Rules (HIGH / MEDIUM / LOW)
+    Guard->>Graph: Injection Check PASSED -> Execute StateGraph
+    Graph-->>Client: HTTP 200 OK (Response + Session State)

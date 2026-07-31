@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+    actor Employee as Employee
+    participant Agent as AI Assistant
+    participant DB as Platform DB
+    actor Manager as Line Manager
+    actor Admin as IT Administrator
+    participant SN as ServiceNow
+
+    Employee->>Agent: Request Privileged Software (e.g., VS Code)
+    Agent->>SN: Create Incident (Category: SOFTWARE_INSTALLATION)
+    SN-->>Agent: Incident INC0071640 Created
+    Agent->>DB: Persist Ticket (Status: WAITING_MANAGER)
+    Agent-->>Employee: Request Logged — Pending Manager Approval
+
+    rect rgb(15, 23, 42)
+        Note over Manager, DB: Step 1: Manager Approval Phase
+        Manager->>DB: Approve Request via Manager Portal
+        DB->>DB: Update Status -> READY_FOR_ADMIN
+    end
+
+    rect rgb(15, 23, 42)
+        Note over Admin, DB: Step 2: IT Admin Access Grant Phase
+        Admin->>DB: Provision Access (LAPS Temporary Credential)
+        DB->>DB: Update Status -> ACCESS_GRANTED (15-min TTL)
+        Admin->>Employee: Deliver Temporary Credentials Card
+    end
+
+    Admin->>DB: Mark Ticket COMPLETED
+    DB->>SN: Update ServiceNow Incident Status -> RESOLVED

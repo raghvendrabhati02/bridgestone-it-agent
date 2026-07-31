@@ -297,6 +297,6 @@ For higher-availability deployments:
 
 ## Related Documents
 
-- [Architecture](./architecture.md) — Service structure and background jobs
+- [Architecture](./Architecture.md) — Service structure and background jobs
 - [Security](./Security.md) — Secrets management and default accounts
-- [Configuration](./configuration.md) — All environment variables reference
+- [Database](./Database.md) — Database models and schema details

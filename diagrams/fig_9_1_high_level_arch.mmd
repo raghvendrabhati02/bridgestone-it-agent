@@ -1,0 +1,61 @@
+flowchart TB
+    subgraph ClientLayer["1. Client Layer (Portal Surfaces)"]
+        FE1["Employee Chat Portal"]
+        FE2["Manager Approval Portal"]
+        FE3["IT Admin Queue"]
+        FE4["Analytics & KB Dashboard"]
+    end
+
+    subgraph IngressLayer["2. Ingress & Reverse Proxy"]
+        NGINX["Nginx Ingress Proxy
+(TLS Termination / Route Dispatcher)"]
+    end
+
+    subgraph GatewayLayer["3. API Gateway Tier (FastAPI)"]
+        MW1["Rate Limiter
+(Sliding Window)"]
+        MW2["PromptGuard
+(Injection Classifier)"]
+        MW3["JWT & RBAC
+Auth Middleware"]
+        MW4["Security Headers
+& Payload Validation"]
+    end
+
+    subgraph OrchestrationLayer["4. AI Agentic Orchestration Tier (LangGraph)"]
+        LG1["AgentState Graph
+(23 Conditional Nodes)"]
+        LG2["Gemini 2.5 Flash
+(Primary LLM)"]
+        LG3["Claude 3 Sonnet
+(Fallback LLM)"]
+    end
+
+    subgraph ServiceLayer["5. Deterministic Business Logic Tier"]
+        SVC1["Classification Service"]
+        SVC2["Incident Enrichment"]
+        SVC3["Field Mapping Service"]
+        SVC4["SLA Escalation Engine"]
+        SVC5["Immutable Audit Logger"]
+    end
+
+    subgraph IntegrationLayer["6. Enterprise System Adapters"]
+        AD1["ServiceNow Adapter
+(OAuth2 / REST API)"]
+        AD2["MS Graph / AD Adapter"]
+        AD3["VPN Diagnostics Tool"]
+    end
+
+    subgraph DataLayer["7. Persistence & Caching Tier"]
+        DB1[("PostgreSQL 14 / SQLite")]
+        DB2[("Redis Cache
+(Metadata & Sessions)")]
+    end
+
+    ClientLayer --> NGINX
+    NGINX --> GatewayLayer
+    GatewayLayer --> OrchestrationLayer
+    OrchestrationLayer --> ServiceLayer
+    ServiceLayer --> IntegrationLayer
+    ServiceLayer --> DataLayer
+    IntegrationLayer --> DB1

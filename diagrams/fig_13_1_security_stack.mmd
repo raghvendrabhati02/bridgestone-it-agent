@@ -1,0 +1,29 @@
+flowchart TB
+    subgraph L1["Layer 1: Network & Boundary Security"]
+        N1["Nginx Ingress Proxy"]
+        N2["HTTPS TLS 1.3 Termination"]
+    end
+
+    subgraph L2["Layer 2: Transport & HTTP Security Headers"]
+        H1["HSTS (max-age=31536000)"]
+        H2["Content Security Policy (CSP)"]
+        H3["X-Frame-Options: DENY"]
+        H4["X-Content-Type-Options: nosniff"]
+    end
+
+    subgraph L3["Layer 3: Application Guardrails"]
+        A1["Request Size Limiter (512 KB)"]
+        A2["Sliding-Window Rate Limiter"]
+        A3["PromptGuard 3-Tier Classifier"]
+        A4["JWT Auth & RoleChecker (RBAC)"]
+    end
+
+    subgraph L4["Layer 4: Compliance & Auditability"]
+        D1["Immutable Audit Log (SHA-256 Hashes)"]
+        D2["RBAC Denial Auditor"]
+        D3["Security Event Logger"]
+    end
+
+    L1 --> L2
+    L2 --> L3
+    L3 --> L4

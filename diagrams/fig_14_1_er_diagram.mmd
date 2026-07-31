@@ -1,0 +1,48 @@
+erDiagram
+    USER ||--o{ TICKET : "creates"
+    USER {
+        int id PK
+        string username UK
+        string role
+        string hashed_password
+        boolean is_active
+    }
+
+    TICKET ||--o{ SLA_ESCALATION : "tracks"
+    TICKET ||--o{ APPROVAL_HISTORY : "requires"
+    TICKET ||--o{ TICKET_TIMELINE : "logs"
+    TICKET {
+        string ticket_id PK
+        string servicenow_id
+        string servicenow_number
+        string category
+        string status
+        string sla_state
+        string approval_status
+    }
+
+    SLA_ESCALATION {
+        int id PK
+        string ticket_id FK
+        int escalation_level
+        string notified_recipients
+        datetime escalated_at
+    }
+
+    APPROVAL_HISTORY {
+        int id PK
+        string ticket_id FK
+        string action
+        string performed_by
+        datetime performed_at
+    }
+
+    AUDIT_LOG {
+        int id PK
+        string correlation_id
+        string event_type
+        string actor
+        string payload_hash
+        text payload_json
+        datetime timestamp
+    }

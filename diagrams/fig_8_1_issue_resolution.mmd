@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    actor Employee as Employee (Browser)
+    participant Gateway as API Gateway (FastAPI)
+    participant MW as Middleware & Security
+    participant Guard as PromptGuard Classifier
+    participant Graph as LangGraph Engine
+    participant Tools as Enterprise Diagnostics
+    participant SN as ServiceNow API
+
+    Employee->>Gateway: POST /chat (User Message + JWT)
+    Gateway->>MW: Rate Limiter & JWT Role Assertion
+    MW-->>Gateway: Authorized (EMPLOYEE role)
+    Gateway->>Guard: Scan prompt for injection risks
+    Guard-->>Gateway: Prompt Risk: LOW / PASS
+    Gateway->>Graph: StateGraph.invoke(AgentState)
+    
+    rect rgb(15, 23, 42)
+        Note over Graph: Agentic Diagnostic Cycle
+        Graph->>Graph: Router -> Memory -> Intent Node
+        Graph->>Tools: Execute Diagnostic Tools (VPN / AD / Network)
+        Tools-->>Graph: Tool Results & System Status
+        Graph->>Graph: Multi-Step Node -> Root Cause -> Reflection
+    end
+
+    alt Self-Service Resolution Identified
+        Graph-->>Employee: Return Guided Resolution Response
+    else Escalation Required (Create Ticket)
+        Graph->>SN: OAuth2 Incident Creation (Category, CI, Priority)
+        SN-->>Graph: Incident Number (e.g. INC0071633)
+        Graph-->>Employee: Return INC Number & SLA SLA Commitment
+    end

@@ -1,0 +1,30 @@
+flowchart LR
+    subgraph CoreBackend["Bridgestone IT Platform Core"]
+        BE["FastAPI App Engine"]
+    end
+
+    subgraph SNIntegration["ServiceNow Integration Subsystem"]
+        SNC["ServiceNow Client
+(OAuth2 Token Manager)"]
+        SNCache["ServiceNow Metadata Cache
+(TTL: 3600s)"]
+        Val["Metadata Validator"]
+        Map["Field Mapping Service"]
+    end
+
+    subgraph ExternalSystems["Enterprise Endpoint Services"]
+        SN_API["ServiceNow Table API
+(REST HTTPS)"]
+        MS_GRAPH["Microsoft Graph API
+(Azure AD / Entra)"]
+        VPN_GW["GlobalProtect VPN Gateway
+(Diagnostic Probe)"]
+    end
+
+    BE --> SNC
+    SNC --> SNCache
+    SNCache --> Val
+    Val --> Map
+    SNC -->|OAuth2 Bearer| SN_API
+    BE -->|REST / SDK| MS_GRAPH
+    BE -->|ICMP / SNMP| VPN_GW

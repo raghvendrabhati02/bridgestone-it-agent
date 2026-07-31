@@ -1,0 +1,31 @@
+flowchart LR
+    subgraph Request["AI Request Stream"]
+        REQ["Inbound Prompt"]
+    end
+
+    subgraph Abstraction["AI Abstraction Interface"]
+        BASE["BaseAIProvider Contract"]
+    end
+
+    subgraph Tier1["Primary Provider"]
+        GEMINI["Google Gemini 2.5 Flash
+(High Concurrency / Fast Function Calling)"]
+    end
+
+    subgraph Tier2["Secondary Fallback"]
+        CLAUDE["Anthropic Claude 3 Sonnet
+(High-Reasoning Fallback)"]
+    end
+
+    subgraph Tier3["Deterministic Fallback"]
+        RULE["Keyword Rules Classifier
+(11-Domain Regex Engine)"]
+    end
+
+    REQ --> BASE
+    BASE -->|Primary Path| GEMINI
+    GEMINI -->|Timeout / API Error / Rate Limit| CLAUDE
+    CLAUDE -->|Provider Outage| RULE
+    RULE -->|Guaranteed Output| Out["Validated Classification"]
+    GEMINI -->|Success| Out
+    CLAUDE -->|Success| Out

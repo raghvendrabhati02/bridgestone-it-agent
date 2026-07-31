@@ -1,0 +1,42 @@
+flowchart TB
+    subgraph Host["Bridgestone Enterprise Host Node (Production)"]
+        subgraph Net["Docker Bridge Network: bridgestone-network"]
+            subgraph ProxyTier["Ingress Layer"]
+                NGINX["bridgestone-nginx-prod
+(Nginx 1.25 Alpine)
+Ports: 80, 443 Exposed"]
+            end
+
+            subgraph AppTier["Application Tier (Internal Network)"]
+                FE["bridgestone-frontend-prod
+(Next.js 16 Node Server)
+Port: 3000 Internal"]
+                BE["bridgestone-backend-prod
+(FastAPI + Uvicorn Async Engine)
+Port: 8000 Internal"]
+            end
+
+            subgraph DataTier["Data Tier (Internal Network)"]
+                PG[("bridgestone-postgres-prod
+(PostgreSQL 14 DB)
+Port: 5432 Internal")]
+                REDIS[("bridgestone-redis-prod
+(Redis Cache Server)
+Port: 6379 Internal")]
+            end
+
+            subgraph ObsTier["Observability Tier (Restricted)"]
+                PROM["Prometheus Server
+Port: 9090"]
+                GRAF["Grafana Dashboard
+Port: 3001"]
+            end
+        end
+    end
+
+    NGINX --> FE
+    NGINX --> BE
+    BE --> PG
+    BE --> REDIS
+    BE --> PROM
+    PROM --> GRAF

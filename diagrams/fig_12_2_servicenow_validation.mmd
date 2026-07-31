@@ -1,0 +1,19 @@
+flowchart TB
+    A["Raw LLM Classification Output"] --> B["Field Mapping Service
+(Alias Normalization)"]
+    B --> C{"Metadata Validator
+(Check Choice Values)"}
+    
+    C -->|Valid Metadata| D["Incident Enrichment Service
+(Impact / Urgency Rules)"]
+    C -->|Invalid / Unknown Choice| E["Local Taxonomy Fallback
+(incident_config.json)"]
+    E --> D
+
+    D --> F["ServiceNow Client
+(Payload Assembly)"]
+    F --> G["ServiceNow Table API
+(POST /api/now/table/incident)"]
+    G --> H["Sys_ID & INC Number Returned"]
+    H --> I["Persist to Local Platform DB
+(servicenow_id / servicenow_number)"]

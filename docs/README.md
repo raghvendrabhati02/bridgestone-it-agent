@@ -10,7 +10,7 @@ This folder contains all technical and user-facing documentation for the Bridges
 
 | Document | Audience | Description |
 |---|---|---|
-| [architecture.md](./architecture.md) | Developer | System tiers, service map, middleware chain, ticket lifecycle, SLA engine |
+| [Architecture.md](./Architecture.md) | Developer | System tiers, service map, middleware chain, ticket lifecycle, SLA engine |
 | [ai-workflow.md](./ai-workflow.md) | Developer | LangGraph pipeline (18 nodes), classification, routing logic, privileged install flow |
 | [servicenow.md](./servicenow.md) | Developer | Incident pipeline, OAuth2 auth, metadata validation, field mapping |
 | [Database.md](./Database.md) | Developer | All ORM models, schema, auto-migration, connection configuration |
