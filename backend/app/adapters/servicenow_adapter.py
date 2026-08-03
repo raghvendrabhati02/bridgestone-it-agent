@@ -1,12 +1,12 @@
 import os
 import logging
-from app.adapters.base_adapter import BaseAdapter
+from app.adapters.itsm_adapter import ITSMAdapter
 
 logger = logging.getLogger("it-agent-backend")
 
 from app.core.retry_helper import with_retry
 
-class ServiceNowAdapter(BaseAdapter):
+class ServiceNowAdapter(ITSMAdapter):
     def __init__(self):
         use_mock = os.getenv("USE_MOCK_SERVICENOW", "true").lower() == "true"
         if use_mock:
@@ -81,10 +81,25 @@ class ServiceNowAdapter(BaseAdapter):
         self.connected_state = False
         return True
 
-    def create_incident(self, category: str, description: str, assignment_group: str) -> dict:
+    def create_incident(
+        self,
+        category: str,
+        description: str,
+        assignment_group: str = None,
+        short_description: str = None,
+        caller_id: str = None,
+        priority: str = None,
+        **kwargs
+    ) -> dict:
         return self.client.create_incident(category, description, assignment_group)
 
-    def create_service_request(self, category: str, description: str, action_type: str) -> dict:
+    def create_service_request(
+        self,
+        category: str,
+        description: str,
+        action_type: str = None,
+        **kwargs
+    ) -> dict:
         return self.client.create_request(category, description, action_type)
 
     def get_incident(self, sys_id: str) -> dict:
@@ -93,7 +108,7 @@ class ServiceNowAdapter(BaseAdapter):
     def update_incident(self, sys_id: str, updates: dict) -> dict:
         return self.client.update_incident(sys_id, updates)
 
-    def close_incident(self, sys_id: str) -> dict:
+    def close_incident(self, sys_id: str, resolution_notes: str = None) -> dict:
         return self.client.close_incident(sys_id)
 
     def get_request(self, sys_id: str) -> dict:

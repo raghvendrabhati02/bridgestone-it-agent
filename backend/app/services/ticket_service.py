@@ -43,7 +43,8 @@ from app.services.sla_service import calculate_priority, calculate_sla, store_sl
 from app.services.itsm_classifier import classify_request
 from app.database.session import get_db
 from app.database.repositories.ticket_repository import TicketRepository
-from app.services.servicenow_service import ServiceNowService
+import os
+from app.adapters.adapter_factory import get_itsm_adapter
 from app.models.servicenow_models import IncidentCreateRequest
 from app.services.field_mapping_service import FieldMappingService, FieldMappingError
 from app.services.incident_enrichment_service import IncidentMetadata
@@ -298,23 +299,38 @@ def _create_ticket_internal(
         local_ticket_id, request_type, approval_status, status,
     )
 
-    # ── ServiceNow incident creation ───────────────────────────────────────────
+    # ── ITSM Platform / ServiceNow incident creation ───────────────────────────
+    from app.services.servicenow_service import get_servicenow_service
     sn_service = servicenow_service or get_servicenow_service()
     servicenow_id     = "N/A"
     servicenow_number = None
-    # presentation_id starts as the local ID; overwritten with SN number on success
     presentation_id   = local_ticket_id
 
-    logger.info(
-        "[ticket_service.create_ticket]: ServiceNow enabled=%s, use_mock=%s, "
-        "instance_url=%s, correlation_id=%s",
-        sn_service.enabled,
-        getattr(sn_service, "use_mock", "unknown"),
-        getattr(sn_service, "instance_url", "unknown"),
-        corr_id or "<none>",
-    )
+    itsm_provider = os.getenv("ITSM_PROVIDER", "mock").lower()
 
-    if sn_service.enabled:
+    if itsm_provider == "mock":
+        try:
+            itsm_adapter = get_itsm_adapter()
+            itsm_res = itsm_adapter.create_incident(
+                category=category,
+                description=final_description,
+                short_description=final_short_desc,
+                assignment_group=assigned_team,
+                caller_id=created_by or "employee",
+                priority=priority,
+            )
+            if itsm_res.get("success", True):
+                servicenow_id = itsm_res.get("sys_id", "N/A")
+                servicenow_number = itsm_res.get("number") or itsm_res.get("ticket_id") or local_ticket_id
+                presentation_id = servicenow_number
+                logger.info(
+                    "[ticket_service.create_ticket]: Mock ITSM incident created: %s (sys_id=%s)",
+                    servicenow_number, servicenow_id
+                )
+        except Exception as mock_err:
+            logger.error("[ticket_service.create_ticket]: Failed to create Mock ITSM ticket: %s", mock_err)
+
+    elif sn_service.enabled:
         is_valid, err_msg = sn_service.validate_configuration()
         logger.info(
             "[ticket_service.create_ticket]: SN config validation: valid=%s, msg='%s'",

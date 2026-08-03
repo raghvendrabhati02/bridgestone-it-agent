@@ -5,16 +5,18 @@ def get_assignment_team(category: str) -> str:
     cat_upper = category.strip().upper()
     if cat_upper in ("VPN", "NETWORK"):
         return "Network Team"
-    elif cat_upper == "OUTLOOK":
-        return "Messaging Team"
-    elif cat_upper in ("PASSWORD_RESET", "SOFTWARE_INSTALLATION", "PRINTER"):
-        return "Desktop Support Team"
-    elif cat_upper == "SAP":
-        return "SAP Support Team"
-    elif cat_upper == "GENERAL":
-        return "IT Support Team"
+    elif cat_upper in ("OUTLOOK", "TEAMS", "MICROSOFT_365"):
+        return "Microsoft 365 Team"
+    elif cat_upper in ("SOFTWARE_INSTALLATION", "SOFTWARE"):
+        return "Software Support"
+    elif cat_upper in ("PRINTER", "HARDWARE"):
+        return "Hardware Support"
+    elif cat_upper in ("SECURITY", "ACCESS_CONTROL"):
+        return "Security Team"
+    elif cat_upper in ("PASSWORD_RESET", "GENERAL", "SERVICE_DESK"):
+        return "Service Desk"
     else:
-        return "IT Support Team"
+        return "Service Desk"
 
 def assign_team(category: str) -> dict:
     """

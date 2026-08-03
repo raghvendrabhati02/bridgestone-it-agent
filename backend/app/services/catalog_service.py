@@ -5,12 +5,12 @@ from app.database.session import get_db
 from app.database.repositories.catalog_repository import CatalogRepository
 from app.database.repositories.request_repository import RequestRepository
 from app.services.notification_service import create_notification
-from app.adapters.servicenow_adapter import ServiceNowAdapter
+from app.adapters.adapter_factory import get_itsm_adapter
 from app.database.models.rbac_audit_log import RbacAuditLog
 from app.database.models.approval_history import ApprovalHistory
 
 logger = logging.getLogger("it-agent-backend")
-servicenow_client = ServiceNowAdapter()
+servicenow_client = get_itsm_adapter()
 
 request_counter = 0
 

@@ -86,17 +86,13 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("ServiceNow Integration is disabled (SERVICENOW_ENABLED=false)")
 
-    # Phase 6.2 ServiceNow Metadata Cache Startup Sync & Validation
+    # Initialize Mock ITSM database tables and seed data
     try:
-        from app.services.servicenow_metadata_cache import ServiceNowMetadataCache
-        cache = ServiceNowMetadataCache.get_instance()
-        synced = cache.sync()
-        if synced and cache.source == "live_servicenow":
-            logger.info("✓ ServiceNow Metadata Synchronized from Live Instance (%s)", cache.last_refresh_iso)
-        else:
-            logger.info("WARNING: ServiceNow Metadata using local configuration fallback (%s)", cache.last_refresh_iso)
-    except Exception as meta_err:
-        logger.warning("WARNING: ServiceNow Metadata startup sync exception (%s)", meta_err)
+        from app.mock_itsm.database import init_mock_itsm_db
+        init_mock_itsm_db()
+        logger.info("✓ Mock ITSM Platform initialized successfully.")
+    except Exception as mock_init_err:
+        logger.warning("WARNING: Mock ITSM initialization exception: %s", mock_init_err)
 
     # ── Phase 5: Mark application as ready ───────────────────────────────────
     _app_ready = True
@@ -544,9 +540,11 @@ def system_status(
         }
     }
 
-# Include Auth Router
+# Include Auth & Mock ITSM Routers
+from app.mock_itsm.api import router as mock_itsm_router
 app.include_router(auth_router)
 app.include_router(analytics_router)
+app.include_router(mock_itsm_router)
 
 
 class ChatRequest(BaseModel):

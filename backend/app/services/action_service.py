@@ -1,11 +1,11 @@
 import datetime
 import logging
-from app.adapters.servicenow_adapter import ServiceNowAdapter
+from app.adapters.adapter_factory import get_itsm_adapter
 
 logger = logging.getLogger("it-agent-backend")
 
-# Initialize ServiceNow adapter client
-servicenow_client = ServiceNowAdapter()
+# Initialize ITSM adapter client (defaults to Mock ITSM or ServiceNow based on ITSM_PROVIDER)
+servicenow_client = get_itsm_adapter()
 
 actions = []
 action_counter = 0

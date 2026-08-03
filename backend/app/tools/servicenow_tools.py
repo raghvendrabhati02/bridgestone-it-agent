@@ -1,8 +1,8 @@
 import logging
-from app.adapters.servicenow_adapter import ServiceNowAdapter
+from app.adapters.adapter_factory import get_itsm_adapter
 
 logger = logging.getLogger("it-agent-backend")
-adapter = ServiceNowAdapter()
+adapter = get_itsm_adapter()
 
 def create_servicenow_incident(category: str, description: str, assignment_group: str) -> dict:
     """
