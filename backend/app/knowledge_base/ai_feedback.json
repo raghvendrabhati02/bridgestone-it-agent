@@ -88,5 +88,32 @@
     "comment": "Fast help!",
     "ticket_id": "",
     "timestamp": "2026-08-03T06:12:48.816793Z"
+  },
+  {
+    "id": "fb-20260803163215171",
+    "session_id": "sess-101",
+    "rating": "helpful",
+    "user_id": "employee1",
+    "comment": "Great job!",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T16:32:15.171674Z"
+  },
+  {
+    "id": "fb-20260803163215178",
+    "session_id": "sess-102",
+    "rating": "not_helpful",
+    "user_id": "employee2",
+    "comment": "Need more details",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T16:32:15.178199Z"
+  },
+  {
+    "id": "fb-20260803163215405",
+    "session_id": "sess-201",
+    "rating": "helpful",
+    "user_id": "employee1",
+    "comment": "Fast help!",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T16:32:15.405925Z"
   }
 ]

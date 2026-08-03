@@ -1,10 +1,12 @@
 import logging
 import os
+import sys
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+
 
 from app.services.conversation_service import handle_chat_turn
 from app.services.ticket_service import (
@@ -100,6 +102,40 @@ async def lifespan(app: FastAPI):
         logger.info("✓ Mock ITSM Platform initialized successfully.")
     except Exception as mock_init_err:
         logger.warning("WARNING: Mock ITSM initialization exception: %s", mock_init_err)
+
+    # Automatically seed main authentication demo users on fresh deployments
+    try:
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+
+        from app.database.base import Base
+        import app.database.models.user
+        import app.database.models.ticket
+        import app.database.models.notification
+        import app.database.models.conversation
+        from app.database.connection import engine, SessionLocal
+        from app.database.models.user import User
+        from reset_demo_data import seed_users
+
+        # Ensure all database models are registered and tables exist before checking User count
+        Base.metadata.create_all(bind=engine)
+
+        db = SessionLocal()
+        try:
+            if db.query(User).count() == 0:
+                logger.info("Database empty → Seeding demo users...")
+                seed_users(db)
+                logger.info("Demo users created successfully.")
+            else:
+                logger.info("Existing users detected → skipping seed.")
+        finally:
+            db.close()
+    except Exception as auto_seed_err:
+        logger.error("Failed to auto-seed demo users on startup: %s", auto_seed_err)
+
+
+
 
     # ── Phase 5: Mark application as ready ───────────────────────────────────
     _app_ready = True

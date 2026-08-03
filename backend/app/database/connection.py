@@ -27,12 +27,20 @@ try:
             pool_recycle=1800,
             pool_pre_ping=True
         )
+    elif DATABASE_URL.startswith("sqlite"):
+        from sqlalchemy.pool import StaticPool
+        engine = create_engine(
+            DATABASE_URL,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool if ":memory:" in DATABASE_URL else None
+        )
     else:
         engine = create_engine(DATABASE_URL)
     
     with engine.connect() as conn:
         pass
     logger.info("Database connection established successfully.")
+
 except Exception as e:
     logger.warning("Failed to connect to configured database (%s): %s — Falling back to SQLite file database.", DATABASE_URL, e)
     DATABASE_URL = "sqlite:///./bridgestone_it_agent.db"
