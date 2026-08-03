@@ -115,3 +115,21 @@ def get_engine_observability(
     logger.info("FastAPI Endpoint GET '/api/analytics/engine-observability': Requested by user %s", current_user.username)
     return analytics_service.get_engine_observability_metrics(db)
 
+
+@router.get("/approvals")
+def get_approvals(
+    current_user: User = Depends(admin_or_manager),
+    db: Session = Depends(get_db_context)
+):
+    logger.info("FastAPI Endpoint GET '/api/analytics/approvals': Requested by user %s", current_user.username)
+    return analytics_service.get_approval_metrics(db)
+
+
+@router.get("/assignment-groups")
+def get_assignment_groups(
+    current_user: User = Depends(admin_or_manager),
+    db: Session = Depends(get_db_context)
+):
+    logger.info("FastAPI Endpoint GET '/api/analytics/assignment-groups': Requested by user %s", current_user.username)
+    return analytics_service.get_assignment_group_metrics(db)
+

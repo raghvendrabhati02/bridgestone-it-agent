@@ -4351,5 +4351,62 @@ def update_ticket_details(
     return {"message": "Ticket updated successfully", "ticket_id": ticket_id}
 
 
+# ── Sprint 6 Analytics & SLA Endpoints ────────────────────────────────────────
+
+@app.get("/analytics/overview")
+@app.get("/api/analytics/overview")
+def api_get_analytics_overview(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services import analytics_service
+    return analytics_service.get_overview_metrics(db)
+
+@app.get("/analytics/tickets")
+@app.get("/api/analytics/tickets")
+def api_get_analytics_tickets(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services import analytics_service
+    return analytics_service.get_ticket_metrics(db)
+
+@app.get("/analytics/sla")
+@app.get("/api/analytics/sla")
+def api_get_analytics_sla(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services import analytics_service
+    return analytics_service.get_sla_metrics(db)
+
+@app.get("/analytics/approvals")
+@app.get("/api/analytics/approvals")
+def api_get_analytics_approvals(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services import analytics_service
+    return analytics_service.get_approval_metrics(db)
+
+@app.get("/analytics/assignment-groups")
+@app.get("/api/analytics/assignment-groups")
+def api_get_analytics_assignment_groups(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services import analytics_service
+    return analytics_service.get_assignment_group_metrics(db)
+
+@app.get("/analytics/users")
+@app.get("/api/analytics/users")
+def api_get_analytics_users(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    from app.services import analytics_service
+    return analytics_service.get_user_metrics(db)
+
+
 
 
