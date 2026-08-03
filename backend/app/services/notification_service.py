@@ -246,7 +246,7 @@ class NotificationService:
         return results
 
     @classmethod
-    def notify_resolution(cls, ticket: Any, db: Optional[Session] = None) -> List[Dict[str, Any]]:
+    def notify_resolution(cls, ticket: Any, resolved_by: Optional[str] = None, db: Optional[Session] = None) -> List[Dict[str, Any]]:
         """Triggered when a ticket is resolved."""
         ticket_id = _get_ticket_attr(ticket, "ticket_id") or "UNKNOWN"
         creator = _get_ticket_attr(ticket, "created_by")

@@ -4,6 +4,7 @@
 import { apiFetch, NetworkError } from "@/lib/apiClient";
 import { useState, useEffect } from "react";
 import IncidentView from "./IncidentView";
+import TicketDetailsModal from "./TicketDetailsModal";
 import {
   X, MessageSquare, User, CheckCircle2, AlertTriangle, Send, Loader2,
   Calendar, FileText, ShieldAlert, Shield, ShieldCheck, ShieldOff,
@@ -248,8 +249,14 @@ export default function MyTicketsView({ tickets, token }: MyTicketsViewProps) {
         />
       </div>
 
-      {/* Side Detail Panel Drawer */}
-      {selectedTicketId && (
+      {/* Unified Ticket Details Modal */}
+      <TicketDetailsModal
+        isOpen={Boolean(selectedTicketId)}
+        onClose={() => setSelectedTicketId(null)}
+        ticketId={selectedTicketId}
+        userRole="EMPLOYEE"
+        token={token}
+      />
         <div className="w-full md:w-[480px] bg-white border-l border-[#E2E8F0] h-full flex flex-col shadow-lg z-30 relative flex-shrink-0 font-sans">
           {/* Header */}
           <div className="p-4 border-b border-[#E2E8F0] flex items-center justify-between bg-[#F8FAFC]">

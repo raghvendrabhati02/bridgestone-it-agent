@@ -26,6 +26,7 @@ import {
   RequestTypePill,
   ApprovalPill
 } from "./shared/UIComponents";
+import TicketDetailsModal from "./TicketDetailsModal";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Interfaces
@@ -1262,6 +1263,17 @@ export default function ManagerPortal({ user, token }: ManagerPortalProps) {
 
         </div>
       </main>
+
+      {/* Unified Ticket Details Modal for Manager */}
+      <TicketDetailsModal
+        isOpen={Boolean(selectedTicket)}
+        onClose={() => setSelectedTicket(null)}
+        ticketId={selectedTicket?.ticket_id || null}
+        userRole="MANAGER"
+        currentUsername={user?.username || "manager"}
+        token={token}
+        onTicketUpdated={() => fetchTickets(true)}
+      />
 
     </div>
   );

@@ -31,6 +31,7 @@ import {
   RequestTypePill,
   ApprovalPill
 } from "./shared/UIComponents";
+import TicketDetailsModal from "./TicketDetailsModal";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Interfaces
@@ -1614,6 +1615,16 @@ export default function ITSMQueueView({ user, token }: ITSMQueueViewProps) {
           )}
         </div>
       </main>
+      {/* Unified Ticket Details Modal for Admin */}
+      <TicketDetailsModal
+        isOpen={Boolean(selectedTicket)}
+        onClose={() => setSelectedTicket(null)}
+        ticketId={selectedTicket?.ticket_id || null}
+        userRole="ADMIN"
+        currentUsername={user?.username || "admin"}
+        token={token}
+        onTicketUpdated={() => fetchTickets(true)}
+      />
     </div>
   );
 }

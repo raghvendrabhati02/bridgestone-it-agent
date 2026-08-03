@@ -814,6 +814,7 @@ def chat(request: ChatRequest, raw_request: Request, current_user: User = Depend
 
 
 @app.get("/tickets")
+@app.get("/my-tickets")
 def list_tickets(
     status: str | None = None,
     priority: str | None = None,
@@ -1221,6 +1222,298 @@ def run_ticket_action(
         )
         db.commit()
         return {"message": "Request rejected.", "status": "REJECTED"}
+
+    # ── ITSM: resolve ────────────────────────────────────────────────────────
+    elif action == "resolve":
+        ticket.status = "RESOLVED"
+        ticket.resolved_at = datetime.datetime.utcnow()
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_RESOLVED",
+            actor=current_user.username,
+            action="resolve",
+            description=f"Ticket resolved by {current_user.username}. Resolution: {request.note or 'Issue resolved.'}"
+        )
+        from app.services.notification_service import NotificationService
+        NotificationService.notify_resolution(ticket=ticket, resolved_by=current_user.username, db=db)
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="RESOLVED",
+            details={"action": "resolve", "note": request.note or ""}
+        )
+        db.commit()
+        return {"message": "Ticket resolved successfully.", "status": "RESOLVED"}
+
+    # ── ITSM: close ──────────────────────────────────────────────────────────
+    elif action == "close":
+        ticket.status = "CLOSED"
+        ticket.closed_at = datetime.datetime.utcnow()
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_CLOSED",
+            actor=current_user.username,
+            action="close",
+            description=f"Ticket closed by {current_user.username}."
+        )
+        from app.services.notification_service import NotificationService
+        NotificationService.notify_status_change(ticket=ticket, new_status="CLOSED", actor=current_user.username, db=db)
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="CLOSED",
+            details={"action": "close", "note": request.note or ""}
+        )
+        db.commit()
+        return {"message": "Ticket closed successfully.", "status": "CLOSED"}
+
+    # ── ITSM: reopen ─────────────────────────────────────────────────────────
+    elif action == "reopen":
+        ticket.status = "IN_PROGRESS"
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_REOPENED",
+            actor=current_user.username,
+            action="reopen",
+            description=f"Ticket reopened by {current_user.username}."
+        )
+        from app.services.notification_service import NotificationService
+        NotificationService.notify_status_change(ticket=ticket, new_status="IN_PROGRESS", actor=current_user.username, db=db)
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="IN_PROGRESS",
+            details={"action": "reopen", "note": request.note or ""}
+        )
+        db.commit()
+        return {"message": "Ticket reopened.", "status": "IN_PROGRESS"}
+
+    # ── ITSM: assign / reassign ──────────────────────────────────────────────
+    elif action in ("assign", "reassign"):
+        if getattr(request, "team", None):
+            ticket.assigned_team = request.team
+            ticket.assignment_group = request.team
+        if getattr(request, "engineer", None):
+            ticket.assigned_engineer = request.engineer
+        ticket.status = "ASSIGNED"
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_ASSIGNED",
+            actor=current_user.username,
+            action=action,
+            description=f"Ticket reassigned to team '{ticket.assigned_team}' / engineer '{ticket.assigned_engineer}' by {current_user.username}."
+        )
+        from app.services.notification_service import NotificationService
+        NotificationService.notify_assignment(ticket=ticket, db=db)
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="ASSIGNED",
+            details={"action": action, "team": ticket.assigned_team, "engineer": ticket.assigned_engineer}
+        )
+        db.commit()
+        return {"message": "Ticket assigned successfully.", "status": "ASSIGNED"}
+
+    # ── ITSM: start_work ─────────────────────────────────────────────────────
+    elif action == "start_work":
+        ticket.status = "IN_PROGRESS"
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="WORK_STARTED",
+            actor=current_user.username,
+            action="start_work",
+            description=f"Work started on ticket by {current_user.username}."
+        )
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="IN_PROGRESS",
+            details={"action": "start_work"}
+        )
+        db.commit()
+        return {"message": "Ticket work started.", "status": "IN_PROGRESS"}
+
+    # ── ITSM: put_on_hold / pending ──────────────────────────────────────────
+    elif action in ("put_on_hold", "pending"):
+        ticket.status = "WAITING"
+        db.commit()
+
+        from app.services.timeline_service import TimelineService
+        TimelineService.log_event(
+            db=db,
+            ticket_id=ticket_id,
+            event_type="TICKET_ON_HOLD",
+            actor=current_user.username,
+            action=action,
+            description=f"Ticket placed on hold by {current_user.username}. Reason: {request.note or 'Awaiting customer response.'}"
+        )
+        log_rbac_event(
+            user=current_user.username, role=current_user.role,
+            action="update_ticket_lifecycle", ticket_id=ticket_id,
+            old_state=old_status, new_state="WAITING",
+            details={"action": action, "note": request.note or ""}
+        )
+        db.commit()
+        return {"message": "Ticket placed on hold.", "status": "WAITING"}
+
+
+# ── Sprint 5 Admin Endpoints ─────────────────────────────────────────────────
+
+@app.get("/api/itsm/users")
+def get_itsm_users(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Returns system users for Admin Portal Users view."""
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only Administrators can view users.")
+    
+    users = db.query(User).order_by(User.username.asc()).all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "role": u.role,
+            "is_active": u.is_active,
+            "created_at": u.created_at.isoformat() + "Z" if u.created_at else None
+        }
+        for u in users
+    ]
+
+@app.get("/api/itsm/assignment-groups")
+def get_itsm_assignment_groups(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Returns assignment groups and assigned workload metrics."""
+    if current_user.role not in ("ADMIN", "MANAGER"):
+        raise HTTPException(status_code=403, detail="Only Managers and Admins can view assignment groups.")
+    
+    groups = [
+        {"name": "Helpdesk", "manager": "mgr_sarah", "engineers": ["Emily Watson (Helpdesk L2)", "John Helpdesk", "Sarah L1"]},
+        {"name": "Network", "manager": "mgr_sarah", "engineers": ["Alex Net", "Dave Router"]},
+        {"name": "Security", "manager": "admin_alex", "engineers": ["Security Officer", "Elena Sec"]},
+        {"name": "Hardware", "manager": "mgr_sarah", "engineers": ["Hardware Tech", "Marcus Repair"]},
+        {"name": "Database", "manager": "admin_alex", "engineers": ["DBA Lead", "Sql Master"]},
+        {"name": "Access Management", "manager": "admin_alex", "engineers": ["IAM Admin", "Access Specialist"]},
+        {"name": "Cloud Infrastructure", "manager": "admin_alex", "engineers": ["Cloud Ops", "Aws DevOps"]}
+    ]
+    
+    from app.database.models.ticket import Ticket
+    open_tickets = db.query(Ticket).filter(Ticket.status.notin_(["RESOLVED", "CLOSED", "REJECTED"])).all()
+    group_counts = {}
+    for t in open_tickets:
+        grp = t.assignment_group or t.assigned_team or "Helpdesk"
+        group_counts[grp] = group_counts.get(grp, 0) + 1
+
+    for g in groups:
+        g["open_tickets_count"] = group_counts.get(g["name"], 0)
+        g["engineer_count"] = len(g["engineers"])
+
+    return {"assignment_groups": groups}
+
+@app.delete("/tickets/{ticket_id}")
+def delete_ticket(
+    ticket_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Allows Admin to delete a ticket."""
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only Administrators can delete tickets.")
+    
+    from app.database.models.ticket import Ticket
+    from app.services.rbac_audit_service import log_rbac_event
+
+    ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail=f"Ticket '{ticket_id}' not found.")
+    
+    log_rbac_event(
+        user=current_user.username,
+        role=current_user.role,
+        action="delete_ticket",
+        ticket_id=ticket_id,
+        old_state=ticket.status,
+        new_state="DELETED",
+        details={"deleted_by": current_user.username}
+    )
+    
+    db.delete(ticket)
+    db.commit()
+    logger.info("Admin %s deleted ticket %s", current_user.username, ticket_id)
+    return {"message": f"Ticket '{ticket_id}' has been permanently deleted.", "ticket_id": ticket_id}
+
+@app.post("/tickets/{ticket_id}/update")
+def update_ticket_details(
+    ticket_id: str,
+    updates: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Allows Admin to update ticket fields."""
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only Administrators can update full ticket details.")
+    
+    from app.database.models.ticket import Ticket
+    from app.services.rbac_audit_service import log_rbac_event
+    import datetime
+
+    ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail=f"Ticket '{ticket_id}' not found.")
+
+    old_state = ticket.status
+    if "category" in updates and updates["category"]:
+        ticket.category = str(updates["category"])
+    if "priority" in updates and updates["priority"]:
+        ticket.priority = str(updates["priority"]).upper()
+    if "status" in updates and updates["status"]:
+        ticket.status = str(updates["status"]).upper()
+    if "assigned_team" in updates and updates["assigned_team"]:
+        ticket.assigned_team = str(updates["assigned_team"])
+        ticket.assignment_group = str(updates["assigned_team"])
+    if "assigned_engineer" in updates and updates["assigned_engineer"]:
+        ticket.assigned_engineer = str(updates["assigned_engineer"])
+    if "issue_description" in updates and updates["issue_description"]:
+        ticket.issue_description = str(updates["issue_description"])
+    
+    ticket.updated_at = datetime.datetime.utcnow()
+    db.commit()
+
+    log_rbac_event(
+        user=current_user.username,
+        role=current_user.role,
+        action="update_ticket_details",
+        ticket_id=ticket_id,
+        old_state=old_state,
+        new_state=ticket.status,
+        details=updates
+    )
+    db.commit()
+    logger.info("Admin %s updated ticket %s: %s", current_user.username, ticket_id, updates)
+    return {"message": "Ticket updated successfully", "ticket_id": ticket_id}
 
     # Otherwise we are updating fields
     new_status = old_status
@@ -3917,6 +4210,145 @@ def get_active_provider(
         "model": getattr(provider, "_model_name", "unknown"),
         "ready": provider.is_ready()
     }
+
+
+# ── Sprint 5 Admin Endpoints ─────────────────────────────────────────────────
+
+@app.get("/api/itsm/users")
+def get_itsm_users(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Returns system users for Admin Portal Users view."""
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only Administrators can view users.")
+    
+    users = db.query(User).order_by(User.username.asc()).all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "role": u.role,
+            "is_active": u.is_active,
+            "created_at": u.created_at.isoformat() + "Z" if u.created_at else None
+        }
+        for u in users
+    ]
+
+@app.get("/api/itsm/assignment-groups")
+def get_itsm_assignment_groups(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Returns assignment groups and assigned workload metrics."""
+    if current_user.role not in ("ADMIN", "MANAGER"):
+        raise HTTPException(status_code=403, detail="Only Managers and Admins can view assignment groups.")
+    
+    groups = [
+        {"name": "Helpdesk", "manager": "mgr_sarah", "engineers": ["Emily Watson (Helpdesk L2)", "John Helpdesk", "Sarah L1"]},
+        {"name": "Network", "manager": "mgr_sarah", "engineers": ["Alex Net", "Dave Router"]},
+        {"name": "Security", "manager": "admin_alex", "engineers": ["Security Officer", "Elena Sec"]},
+        {"name": "Hardware", "manager": "mgr_sarah", "engineers": ["Hardware Tech", "Marcus Repair"]},
+        {"name": "Database", "manager": "admin_alex", "engineers": ["DBA Lead", "Sql Master"]},
+        {"name": "Access Management", "manager": "admin_alex", "engineers": ["IAM Admin", "Access Specialist"]},
+        {"name": "Cloud Infrastructure", "manager": "admin_alex", "engineers": ["Cloud Ops", "Aws DevOps"]}
+    ]
+    
+    from app.database.models.ticket import Ticket
+    open_tickets = db.query(Ticket).filter(Ticket.status.notin_(["RESOLVED", "CLOSED", "REJECTED"])).all()
+    group_counts = {}
+    for t in open_tickets:
+        grp = t.assignment_group or t.assigned_team or "Helpdesk"
+        group_counts[grp] = group_counts.get(grp, 0) + 1
+
+    for g in groups:
+        g["open_tickets_count"] = group_counts.get(g["name"], 0)
+        g["engineer_count"] = len(g["engineers"])
+
+    return {"assignment_groups": groups}
+
+@app.delete("/tickets/{ticket_id}")
+def delete_ticket(
+    ticket_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Allows Admin to delete a ticket."""
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only Administrators can delete tickets.")
+    
+    from app.database.models.ticket import Ticket
+    from app.services.rbac_audit_service import log_rbac_event
+
+    ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail=f"Ticket '{ticket_id}' not found.")
+    
+    log_rbac_event(
+        user=current_user.username,
+        role=current_user.role,
+        action="delete_ticket",
+        ticket_id=ticket_id,
+        old_state=ticket.status,
+        new_state="DELETED",
+        details={"deleted_by": current_user.username}
+    )
+    
+    db.delete(ticket)
+    db.commit()
+    logger.info("Admin %s deleted ticket %s", current_user.username, ticket_id)
+    return {"message": f"Ticket '{ticket_id}' has been permanently deleted.", "ticket_id": ticket_id}
+
+@app.post("/tickets/{ticket_id}/update")
+def update_ticket_details(
+    ticket_id: str,
+    updates: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    """Allows Admin to update ticket fields."""
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only Administrators can update full ticket details.")
+    
+    from app.database.models.ticket import Ticket
+    from app.services.rbac_audit_service import log_rbac_event
+    import datetime
+
+    ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail=f"Ticket '{ticket_id}' not found.")
+
+    old_state = ticket.status
+    if "category" in updates and updates["category"]:
+        ticket.category = str(updates["category"])
+    if "priority" in updates and updates["priority"]:
+        ticket.priority = str(updates["priority"]).upper()
+    if "status" in updates and updates["status"]:
+        ticket.status = str(updates["status"]).upper()
+    if "assigned_team" in updates and updates["assigned_team"]:
+        ticket.assigned_team = str(updates["assigned_team"])
+        ticket.assignment_group = str(updates["assigned_team"])
+    if "assigned_engineer" in updates and updates["assigned_engineer"]:
+        ticket.assigned_engineer = str(updates["assigned_engineer"])
+    if "issue_description" in updates and updates["issue_description"]:
+        ticket.issue_description = str(updates["issue_description"])
+    
+    ticket.updated_at = datetime.datetime.utcnow()
+    db.commit()
+
+    log_rbac_event(
+        user=current_user.username,
+        role=current_user.role,
+        action="update_ticket_details",
+        ticket_id=ticket_id,
+        old_state=old_state,
+        new_state=ticket.status,
+        details=updates
+    )
+    db.commit()
+    logger.info("Admin %s updated ticket %s: %s", current_user.username, ticket_id, updates)
+    return {"message": "Ticket updated successfully", "ticket_id": ticket_id}
 
 
 
