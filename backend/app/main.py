@@ -953,9 +953,16 @@ def list_tickets(
     return results
 
 @app.post("/ticket")
-def make_ticket(request: TicketCreateRequest, current_user: User = Depends(get_current_user)):
+def make_ticket(
+    request: TicketCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
     logger.info("FastAPI Endpoint POST '/ticket': Creating manual ticket for category=%s, user=%s", request.category, current_user.username)
-    return create_ticket(request.category, request.issue_description, created_by=current_user.username)
+    res = create_ticket(request.category, request.issue_description, created_by=current_user.username, db=db)
+    from app.services.notification_service import NotificationService
+    NotificationService.notify_ticket_created(res, user_id=current_user.username, db=db)
+    return res
 
 
 class TicketActionRequest(BaseModel):
@@ -1107,9 +1114,15 @@ def run_ticket_action(
             action="manager_approve",
             description=f"Request approved by manager {current_user.username}. Forwarded to admin queue."
         )
-        from app.services.notification_service import create_notification as _notif
-        _notif(ticket_id=ticket_id, recipient=ticket.created_by or "Employee",
-               message=f"Your request {ticket_id} has been approved by your manager and is now in the admin queue.")
+        from app.services.notification_service import NotificationService
+        NotificationService.notify_approval(
+            ticket=ticket,
+            approval_type=ticket.request_type or "SERVICE_REQUEST",
+            status="APPROVED",
+            approver=current_user.username,
+            requester=ticket.created_by,
+            db=db
+        )
         log_rbac_event(
             user=current_user.username, role=current_user.role,
             action="update_ticket_lifecycle", ticket_id=ticket_id,
@@ -1136,9 +1149,15 @@ def run_ticket_action(
             action="manager_reject",
             description=f"Request rejected by manager {current_user.username}. Reason: {request.note or 'No reason provided.'}"
         )
-        from app.services.notification_service import create_notification as _notif
-        _notif(ticket_id=ticket_id, recipient=ticket.created_by or "Employee",
-               message=f"Your request {ticket_id} has been rejected by your manager. Reason: {request.note or 'No reason provided.'}")
+        from app.services.notification_service import NotificationService
+        NotificationService.notify_approval(
+            ticket=ticket,
+            approval_type=ticket.request_type or "SERVICE_REQUEST",
+            status="REJECTED",
+            approver=current_user.username,
+            requester=ticket.created_by,
+            db=db
+        )
         log_rbac_event(
             user=current_user.username, role=current_user.role,
             action="update_ticket_lifecycle", ticket_id=ticket_id,
@@ -1455,11 +1474,8 @@ def run_ticket_action(
             description=f"Ticket fulfilled by {current_user.username}." if is_sr else f"Ticket resolved by {current_user.username}."
         )
 
-        create_notification(
-            ticket_id=ticket_id,
-            recipient=ticket.created_by or "Employee",
-            message=f"Ticket {ticket_id} has been marked as FULFILLED." if is_sr else f"Ticket {ticket_id} has been marked as RESOLVED."
-        )
+        from app.services.notification_service import NotificationService
+        NotificationService.notify_resolution(ticket, db=db)
         log_rbac_event(
             user=current_user.username,
             role=current_user.role,
@@ -2452,14 +2468,80 @@ def run_service_request_action(
 
 
 @app.get("/notifications")
-def list_notifications(current_user: User = Depends(get_current_user)):
+def list_notifications(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
     logger.info("FastAPI Endpoint GET '/notifications': Fetching notifications for user %s", current_user.username)
-    all_notifs = get_notifications()
-    if current_user.role in ("ADMIN", "MANAGER"):
-        return all_notifs
-    else:
-        # Filter notifications for this employee
-        return [n for n in all_notifs if n.get("recipient") in ("Employee", current_user.username)]
+    from app.services.notification_service import NotificationService
+    return NotificationService.get_user_notifications(
+        user_id=current_user.username,
+        user_role=current_user.role,
+        unread_only=False,
+        db=db
+    )
+
+@app.get("/notifications/unread")
+def list_unread_notifications(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    logger.info("FastAPI Endpoint GET '/notifications/unread': Fetching unread notifications for user %s", current_user.username)
+    from app.services.notification_service import NotificationService
+    unread_notifs = NotificationService.get_user_notifications(
+        user_id=current_user.username,
+        user_role=current_user.role,
+        unread_only=True,
+        db=db
+    )
+    return {
+        "unread_count": len(unread_notifs),
+        "notifications": unread_notifs
+    }
+
+@app.post("/notifications/read/{notification_id}")
+def mark_notification_read(
+    notification_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    logger.info("FastAPI Endpoint POST '/notifications/read/%s': User %s marking as read", notification_id, current_user.username)
+    from app.services.notification_service import NotificationService
+    try:
+        nid = int(notification_id)
+    except ValueError:
+        nid = notification_id
+    success = NotificationService.mark_as_read(notification_id=nid, user_id=current_user.username, db=db)
+    if not success:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"message": "Notification marked as read", "id": notification_id}
+
+@app.post("/notifications/read-all")
+def mark_all_notifications_read(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    logger.info("FastAPI Endpoint POST '/notifications/read-all': User %s marking all as read", current_user.username)
+    from app.services.notification_service import NotificationService
+    count = NotificationService.mark_all_as_read(user_id=current_user.username, user_role=current_user.role, db=db)
+    return {"message": f"Marked {count} notifications as read", "count": count}
+
+@app.delete("/notifications/{notification_id}")
+def delete_notification(
+    notification_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_context)
+):
+    logger.info("FastAPI Endpoint DELETE '/notifications/%s': User %s deleting notification", notification_id, current_user.username)
+    from app.services.notification_service import NotificationService
+    try:
+        nid = int(notification_id)
+    except ValueError:
+        nid = notification_id
+    success = NotificationService.delete_notification(notification_id=nid, user_id=current_user.username, db=db)
+    if not success:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"message": "Notification deleted", "id": notification_id}
 
 breached_tickets_set = set()
 

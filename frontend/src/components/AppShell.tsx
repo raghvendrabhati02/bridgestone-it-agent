@@ -5,6 +5,8 @@ import {
   LogOut, Clock, User as UserIcon, Sparkles, Bell, ChevronRight,
   Menu, X
 } from "lucide-react";
+import NotificationDrawer from "./NotificationDrawer";
+import { API_BASE_URL } from "../lib/apiClient";
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -94,6 +96,8 @@ export default function AppShell({
 }: AppShellProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState(false);
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
 
   useEffect(() => {
     const handleResize = () => {
@@ -106,6 +110,26 @@ export default function AppShell({
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    const fetchUnreadCount = async () => {
+      try {
+        const token = localStorage.getItem("access_token");
+        const res = await fetch(`${API_BASE_URL}/notifications/unread`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setUnreadNotifCount(data.unread_count || 0);
+        }
+      } catch {
+        // silent fallback
+      }
+    };
+    fetchUnreadCount();
+    const interval = setInterval(fetchUnreadCount, 15000);
+    return () => clearInterval(interval);
   }, []);
 
   const entries = getNavEntries(user?.role || "employee");
@@ -216,15 +240,17 @@ export default function AppShell({
 
           {/* Notification bell */}
           <button
+            onClick={() => setIsNotificationDrawerOpen(true)}
             className="relative p-2 rounded-lg text-[#64748B] hover:text-[#1E293B] hover:bg-[#F1F5F9] transition-all cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#E30613]"
             title="Notifications"
             aria-label="View notifications"
           >
             <Bell className="w-4 h-4" />
-            <span
-              className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-[#E30613] rounded-full ring-1 ring-white"
-              aria-label="You have new notifications"
-            />
+            {unreadNotifCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 bg-[#E30613] text-white text-[9px] font-bold rounded-full flex items-center justify-center ring-2 ring-white">
+                {unreadNotifCount > 99 ? "99+" : unreadNotifCount}
+              </span>
+            )}
           </button>
 
           {/* User chip */}
@@ -333,6 +359,13 @@ export default function AppShell({
         </main>
 
       </div>
+
+      <NotificationDrawer
+        isOpen={isNotificationDrawerOpen}
+        onClose={() => setIsNotificationDrawerOpen(false)}
+        token={null}
+        onNotificationCountChange={(count) => setUnreadNotifCount(count)}
+      />
     </div>
   );
 }

@@ -47,7 +47,7 @@ except Exception as e:
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Automatic lightweight schema migration check for tickets table columns
+# Automatic lightweight schema migration check for tickets and notifications table columns
 try:
     with engine.begin() as conn:
         from sqlalchemy import text
@@ -65,6 +65,13 @@ try:
             "approval_status": "VARCHAR(50)",
             "assignment_group": "VARCHAR(100)"
         }
+        notif_required_cols = {
+            "user_id": "VARCHAR(100)",
+            "type": "VARCHAR(50)",
+            "title": "VARCHAR(255)",
+            "is_read": "BOOLEAN DEFAULT 0",
+            "read_at": "DATETIME"
+        }
         if "sqlite" in DATABASE_URL:
             cursor = conn.execute(text("PRAGMA table_info(tickets)"))
             existing_cols = [row[1] for row in cursor.fetchall()]
@@ -76,10 +83,26 @@ try:
                             conn.execute(text(f"ALTER TABLE tickets ADD COLUMN {col_name} {col_type}"))
                         except Exception as col_err:
                             logger.warning("Failed to add column %s: %s", col_name, col_err)
+            
+            cursor_n = conn.execute(text("PRAGMA table_info(notifications)"))
+            existing_n_cols = [row[1] for row in cursor_n.fetchall()]
+            if existing_n_cols:
+                for col_name, col_type in notif_required_cols.items():
+                    if col_name not in existing_n_cols:
+                        logger.info("Migrating SQLite DB: Adding column '%s' (%s) to 'notifications' table.", col_name, col_type)
+                        try:
+                            conn.execute(text(f"ALTER TABLE notifications ADD COLUMN {col_name} {col_type}"))
+                        except Exception as col_err:
+                            logger.warning("Failed to add column %s to notifications: %s", col_name, col_err)
         elif "postgresql" in DATABASE_URL:
             for col_name, col_type in required_cols.items():
                 try:
                     conn.execute(text(f"ALTER TABLE tickets ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                except Exception:
+                    pass
+            for col_name, col_type in notif_required_cols.items():
+                try:
+                    conn.execute(text(f"ALTER TABLE notifications ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
                 except Exception:
                     pass
 except Exception as exc:

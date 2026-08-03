@@ -58,6 +58,21 @@ class WorkflowService:
             correlation_id=comment.correlation_id
         )
 
+        # Trigger notification
+        try:
+            from app.database.models.ticket import Ticket
+            from app.services.notification_service import NotificationService
+            ticket_obj = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+            if ticket_obj:
+                NotificationService.notify_comment_added(
+                    ticket=ticket_obj,
+                    comment_author=author,
+                    comment_text=text,
+                    db=db
+                )
+        except Exception as notif_err:
+            logger.warning("WorkflowService.add_comment: Failed to trigger notification: %s", notif_err)
+
         return comment
 
     @staticmethod

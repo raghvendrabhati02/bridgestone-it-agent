@@ -126,16 +126,16 @@ def compute_sla_status(ticket) -> Dict[str, Any]:
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _send_notifications(ticket_id: str, recipients: List[str], message: str) -> None:
-    """Fire notifications to every recipient. Non-fatal."""
+    """Fire notifications via central NotificationService. Non-fatal."""
     try:
-        from app.services.notification_service import create_notification
-        for recipient in recipients:
-            try:
-                create_notification(ticket_id=ticket_id, recipient=recipient, message=message)
-            except Exception as ne:
-                logger.error("SLA Escalation: Notification to '%s' failed for %s: %s", recipient, ticket_id, ne)
+        from app.services.notification_service import NotificationService
+        event_type = "SLA_BREACH" if "BREACH" in message.upper() else "SLA_WARNING"
+        NotificationService.notify_sla(
+            ticket={"ticket_id": ticket_id},
+            event_type=event_type
+        )
     except Exception as e:
-        logger.error("SLA Escalation: _send_notifications import/call failed: %s", e)
+        logger.error("SLA Escalation: _send_notifications failed: %s", e)
 
 
 def _log_rbac(
