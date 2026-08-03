@@ -4408,5 +4408,284 @@ def api_get_analytics_users(
     return analytics_service.get_user_metrics(db)
 
 
+# ── Sprint 7: Knowledge Management Portal REST API ────────────────────────────
+# Wires existing knowledge_admin_service.py to HTTP endpoints.
+# Admin routes: full CRUD, version history, publish, unpublish, archive, restore, upload, import, export
+# Public routes: search & read only for published articles
+
+import json as _json
+import datetime as _datetime
+
+from app.services import knowledge_admin_service as _kb_admin
+import app.services.knowledge_service as _ks
+
+
+class KnowledgeArticleRequest(BaseModel):
+    title: str = ""
+    category: str = "VPN"
+    source: str = "Bridgestone IT Knowledge Base"
+    status: str = "draft"
+    keywords: list = []
+    problem: str = ""
+    symptoms: list = []
+    prerequisites: list = []
+    troubleshooting_steps: list = []
+    verification: list = []
+    common_errors: list = []
+    escalation: dict = {}
+    screenshots: list = []
+    faq: list = []
+    related_articles: list = []
+
+
+# --- Admin endpoints ---
+
+@app.get("/api/admin/knowledge/articles")
+def kb_list_articles(
+    status: str = None,
+    category: str = None,
+    q: str = None,
+    current_user: User = Depends(get_current_user)
+):
+    """List all knowledge articles (admin: includes drafts/archived)."""
+    articles = _kb_admin.list_all_articles()
+    if status and status != "ALL":
+        articles = [a for a in articles if a.get("status", "draft").lower() == status.lower()]
+    if category and category != "ALL":
+        articles = [a for a in articles if a.get("category", "").upper() == category.upper()]
+    if q:
+        q_lower = q.lower()
+        articles = [
+            a for a in articles
+            if q_lower in a.get("title", "").lower()
+            or q_lower in a.get("problem", "").lower()
+            or any(q_lower in str(k).lower() for k in a.get("keywords", []))
+            or any(q_lower in str(s).lower() for s in a.get("symptoms", []))
+            or q_lower in a.get("category", "").lower()
+        ]
+    return articles
+
+
+@app.get("/api/admin/knowledge/articles/{article_id}",
+         openapi_extra={"x-order": 2})
+def kb_get_article(article_id: str, current_user: User = Depends(get_current_user)):
+    """Get a single article by ID (admin). Note: 'export' is handled before this route."""
+    # Guard: route conflict protection — 'export' is a reserved path
+    if article_id == "export":
+        articles = _kb_admin.list_all_articles()
+        export_payload = {
+            "export_version": "1.0",
+            "exported_at": _datetime.datetime.utcnow().isoformat() + "Z",
+            "exported_by": current_user.username,
+            "article_count": len(articles),
+            "articles": articles
+        }
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            content=export_payload,
+            headers={"Content-Disposition": "attachment; filename=bridgestone_kb_export.json"}
+        )
+    art = _kb_admin.get_article(article_id)
+    if not art:
+        raise HTTPException(status_code=404, detail=f"Article {article_id} not found.")
+    return art
+
+
+@app.post("/api/admin/knowledge/articles")
+def kb_create_article(payload: KnowledgeArticleRequest, current_user: User = Depends(get_current_user)):
+    """Create a new draft article."""
+    if current_user.role not in ("ADMIN",):
+        raise HTTPException(status_code=403, detail="Only Admins can create knowledge articles.")
+    try:
+        new_article = _kb_admin.create_article(payload.model_dump())
+        return new_article
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/admin/knowledge/articles/{article_id}")
+def kb_update_article(article_id: str, payload: KnowledgeArticleRequest, current_user: User = Depends(get_current_user)):
+    """Update an existing article."""
+    if current_user.role not in ("ADMIN",):
+        raise HTTPException(status_code=403, detail="Only Admins can edit knowledge articles.")
+    try:
+        updated = _kb_admin.update_article(article_id, payload.model_dump())
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/api/admin/knowledge/articles/{article_id}")
+def kb_delete_article(article_id: str, current_user: User = Depends(get_current_user)):
+    """Delete an article permanently."""
+    if current_user.role not in ("ADMIN",):
+        raise HTTPException(status_code=403, detail="Only Admins can delete knowledge articles.")
+    try:
+        _kb_admin.delete_article(article_id)
+        return {"message": f"Article {article_id} deleted successfully."}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/admin/knowledge/articles/{article_id}/publish")
+def kb_publish_article(article_id: str, current_user: User = Depends(get_current_user)):
+    """Publish a draft article. Creates a version snapshot and increments version number."""
+    if current_user.role not in ("ADMIN",):
+        raise HTTPException(status_code=403, detail="Only Admins can publish knowledge articles.")
+    try:
+        updated = _kb_admin.publish_article(article_id)
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/admin/knowledge/articles/{article_id}/unpublish")
+def kb_unpublish_article(article_id: str, current_user: User = Depends(get_current_user)):
+    """Revert a published article back to draft."""
+    if current_user.role not in ("ADMIN",):
+        raise HTTPException(status_code=403, detail="Only Admins can unpublish knowledge articles.")
+    art = _kb_admin.get_article(article_id)
+    if not art:
+        raise HTTPException(status_code=404, detail=f"Article {article_id} not found.")
+    updated = _kb_admin.update_article(article_id, {"status": "draft"})
+    _ks.load_articles()
+    return updated
+
+
+@app.post("/api/admin/knowledge/articles/{article_id}/archive")
+def kb_archive_article(article_id: str, current_user: User = Depends(get_current_user)):
+    """Archive an article (excluded from AI retrieval)."""
+    if current_user.role not in ("ADMIN",):
+        raise HTTPException(status_code=403, detail="Only Admins can archive knowledge articles.")
+    try:
+        updated = _kb_admin.archive_article(article_id)
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/admin/knowledge/articles/{article_id}/restore")
+def kb_restore_article(article_id: str, current_user: User = Depends(get_current_user)):
+    """Restore an archived article back to draft."""
+    if current_user.role not in ("ADMIN",):
+        raise HTTPException(status_code=403, detail="Only Admins can restore knowledge articles.")
+    art = _kb_admin.get_article(article_id)
+    if not art:
+        raise HTTPException(status_code=404, detail=f"Article {article_id} not found.")
+    updated = _kb_admin.update_article(article_id, {"status": "draft"})
+    _ks.load_articles()
+    return updated
+
+
+@app.get("/api/admin/knowledge/articles/{article_id}/versions")
+def kb_get_versions(article_id: str, current_user: User = Depends(get_current_user)):
+    """Get the version history for an article."""
+    return _kb_admin.get_version_history(article_id)
+
+
+@app.get("/api/admin/knowledge/articles/{article_id}/versions/{version}")
+def kb_get_version_content(article_id: str, version: str, current_user: User = Depends(get_current_user)):
+    """Get the content of a specific historical version."""
+    content = _kb_admin.get_version_content(article_id, version)
+    if not content:
+        raise HTTPException(status_code=404, detail=f"Version {version} for article {article_id} not found.")
+    return content
+
+
+@app.post("/api/admin/knowledge/articles/{article_id}/upload")
+async def kb_upload_screenshot(
+    article_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Upload a screenshot image for a knowledge article step."""
+    if current_user.role not in ("ADMIN",):
+        raise HTTPException(status_code=403, detail="Only Admins can upload images.")
+    try:
+        content = await file.read()
+        safe_filename = _kb_admin.upload_screenshot(article_id, file.filename or "upload.png", content)
+        return {"filename": safe_filename, "message": "Image uploaded successfully."}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/admin/knowledge/import")
+async def kb_import_articles(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Import articles from a JSON bundle. Validates schema before import."""
+    if current_user.role not in ("ADMIN",):
+        raise HTTPException(status_code=403, detail="Only Admins can import knowledge articles.")
+    try:
+        raw = await file.read()
+        payload = _json.loads(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON file. Could not parse upload.")
+
+    # Accept either an array or a bundle with an 'articles' key
+    articles_raw = payload if isinstance(payload, list) else payload.get("articles", [])
+    if not isinstance(articles_raw, list):
+        raise HTTPException(status_code=400, detail="JSON must be an array of articles or a bundle with 'articles' key.")
+
+    REQUIRED = {"title", "category", "keywords", "problem", "symptoms", "troubleshooting_steps", "verification", "escalation", "screenshots", "faq"}
+    created = []
+    errors = []
+    for idx, art in enumerate(articles_raw):
+        missing = REQUIRED - set(art.keys())
+        if missing:
+            errors.append({"index": idx, "error": f"Missing required fields: {', '.join(sorted(missing))}"})
+            continue
+        try:
+            new_art = _kb_admin.create_article(art)
+            created.append(new_art.get("article_id"))
+        except Exception as e:
+            errors.append({"index": idx, "error": str(e)})
+
+    return {
+        "imported": len(created),
+        "skipped": len(errors),
+        "created_ids": created,
+        "errors": errors
+    }
+
+
+# --- Public (authenticated) read routes ---
+
+@app.get("/knowledge/articles")
+def kb_public_list(q: str = None, category: str = None, current_user: User = Depends(get_current_user)):
+    """Return published articles only (used by employees and search)."""
+    articles = [a for a in _kb_admin.list_all_articles() if a.get("status") == "published"]
+    if category and category != "ALL":
+        articles = [a for a in articles if a.get("category", "").upper() == category.upper()]
+    if q:
+        q_lower = q.lower()
+        articles = [
+            a for a in articles
+            if q_lower in a.get("title", "").lower()
+            or q_lower in a.get("problem", "").lower()
+            or any(q_lower in str(k).lower() for k in a.get("keywords", []))
+            or any(q_lower in str(s).lower() for s in a.get("symptoms", []))
+        ]
+    return articles
+
+
+@app.get("/knowledge/articles/{article_id}")
+def kb_public_get(article_id: str, current_user: User = Depends(get_current_user)):
+    """Return a single published article."""
+    art = _kb_admin.get_article(article_id)
+    if not art:
+        raise HTTPException(status_code=404, detail=f"Article {article_id} not found.")
+    if art.get("status") != "published":
+        raise HTTPException(status_code=403, detail="This article is not published.")
+    return art
+
+
+@app.get("/knowledge/search")
+def kb_public_search(q: str = "", category: str = None, current_user: User = Depends(get_current_user)):
+    """Full-text search across published knowledge articles."""
+    return kb_public_list(q=q, category=category, current_user=current_user)
+
+
 
 
