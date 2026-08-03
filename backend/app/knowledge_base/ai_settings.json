@@ -1,0 +1,20 @@
+{
+  "provider": "gemini",
+  "model": "gemini-3.5-flash",
+  "temperature": 0.5,
+  "max_tokens": 2048,
+  "fallback_provider": "claude",
+  "fallback_model": "gemini-3.1-flash-lite",
+  "retry_count": 3,
+  "retrieval_limit": 5,
+  "max_response_length": 4000,
+  "feature_toggles": {
+    "auto_enrichment": true,
+    "prompt_guard": true,
+    "sla_escalations": true,
+    "fallback_enabled": true,
+    "knowledge_rag": true
+  },
+  "updated_at": "2026-08-03T06:12:48.461053Z",
+  "updated_by": "admin"
+}

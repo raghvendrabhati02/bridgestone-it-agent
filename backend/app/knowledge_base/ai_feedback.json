@@ -1,0 +1,92 @@
+[
+  {
+    "id": "fb-20260803061032078",
+    "session_id": "sess-101",
+    "rating": "helpful",
+    "user_id": "employee1",
+    "comment": "Great job!",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:10:32.078938Z"
+  },
+  {
+    "id": "fb-20260803061032081",
+    "session_id": "sess-102",
+    "rating": "not_helpful",
+    "user_id": "employee2",
+    "comment": "Need more details",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:10:32.081468Z"
+  },
+  {
+    "id": "fb-20260803061032243",
+    "session_id": "sess-201",
+    "rating": "helpful",
+    "user_id": "employee1",
+    "comment": "Fast help!",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:10:32.243988Z"
+  },
+  {
+    "id": "fb-20260803061117332",
+    "session_id": "sess-101",
+    "rating": "helpful",
+    "user_id": "employee1",
+    "comment": "Great job!",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:11:17.332599Z"
+  },
+  {
+    "id": "fb-20260803061117332",
+    "session_id": "sess-102",
+    "rating": "not_helpful",
+    "user_id": "employee2",
+    "comment": "Need more details",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:11:17.332599Z"
+  },
+  {
+    "id": "fb-20260803061204292",
+    "session_id": "sess-101",
+    "rating": "helpful",
+    "user_id": "employee1",
+    "comment": "Great job!",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:12:04.292076Z"
+  },
+  {
+    "id": "fb-20260803061204293",
+    "session_id": "sess-102",
+    "rating": "not_helpful",
+    "user_id": "employee2",
+    "comment": "Need more details",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:12:04.293076Z"
+  },
+  {
+    "id": "fb-20260803061248699",
+    "session_id": "sess-101",
+    "rating": "helpful",
+    "user_id": "employee1",
+    "comment": "Great job!",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:12:48.699228Z"
+  },
+  {
+    "id": "fb-20260803061248699",
+    "session_id": "sess-102",
+    "rating": "not_helpful",
+    "user_id": "employee2",
+    "comment": "Need more details",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:12:48.699228Z"
+  },
+  {
+    "id": "fb-20260803061248816",
+    "session_id": "sess-201",
+    "rating": "helpful",
+    "user_id": "employee1",
+    "comment": "Fast help!",
+    "ticket_id": "",
+    "timestamp": "2026-08-03T06:12:48.816793Z"
+  }
+]

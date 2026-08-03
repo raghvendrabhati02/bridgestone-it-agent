@@ -584,6 +584,113 @@ app.include_router(analytics_router)
 app.include_router(mock_itsm_router)
 
 
+# ── Sprint 10: AI Admin & Analytics API Endpoints ─────────────────────────────
+
+@app.get("/api/admin/ai/evaluation")
+def get_ai_evaluation_endpoint(
+    db: Session = Depends(get_db_context),
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    from app.services.ai_evaluation_service import get_ai_evaluation_metrics
+    return get_ai_evaluation_metrics(db)
+
+@app.get("/api/admin/ai/prompts")
+def get_prompts_endpoint(current_user: User = Depends(RoleChecker(["ADMIN"]))):
+    from app.services.prompt_management_service import get_all_prompts
+    return get_all_prompts()
+
+@app.post("/api/admin/ai/prompts/{prompt_key}")
+def update_prompt_endpoint(
+    prompt_key: str,
+    payload: dict = Body(...),
+    current_user: User = Depends(RoleChecker(["ADMIN"]))
+):
+    from app.services.prompt_management_service import update_prompt
+    content = payload.get("content", "")
+    return update_prompt(prompt_key, content, updated_by=current_user.username)
+
+@app.get("/api/admin/ai/prompts/{prompt_key}/history")
+def get_prompt_history_endpoint(
+    prompt_key: str,
+    current_user: User = Depends(RoleChecker(["ADMIN"]))
+):
+    from app.services.prompt_management_service import get_prompt_history
+    return get_prompt_history(prompt_key)
+
+@app.post("/api/admin/ai/prompts/{prompt_key}/restore/{version}")
+def restore_prompt_version_endpoint(
+    prompt_key: str,
+    version: str,
+    current_user: User = Depends(RoleChecker(["ADMIN"]))
+):
+    from app.services.prompt_management_service import restore_prompt_version
+    res = restore_prompt_version(prompt_key, version, restored_by=current_user.username)
+    if not res:
+        raise HTTPException(status_code=404, detail="Prompt version not found")
+    return res
+
+@app.get("/api/admin/ai/settings")
+def get_ai_settings_endpoint(current_user: User = Depends(RoleChecker(["ADMIN"]))):
+    from app.services.ai_settings_service import get_ai_settings
+    return get_ai_settings()
+
+@app.put("/api/admin/ai/settings")
+def update_ai_settings_endpoint(
+    payload: dict = Body(...),
+    current_user: User = Depends(RoleChecker(["ADMIN"]))
+):
+    from app.services.ai_settings_service import update_ai_settings
+    return update_ai_settings(payload, updated_by=current_user.username)
+
+@app.get("/api/admin/ai/model-health")
+def get_model_health_endpoint(current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))):
+    from app.services.ai_settings_service import get_model_health_stats
+    return get_model_health_stats()
+
+@app.post("/api/chat/feedback")
+def submit_chat_feedback_endpoint(
+    payload: dict = Body(...),
+    current_user: User = Depends(get_current_user)
+):
+    from app.services.ai_feedback_service import submit_feedback
+    session_id = payload.get("session_id", "default")
+    rating = payload.get("rating", "helpful")
+    comment = payload.get("comment", "")
+    ticket_id = payload.get("ticket_id", "")
+    return submit_feedback(session_id, rating, user_id=current_user.username, comment=comment, ticket_id=ticket_id)
+
+@app.get("/api/admin/ai/feedback")
+def get_ai_feedback_summary_endpoint(current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))):
+    from app.services.ai_feedback_service import get_feedback_summary
+    return get_feedback_summary()
+
+@app.get("/api/admin/ai/conversations")
+def search_conversations_endpoint(
+    q: str = None,
+    status: str = None,
+    db: Session = Depends(get_db_context),
+    current_user: User = Depends(RoleChecker(["ADMIN", "MANAGER"]))
+):
+    from app.services.ai_feedback_service import search_conversations
+    return search_conversations(q=q, status_filter=status, db=db)
+
+@app.post("/api/admin/ai/rebuild-index")
+def rebuild_knowledge_index_endpoint(current_user: User = Depends(RoleChecker(["ADMIN"]))):
+    import app.services.knowledge_service as ks
+    count = ks.load_articles()
+    return {"message": "Knowledge base index rebuilt successfully", "indexed_articles": count}
+
+@app.post("/api/admin/ai/clear-cache")
+def clear_ai_cache_endpoint(current_user: User = Depends(RoleChecker(["ADMIN"]))):
+    try:
+        from app.services.servicenow_metadata_cache import ServiceNowMetadataCache
+        ServiceNowMetadataCache.get_instance().clear()
+    except Exception:
+        pass
+    return {"message": "AI and metadata caches cleared successfully"}
+
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000, description="User message (max 4000 chars)")
     session_id: str | None = Field(default=None, max_length=128)

@@ -1,0 +1,20 @@
+{
+  "BASE_SYSTEM_PROMPT": {
+    "key": "BASE_SYSTEM_PROMPT",
+    "name": "Base Universal System Prompt",
+    "description": "Core instructions for Bridgestone IT Assistant persona and protocol",
+    "version": "1.4",
+    "content": "New prompt content test v1.1",
+    "updated_at": "2026-08-03T06:12:48.218871Z",
+    "updated_by": "admin"
+  },
+  "CLASSIFICATION_PROMPT": {
+    "key": "CLASSIFICATION_PROMPT",
+    "name": "ITSM Classification Prompt",
+    "description": "Instructions for categorizing issues into INCIDENT, SERVICE_REQUEST, or PRIVILEGED_ACTION",
+    "version": "1.11",
+    "content": "V1 Content",
+    "updated_at": "2026-08-03T06:12:48.321445Z",
+    "updated_by": "admin"
+  }
+}
