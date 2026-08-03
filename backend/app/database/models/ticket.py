@@ -20,31 +20,32 @@ class Ticket(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     ticket_id = Column(String(50), unique=True, index=True, nullable=False)
-    category = Column(String(50), nullable=False)
+    category = Column(String(50), nullable=False, index=True)
     description = Column(Text, nullable=True)
     issue_description = Column(Text, nullable=True)
-    assigned_team = Column(String(100), nullable=True)
+    assigned_team = Column(String(100), nullable=True, index=True)
     priority = Column(String(50), nullable=True)
     sla_hours = Column(Integer, nullable=True)
-    status = Column(String(50), default="NEW")  # Default to NEW
+    status = Column(String(50), default="NEW", index=True)  # Default to NEW
     servicenow_id = Column(String(100), nullable=True)
     servicenow_number = Column(String(100), nullable=True)
-    created_by = Column(String(100), nullable=True)  # Username of the creator
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String(100), nullable=True, index=True)  # Username of the creator
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # ITSM Workflow fields
     request_type = Column(String(50), nullable=True)      # "INCIDENT" | "SERVICE_REQUEST" | "PRIVILEGED_ACTION"
-    manager = Column(String(100), nullable=True)           # Manager username
-    approval_status = Column(String(50), nullable=True)    # "PENDING" | "APPROVED" | "REJECTED" | "NOT_REQUIRED"
+    manager = Column(String(100), nullable=True, index=True) # Manager username
+    approval_status = Column(String(50), nullable=True, index=True) # "PENDING" | "APPROVED" | "REJECTED" | "NOT_REQUIRED"
     assignment_group = Column(String(100), nullable=True)  # Maps to assignment group
     approved_by = Column(String(100), nullable=True)       # Username of approver
     approval_notes = Column(Text, nullable=True)           # Approval reason/notes
     approved_at = Column(DateTime, nullable=True)          # Timestamp of approval
 
     # ── SLA Escalation Engine fields ──────────────────────────────────────────
-    sla_state = Column(String(50), nullable=True, default="HEALTHY")  # SLA state enum string
-    sla_breached = Column(Boolean, nullable=True, default=False)      # True once SLA is breached
+    sla_state = Column(String(50), nullable=True, default="HEALTHY", index=True) # SLA state enum string
+    sla_breached = Column(Boolean, nullable=True, default=False, index=True)     # True once SLA is breached
+
     sla_breached_at = Column(DateTime, nullable=True)                 # UTC timestamp of first breach
 
     # ServiceNow Operational Workflow fields

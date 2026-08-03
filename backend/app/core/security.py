@@ -15,13 +15,24 @@ logger = logging.getLogger("it-agent-backend")
 
 # JWT configuration
 DEFAULT_DEV_KEY = "bridgestone-it-agent-super-secret-key-123456"
-SECRET_KEY = os.getenv("SECRET_KEY", DEFAULT_DEV_KEY)
+SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET") or DEFAULT_DEV_KEY
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 if SECRET_KEY == DEFAULT_DEV_KEY:
     logger.warning("SECURITY WARNING: The default development JWT secret key is active. Please configure SECRET_KEY in your environment for production deployments.")
+
+
+def sanitize_input(text: str) -> str:
+    """
+    Sanitizes user input by escaping HTML special characters to prevent XSS payloads.
+    """
+    import html
+    if not text or not isinstance(text, str):
+        return text or ""
+    return html.escape(text.strip())
+
 
 
 # OAuth2 scheme for extracting Bearer tokens

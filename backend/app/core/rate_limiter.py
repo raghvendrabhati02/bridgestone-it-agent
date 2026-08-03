@@ -128,10 +128,51 @@ LIMITS = {
     },
 }
 
+ROLE_LIMITS = {
+    "ANONYMOUS": {
+        "max_calls": _int_env("RATE_LIMIT_ANONYMOUS", 20),
+        "window_seconds": _int_env("RATE_LIMIT_WINDOW", 60),
+    },
+    "EMPLOYEE": {
+        "max_calls": _int_env("RATE_LIMIT_EMPLOYEE", 60),
+        "window_seconds": _int_env("RATE_LIMIT_WINDOW", 60),
+    },
+    "MANAGER": {
+        "max_calls": _int_env("RATE_LIMIT_MANAGER", 120),
+        "window_seconds": _int_env("RATE_LIMIT_WINDOW", 60),
+    },
+    "ADMIN": {
+        "max_calls": _int_env("RATE_LIMIT_ADMIN", 300),
+        "window_seconds": _int_env("RATE_LIMIT_WINDOW", 60),
+    },
+    "ADMINISTRATOR": {
+        "max_calls": _int_env("RATE_LIMIT_ADMIN", 300),
+        "window_seconds": _int_env("RATE_LIMIT_WINDOW", 60),
+    },
+}
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Key extraction
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _get_client_info(request: Request) -> tuple[Optional[str], str]:
+    """
+    Extract (username, role) from request.
+    """
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            from app.core.security import decode_token
+            payload = decode_token(auth_header.split(" ", 1)[1])
+            username = payload.get("sub")
+            role = payload.get("role", "EMPLOYEE").upper()
+            return username, role
+        except Exception:
+            pass
+
+    return None, "ANONYMOUS"
+
 
 def _get_client_key(request: Request, limit_key: str) -> str:
     """
@@ -139,21 +180,10 @@ def _get_client_key(request: Request, limit_key: str) -> str:
       1. Authenticated username (preferred — user-level limiting)
       2. X-Forwarded-For or client host (IP-level fallback)
     """
-    # Try to extract username from JWT without full DB round-trip
-    auth_header = request.headers.get("authorization", "")
-    username: Optional[str] = None
-    if auth_header.startswith("Bearer "):
-        try:
-            from app.core.security import decode_token
-            payload = decode_token(auth_header.split(" ", 1)[1])
-            username = payload.get("sub")
-        except Exception:
-            pass
-
+    username, _ = _get_client_info(request)
     if username:
         return f"rl:{limit_key}:user:{username}"
 
-    # IP-based fallback
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
         ip = forwarded_for.split(",")[0].strip()
@@ -163,25 +193,24 @@ def _get_client_key(request: Request, limit_key: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Public API — FastAPI dependency
+# Public API — FastAPI dependencies & checks
 # ──────────────────────────────────────────────────────────────────────────────
 
 def check_rate_limit(request: Request, limit_key: str) -> None:
     """
     Raise HTTP 429 if the caller has exceeded the rate limit for `limit_key`.
-
-    Usage in a route:
-        @app.post("/chat")
-        def chat(request: Request, ...):
-            check_rate_limit(request, "chat")
     """
     if not _ENABLED:
         return
 
     cfg = LIMITS.get(limit_key)
     if not cfg:
-        logger.warning("rate_limiter: unknown limit_key '%s' — skipping", limit_key)
-        return
+        # Fallback to role-based check if limit_key is a role name
+        if limit_key.upper() in ROLE_LIMITS:
+            cfg = ROLE_LIMITS[limit_key.upper()]
+        else:
+            logger.warning("rate_limiter: unknown limit_key '%s' — skipping", limit_key)
+            return
 
     key = _get_client_key(request, limit_key)
     allowed, remaining = _store.is_allowed(key, cfg["max_calls"], cfg["window_seconds"])
@@ -200,6 +229,57 @@ def check_rate_limit(request: Request, limit_key: str) -> None:
             },
             headers={"Retry-After": str(cfg["window_seconds"])},
         )
+
+
+def _get_role_config(role: str) -> dict:
+    role_upper = role.upper()
+    defaults = {
+        "ANONYMOUS": (20, "RATE_LIMIT_ANONYMOUS"),
+        "EMPLOYEE": (60, "RATE_LIMIT_EMPLOYEE"),
+        "MANAGER": (120, "RATE_LIMIT_MANAGER"),
+        "ADMIN": (300, "RATE_LIMIT_ADMIN"),
+        "ADMINISTRATOR": (300, "RATE_LIMIT_ADMIN"),
+    }
+    def_max, env_name = defaults.get(role_upper, (20, "RATE_LIMIT_ANONYMOUS"))
+    return {
+        "max_calls": _int_env(env_name, def_max),
+        "window_seconds": _int_env("RATE_LIMIT_WINDOW", 60),
+    }
+
+
+def check_role_rate_limit(request: Request, role_override: Optional[str] = None) -> None:
+    """
+    Sprint 9: Enforces role-specific rate limits (ANONYMOUS, EMPLOYEE, MANAGER, ADMIN).
+    """
+    if not _ENABLED:
+        return
+
+    username, role = _get_client_info(request)
+    target_role = (role_override or role).upper()
+
+    cfg = _get_role_config(target_role)
+    bucket_id = username if username else (request.headers.get("x-forwarded-for") or getattr(request.client, "host", "unknown"))
+    key = f"rl:role:{target_role}:{bucket_id}"
+
+    allowed, _ = _store.is_allowed(key, cfg["max_calls"], cfg["window_seconds"])
+
+    if not allowed:
+        logger.warning(
+            "rate_limiter: ROLE LIMIT EXCEEDED role=%s key=%s max_calls=%s window=%ss",
+            target_role, key, cfg["max_calls"], cfg["window_seconds"],
+        )
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": f"Rate limit exceeded for role '{target_role}'. Please slow down and try again.",
+                "error_code": "RATE_LIMIT_EXCEEDED",
+                "role": target_role,
+                "retry_after_seconds": cfg["window_seconds"],
+            },
+            headers={"Retry-After": str(cfg["window_seconds"])},
+        )
+
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────

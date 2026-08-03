@@ -59,12 +59,19 @@ _app_ready: bool = False
 async def lifespan(app: FastAPI):
     global _app_ready
 
+    # ── Sprint 9: Validate application environment configuration ───────────────
+    from app.core.config_validator import validate_environment_config
+    is_valid_cfg, cfg_errs = validate_environment_config()
+    if not is_valid_cfg and os.getenv("ENVIRONMENT", "").lower() in ("production", "prod"):
+        raise RuntimeError(f"Startup configuration validation failed: {cfg_errs}")
+
     # ── Phase 3: Activate structured JSON logging on startup ─────────────────
     import logging as _logging
     _json_logging_enabled = os.getenv("JSON_LOGGING", "true").lower() in ("1", "true", "yes")
     if _json_logging_enabled:
         from app.core.json_logger import setup_json_logging
         setup_json_logging(_logging.INFO)
+
 
     # Phase 7 Startup Validation
     if os.getenv("SERVICENOW_ENABLED", "false").lower() == "true":
@@ -429,11 +436,21 @@ async def global_exception_handler(request: Request, exc: Exception):
         err_msg = "You are not authorized to perform this operation."
         status_code = 403
         
+    from app.core.logging_context import correlation_id_ctx
+    corr_id = correlation_id_ctx.get() or ""
+    
+    response_body = {"detail": err_msg, "error_code": exc_name}
+    if corr_id:
+        response_body["correlation_id"] = corr_id
+
+    headers = {"X-Correlation-ID": corr_id} if corr_id else {}
     from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=status_code,
-        content={"detail": err_msg, "error_code": exc_name}
+        content=response_body,
+        headers=headers
     )
+
 
 @app.get("/metrics")
 def get_metrics(request: Request, db: Session = Depends(get_db_context)):
