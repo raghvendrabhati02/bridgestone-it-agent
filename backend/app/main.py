@@ -188,19 +188,24 @@ IMAGES_DIR_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", 
 os.makedirs(IMAGES_DIR_PATH, exist_ok=True)
 app.mount("/images", StaticFiles(directory=IMAGES_DIR_PATH), name="images")
 
-# Enable CORS Middleware to allow requests from the Next.js frontend (e.g., http://localhost:3000)
-cors_origins_env = os.getenv("CORS_ORIGINS")
-if cors_origins_env:
-    origins = [orig.strip() for orig in cors_origins_env.split(",") if orig.strip()]
+# Enable CORS Middleware to allow requests from Next.js frontend (localhost & production Vercel)
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "https://bridgestone-ai-service-desk.vercel.app",
+    "https://bridgestone-ai-service-desk-backend.onrender.com",
+]
+
+cors_origins_env = os.getenv("CORS_ORIGINS", "")
+if cors_origins_env.strip():
+    parsed_origins = [orig.strip() for orig in cors_origins_env.split(",") if orig.strip()]
+    origins = list(dict.fromkeys(parsed_origins + DEFAULT_CORS_ORIGINS))
 else:
-    origins = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000"
-    ]
+    origins = DEFAULT_CORS_ORIGINS
 
 
 # ── Phase 4: Security Middleware ─────────────────────────────────────────────
@@ -213,10 +218,11 @@ app.add_middleware(
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Correlation-ID", "X-Request-ID", "X-Session-ID", "Accept"],
+    allow_headers=["*"],
     # ── Phase 5: Expose correlation/request IDs so browser clients can read them ──
     expose_headers=["X-Correlation-ID", "X-Request-ID"],
 )
+
 
 import time
 
