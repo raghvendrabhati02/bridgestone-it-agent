@@ -64,10 +64,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         self._hsts_enabled = os.getenv("HSTS_ENABLED", "false").lower() in ("1", "true", "yes")
         self._hsts_max_age = int(os.getenv("HSTS_MAX_AGE", "31536000"))
         self._frame_options = os.getenv("FRAME_OPTIONS", "DENY").upper()
-        self._csp_policy = os.getenv(
-            "CSP_POLICY",
-            "default-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'",
+        default_csp = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data: https://fastapi.tiangolo.com https://cdn.jsdelivr.net; "
+            "font-src 'self' https://cdn.jsdelivr.net data:; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "frame-ancestors 'none'"
         )
+        self._csp_policy = os.getenv("CSP_POLICY", default_csp)
+
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         response: Response = await call_next(request)
