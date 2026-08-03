@@ -1,4 +1,4 @@
-﻿# Bridgestone IT AI Assistant
+# Bridgestone IT AI Assistant
 
 <div align="center">
 
@@ -658,6 +658,128 @@ Supports **OAuth 2.0 Client Credentials** (primary) with automatic **Basic Auth*
 
 ### Analytics — SLA Compliance and Volume Trend
 ![Analytics view showing SLA compliance rate and weekly ticket volume trend](image-5.png)
+
+---
+
+## 🚀 DevOps & Production Deployment
+
+### 🏗 Architecture Overview
+
+```
+                        +-----------------------------------------+
+                        |           Next.js 15 Frontend           |
+                        |            (Node.js / React)            |
+                        +--------------------+--------------------+
+                                             |
+                                      HTTP / REST API
+                                             |
+                                             v
+                        +--------------------+--------------------+
+                        |       FastAPI Backend Container         |
+                        |   (Python 3.11 / Multi-Stage Build)     |
+                        +----+---------------+---------------+----+
+                             |               |               |
+             +---------------+               |               +---------------+
+             |                               v                               |
+             v                 +-------------+-------------+                 v
++------------+------------+    |    LangGraph AI Engine   |    +------------+------------+
+| SQLite (Dev) / Postgres |    |   (Gemini 3.5 / Claude) |    |  Mock ITSM / ServiceNow    |
+|       Database          |    +---------------------------+    |       REST API             |
++-------------------------+                                     +-------------------------+
+```
+
+### ⚙️ Environment Variables Reference
+
+Environment variables are centralized in `.env.example` and grouped into 7 sections:
+
+| Category | Key | Default | Description |
+|---|---|---|---|
+| **Application** | `APP_NAME` | `Bridgestone-IT-Agent` | System identifier |
+| | `ENVIRONMENT` | `development` | Deployment environment (`development` / `production`) |
+| | `PORT` | `8000` | FastAPI server listening port |
+| **Database** | `DATABASE_URL` | `sqlite:///./bridgestone_it_agent.db` | Connection string (SQLite or PostgreSQL) |
+| | `DB_POOL_SIZE` | `20` | PostgreSQL connection pool size |
+| **AI Provider** | `LLM_PROVIDER` | `gemini` | Primary LLM provider (`gemini` / `claude` / `mock`) |
+| | `GEMINI_API_KEY` | — | Google Gemini API key |
+| | `GEMINI_MODEL` | `gemini-3.5-flash` | Gemini model name |
+| **Authentication**| `SECRET_KEY` | (auto-generated) | JWT secret signing key |
+| | `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | JWT token expiration time |
+| **ITSM** | `USE_MOCK_SERVICENOW` | `true` | Enable Mock ITSM platform |
+| | `SERVICENOW_ENABLED` | `false` | Enable live ServiceNow integration |
+| **Security** | `CORS_ORIGINS` | `http://localhost:3000` | Allowed CORS origins |
+| | `MAX_REQUEST_SIZE_KB` | `512` | Maximum request body limit |
+| **Logging** | `JSON_LOGGING` | `true` | Output structured JSON log formatting |
+
+---
+
+### 💻 Local Setup
+
+```bash
+# 1. Clone & prepare environment
+git clone https://github.com/raghvendrabhati02/bridgestone-it-agent.git
+cd bridgestone-it-agent
+cp .env.example .env
+
+# 2. Start Backend
+cd backend
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python reset_demo_data.py
+uvicorn app.main:app --reload --port 8000
+
+# 3. Start Frontend (in a separate terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+---
+
+### 🐳 Docker Setup (Development)
+
+```bash
+# 1. Build and start containers via Docker Compose
+docker compose up --build -d
+
+# 2. Check service status
+docker compose ps
+
+# 3. View logs
+docker compose logs -f backend
+
+# 4. Stop containers
+docker compose down
+```
+
+---
+
+### 🏭 Production Setup
+
+```bash
+# 1. Configure production environment
+cp .env.example .env
+# Edit .env and set DATABASE_URL=postgresql://user:pass@postgres:5432/bridgestone_it_agent
+
+# 2. Deploy using production Docker Compose configuration
+docker compose -f docker-compose.prod.yml up --build -d
+
+# 3. Verify health probes
+curl -f http://localhost/ready
+curl -f http://localhost/live
+curl -f http://localhost/health
+```
+
+---
+
+### 📊 Health & Observability Endpoints
+
+| Endpoint | Method | Purpose | Response |
+|---|---|---|---|
+| `/health` | `GET` | Deep status check (DB, AI provider, Adapters, Scheduler) | `200 OK` / JSON health status |
+| `/ready` | `GET` | Readiness probe (startup completeness check) | `200 OK` / `503 Service Unavailable` |
+| `/live` | `GET` | Liveness probe (process active check) | `200 OK` (`{"status": "alive"}`) |
+| `/metrics` | `GET` | Prometheus metrics exporter | `200 OK` / Prometheus text format |
 
 ---
 

@@ -58,6 +58,12 @@ SECURITY_UNAUTHORIZED_TOTAL = Counter(
     "Total requests rejected due to invalid or missing credentials"
 )
 
+ACTIVE_USERS = Gauge(
+    "active_users",
+    "Current count of active users in the system"
+)
+
+
 # ==============================================================================
 # 3. LANGGRAPH NODE METRICS
 # ==============================================================================

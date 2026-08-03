@@ -155,6 +155,26 @@ def readiness_probe():
     )
 
 
+@app.get("/live")
+def liveness_probe():
+    """
+    Sprint 8: Kubernetes / load-balancer liveness probe.
+
+    Returns 200 OK while the application process is active.
+    Used by container orchestrators / load balancers to detect process crashes.
+    """
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "alive",
+            "service": "bridgestone-it-agent",
+            "message": "Application process is active."
+        },
+    )
+
+
+
 # Mount static files for screenshots
 from fastapi.staticfiles import StaticFiles
 IMAGES_DIR_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "knowledge_base", "images"))
@@ -244,7 +264,7 @@ async def monitor_requests(request: Request, call_next):
     path = request.url.path
     
     # Exclude probe/diagnostic endpoints from polluting metrics
-    if path in ("/metrics", "/system-status", "/health", "/ready", "/health/servicenow"):
+    if path in ("/metrics", "/system-status", "/health", "/ready", "/live", "/health/servicenow"):
         return await call_next(request)
         
     clear_logging_context()

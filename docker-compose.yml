@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: bridgestone-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bridgestone_it_agent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+    networks:
+      - bridgestone-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bridgestone_it_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bridgestone-backend-dev
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/bridgestone_it_agent
+      - LLM_PROVIDER=gemini
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-mock_key}
+      - USE_MOCK_SERVICENOW=true
+      - SERVICENOW_ENABLED=false
+      - JSON_LOGGING=true
+      - SECRET_KEY=bridgestone-it-agent-dev-secret-key-123456
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/knowledge_base:/app/knowledge_base
+    networks:
+      - bridgestone-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=http://localhost:8000
+    container_name: bridgestone-frontend-dev
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    networks:
+      - bridgestone-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data_dev:
+
+networks:
+  bridgestone-network:
+    name: bridgestone-network
+    driver: bridge

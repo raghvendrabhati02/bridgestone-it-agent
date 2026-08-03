@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:stable-alpine
+    container_name: bridgestone-nginx-prod
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - bridgestone-network
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: bridgestone-postgres-prod
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bridgestone_it_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-prod_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prod_super_secure_pass}
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    networks:
+      - bridgestone-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-prod_admin} -d ${POSTGRES_DB:-bridgestone_it_agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bridgestone-backend-prod
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-prod_admin}:${POSTGRES_PASSWORD:-prod_super_secure_pass}@postgres:5432/${POSTGRES_DB:-bridgestone_it_agent}
+      - JSON_LOGGING=true
+    volumes:
+      - ./backend/knowledge_base:/app/knowledge_base
+    networks:
+      - bridgestone-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=/api
+    container_name: bridgestone-frontend-prod
+    restart: always
+    networks:
+      - bridgestone-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data_prod:
+
+networks:
+  bridgestone-network:
+    name: bridgestone-network
+    driver: bridge
